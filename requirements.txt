@@ -1,5 +1,0 @@
-flask
-pyobjc
-flask-cors
-pyautogui
-pyperclip==1.8.2
