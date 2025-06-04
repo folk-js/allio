@@ -13,7 +13,7 @@ use core_graphics::display::{
 
 mod accessibility;
 use accessibility::{
-    find_text_elements, find_text_elements_by_pid, find_text_elements_in_app,
+    find_text_elements, find_text_elements_in_app,
     insert_text_into_active_field, insert_text_into_element, walk_app_tree_by_pid,
     walk_focused_app_tree, UITreeNode,
 };

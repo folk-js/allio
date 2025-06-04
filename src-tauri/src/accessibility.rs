@@ -61,23 +61,29 @@ fn walk_element_tree(
         .map(|r| r.to_string())
         .unwrap_or_else(|| "Unknown".to_string());
 
-    let title = element
-        .attribute(&AXAttribute::title())
-        .ok()
-        .map(|t| t.to_string());
+    let title = element.attribute(&AXAttribute::title()).ok().and_then(|t| {
+        let s = t.to_string();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    });
 
-    let value = element
-        .attribute(&AXAttribute::value())
-        .ok()
-        .map(|v| format!("{:?}", v)); // Use debug format to handle different types
+    let value = element.attribute(&AXAttribute::value()).ok().and_then(|v| {
+        let debug_str = format!("{:?}", v);
+        // Filter out empty, null, or weird debug formatting
+        if debug_str.is_empty() || debug_str == "null" || debug_str.contains("{contents = \"\"}") {
+            None
+        } else {
+            Some(debug_str)
+        }
+    });
 
     let enabled = element
         .attribute(&AXAttribute::enabled())
         .ok()
-        .map(|e| {
-            // Try to convert to bool - this might fail due to type issues
-            format!("{:?}", e).contains("true")
-        })
+        .and_then(|e| e.try_into().ok())
         .unwrap_or(false);
 
     // Get children
@@ -87,7 +93,6 @@ fn walk_element_tree(
 
         // Show way more children for debugging
         for i in 0..child_count.min(100) {
-            // Increased from 10 to 100
             if let Some(child) = child_elements.get(i) {
                 if let Ok(child_node) = walk_element_tree(&child, depth + 1, max_depth) {
                     children.push(child_node);
@@ -107,12 +112,12 @@ fn walk_element_tree(
 }
 
 /// Find all text input elements by walking the tree using PID
-pub fn find_text_elements_by_pid(pid: u32) -> Result<Vec<UITreeNode>, String> {
-    let tree = walk_app_tree_by_pid(pid)?;
-    let mut text_elements = Vec::new();
-    collect_text_elements(&tree, &mut text_elements);
-    Ok(text_elements)
-}
+// pub fn find_text_elements_by_pid(pid: u32) -> Result<Vec<UITreeNode>, String> {
+//     let tree = walk_app_tree_by_pid(pid)?;
+//     let mut text_elements = Vec::new();
+//     collect_text_elements(&tree, &mut text_elements);
+//     Ok(text_elements)
+// }
 
 /// Find all text input elements by walking the tree  
 pub fn find_text_elements() -> Result<Vec<UITreeNode>, String> {
