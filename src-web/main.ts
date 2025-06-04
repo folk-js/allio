@@ -1,6 +1,6 @@
-import { register } from "@tauri-apps/api/globalShortcut";
-import { getCurrent } from "@tauri-apps/api/window";
-import { invoke } from "@tauri-apps/api/tauri";
+import { register } from "@tauri-apps/plugin-global-shortcut";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { invoke } from "@tauri-apps/api/core";
 
 interface WindowInfo {
   id: string;
@@ -11,7 +11,7 @@ interface WindowInfo {
   h: number;
 }
 
-const appWindow = getCurrent();
+const appWindow = getCurrentWebviewWindow();
 let clickthrough = false;
 let allWindows: WindowInfo[] = [];
 let activeWindow: WindowInfo | null = null;
