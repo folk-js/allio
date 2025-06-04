@@ -153,7 +153,6 @@ fn collect_text_elements(node: &UITreeNode, elements: &mut Vec<UITreeNode>) {
 pub fn insert_text_into_active_field(text: &str) -> Result<(), String> {
     println!("Text insertion requested: {}", text);
     // For now, just log that we received the request
-    // Real implementation would find the focused text field and set its value
     Ok(())
 }
 
