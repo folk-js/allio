@@ -11,6 +11,13 @@ use core_graphics::display::{
     CGDirectDisplayID, CGDisplayPixelsHigh, CGDisplayPixelsWide, CGMainDisplayID,
 };
 
+mod accessibility;
+use accessibility::{
+    find_text_elements, find_text_elements_by_pid, find_text_elements_in_app,
+    insert_text_into_active_field, insert_text_into_element, walk_app_tree_by_pid,
+    walk_focused_app_tree, UITreeNode,
+};
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct WindowInfo {
     id: String,
@@ -137,6 +144,63 @@ fn toggle_clickthrough(app: tauri::AppHandle) -> Result<bool, String> {
     }
 }
 
+#[tauri::command]
+fn get_text_elements() -> Result<Vec<UITreeNode>, String> {
+    find_text_elements()
+}
+
+#[tauri::command]
+fn get_text_elements_in_app(app_name: String) -> Result<Vec<UITreeNode>, String> {
+    find_text_elements_in_app(&app_name)
+}
+
+#[tauri::command]
+fn get_ui_tree() -> Result<UITreeNode, String> {
+    walk_focused_app_tree()
+}
+
+#[tauri::command]
+fn get_ui_tree_for_active_window(_app: tauri::AppHandle) -> Result<Option<UITreeNode>, String> {
+    let current_pid = get_current_pid();
+    
+    // Get the active window with full x-win data to access PID
+    let result = panic::catch_unwind(|| x_win::get_active_window());
+    match result {
+        Ok(Ok(active_window)) => {
+            let active_pid = active_window.info.process_id;
+            
+            // Don't try to get accessibility info for our own overlay
+            if active_pid == current_pid {
+                return Ok(None);
+            }
+            
+            // Try to walk the tree using the active window's PID
+            match walk_app_tree_by_pid(active_pid) {
+                Ok(tree) => Ok(Some(tree)),
+                Err(e) => {
+                    // If PID-based approach fails, try the focused window approach as fallback
+                    match walk_focused_app_tree() {
+                        Ok(tree) => Ok(Some(tree)),
+                        Err(_) => Err(format!("Failed to get UI tree for PID {}: {}", active_pid, e))
+                    }
+                }
+            }
+        }
+        Ok(Err(e)) => Err(handle_x_win_error(format!("Failed to get active window: {}", e))),
+        Err(_) => Err(handle_x_win_error("Panic occurred while getting active window. This usually indicates accessibility permissions are needed.".to_string())),
+    }
+}
+
+#[tauri::command]
+fn insert_text(app_name: String, element_id: String, text: String) -> Result<(), String> {
+    insert_text_into_element(&app_name, &element_id, &text)
+}
+
+#[tauri::command]
+fn insert_text_active(text: String) -> Result<(), String> {
+    insert_text_into_active_field(&text)
+}
+
 #[cfg(target_os = "macos")]
 fn get_main_screen_dimensions() -> (f64, f64) {
     unsafe {
@@ -170,6 +234,12 @@ fn main() {
             get_all_windows,
             get_active_window_info,
             toggle_clickthrough,
+            get_text_elements,
+            get_text_elements_in_app,
+            get_ui_tree,
+            get_ui_tree_for_active_window,
+            insert_text,
+            insert_text_active,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
