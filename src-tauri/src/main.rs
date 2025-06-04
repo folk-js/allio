@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::{Deserialize, Serialize};
+use x_win::{get_active_window, get_open_windows};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct WindowInfo {
@@ -19,33 +20,39 @@ struct ApiResponse {
     message: String,
 }
 
-// Gets the currently active window (similar to your Python implementation)
-#[tauri::command]
-fn get_active_window() -> Result<Option<WindowInfo>, String> {
-    match active_win_pos_rs::get_active_window() {
-        Ok(active_window) => {
-            let window_info = WindowInfo {
-                id: format!("{:?}", active_window.window_id),
-                name: active_window.title,
-                x: active_window.position.x,
-                y: active_window.position.y,
-                w: active_window.position.width,
-                h: active_window.position.height,
-            };
-            Ok(Some(window_info))
-        }
-        Err(_) => Ok(None),
+// Convert x-win WindowInfo to our WindowInfo struct
+fn convert_window_info(window: &x_win::WindowInfo) -> WindowInfo {
+    WindowInfo {
+        id: window.id.to_string(),
+        name: window.title.clone(),
+        x: window.position.x as f64,
+        y: window.position.y as f64 - 38.0,
+        w: window.position.width as f64,
+        h: window.position.height as f64,
     }
 }
 
-// Gets all windows - for now returns just active window
-// This matches the "/windows" endpoint from your Flask server
+// Gets the currently active window
 #[tauri::command]
-fn get_windows() -> Result<Vec<WindowInfo>, String> {
+fn get_active_window_info() -> Result<Option<WindowInfo>, String> {
     match get_active_window() {
-        Ok(Some(window)) => Ok(vec![window]),
-        Ok(None) => Ok(vec![]),
-        Err(e) => Err(e),
+        Ok(active_window) => {
+            let window_info = convert_window_info(&active_window);
+            Ok(Some(window_info))
+        }
+        Err(e) => Err(format!("Failed to get active window: {}", e)),
+    }
+}
+
+// Gets all open windows using x-win
+#[tauri::command]
+fn get_all_windows() -> Result<Vec<WindowInfo>, String> {
+    match get_open_windows() {
+        Ok(windows) => {
+            let window_infos: Vec<WindowInfo> = windows.iter().map(convert_window_info).collect();
+            Ok(window_infos)
+        }
+        Err(e) => Err(format!("Failed to get windows: {}", e)),
     }
 }
 
@@ -68,8 +75,8 @@ fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             greet,
-            get_windows,
-            get_active_window,
+            get_all_windows,
+            get_active_window_info,
             success
         ])
         .run(tauri::generate_context!())
