@@ -12,60 +12,73 @@ interface WindowInfo {
 }
 
 const appWindow = getCurrentWebviewWindow();
-let clickthrough = false;
-let allWindows: WindowInfo[] = [];
 let activeWindow: WindowInfo | null = null;
 
-// Register keyboard shortcuts
-await register("CommandOrControl+Shift+E", () => {
-  console.log("Toggling clickthrough");
-  clickthrough = !clickthrough;
-  appWindow.setIgnoreCursorEvents(clickthrough);
-});
+// Map to track outline elements by window ID
+const outlineElements = new Map<string, HTMLDivElement>();
 
-await register("CommandOrControl+Shift+W", async () => {
-  try {
-    const windows = (await invoke("get_all_windows")) as WindowInfo[];
-    console.log("All windows:", windows);
+// Function to create a new outline element
+function createOutlineElement(window: WindowInfo): HTMLDivElement {
+  const outlineElement = document.createElement("div");
+  outlineElement.className = "window-outline";
+  outlineElement.style.position = "fixed";
+  outlineElement.style.border = "3px solid #ff0000";
+  outlineElement.style.background = "transparent";
+  outlineElement.style.pointerEvents = "none";
+  outlineElement.style.opacity = "0.6";
+  outlineElement.style.boxSizing = "border-box";
+  outlineElement.style.zIndex = "9999";
 
-    const active = (await invoke(
-      "get_active_window_info"
-    )) as WindowInfo | null;
-    console.log("Active window:", active);
-  } catch (error) {
-    console.error("Error getting window info:", error);
+  document.body.appendChild(outlineElement);
+  return outlineElement;
+}
+
+// Function to update outline element properties
+function updateOutlineElement(
+  element: HTMLDivElement,
+  window: WindowInfo,
+  isActive: boolean
+) {
+  element.style.left = `${window.x}px`;
+  element.style.top = `${window.y}px`;
+  element.style.width = `${window.w}px`;
+  element.style.height = `${window.h}px`;
+  element.style.borderRadius = "10px";
+
+  if (isActive) {
+    element.style.border = "2px solid #00ff00";
+    element.style.opacity = "0.9";
+  } else {
+    element.style.border = "2px solid #ff0000";
+    element.style.opacity = "0.6";
   }
-});
+}
 
-// Function to create outline elements for all windows
+// Function to efficiently update outlines
 function updateAllOutlines(windows: WindowInfo[]) {
-  // Clear existing outlines
-  const existingOutlines = document.querySelectorAll(".window-outline");
-  existingOutlines.forEach((outline) => outline.remove());
+  const currentWindowIds = new Set(windows.map((w) => w.id));
 
-  // Create outlines for each window
-  windows.forEach((window, index) => {
-    const outlineElement = document.createElement("div");
-    outlineElement.className = "window-outline";
-    outlineElement.style.position = "fixed";
-    outlineElement.style.left = `${window.x}px`;
-    outlineElement.style.top = `${window.y}px`;
-    outlineElement.style.width = `${window.w}px`;
-    outlineElement.style.height = `${window.h}px`;
-    outlineElement.style.border = "3px solid #ff0000";
-    outlineElement.style.background = "transparent";
-    outlineElement.style.pointerEvents = "none";
-    outlineElement.style.opacity = "0.6";
-    outlineElement.style.boxSizing = "border-box";
-    outlineElement.style.zIndex = "9999";
+  // Remove outline elements for closed windows
+  for (const [windowId, element] of outlineElements) {
+    if (!currentWindowIds.has(windowId)) {
+      element.remove();
+      outlineElements.delete(windowId);
+    }
+  }
 
-    // Make active window more prominent
-    if (activeWindow && window.id === activeWindow.id) {
-      outlineElement.style.border = "4px solid #00ff00";
-      outlineElement.style.opacity = "0.9";
+  // Update existing and create new outline elements
+  windows.forEach((window) => {
+    const isActive = activeWindow && window.id === activeWindow.id;
+
+    let element = outlineElements.get(window.id);
+    if (!element) {
+      // Create new outline element for new window
+      element = createOutlineElement(window);
+      outlineElements.set(window.id, element);
     }
 
-    document.body.appendChild(outlineElement);
+    // Update element properties
+    updateOutlineElement(element, window, !!isActive);
   });
 }
 
@@ -98,21 +111,18 @@ async function fetchWindowInfo() {
       invoke("get_active_window_info") as Promise<WindowInfo | null>,
     ]);
 
-    allWindows = windows;
     activeWindow = active;
 
     updateAllOutlines(windows);
     updateWindowInfo(windows, active);
   } catch (error) {
     console.error("Error fetching window info:", error);
-    // Clear outlines on error
-    const existingOutlines = document.querySelectorAll(".window-outline");
-    existingOutlines.forEach((outline) => outline.remove());
+    // Clear all outlines on error
+    outlineElements.forEach((element) => element.remove());
+    outlineElements.clear();
   }
 }
 
 // Initialize and set up high-frequency updates (every 10ms)
 fetchWindowInfo();
-setInterval(fetchWindowInfo, 10);
-
-console.log("Overlay app initialized with x-win crate for all windows");
+setInterval(fetchWindowInfo, 5);
