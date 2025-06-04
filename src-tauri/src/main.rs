@@ -3,6 +3,12 @@
 
 use serde::{Deserialize, Serialize};
 use std::panic;
+use tauri::Manager;
+
+#[cfg(target_os = "macos")]
+use core_graphics::display::{
+    CGDirectDisplayID, CGDisplayPixelsHigh, CGDisplayPixelsWide, CGMainDisplayID,
+};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct WindowInfo {
@@ -26,7 +32,7 @@ fn convert_window_info(window: &x_win::WindowInfo) -> WindowInfo {
         id: window.id.to_string(),
         name: window.title.clone(),
         x: window.position.x as f64,
-        y: window.position.y as f64 - 38.0,
+        y: window.position.y as f64,
         w: window.position.width as f64,
         h: window.position.height as f64,
     }
@@ -118,10 +124,37 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+#[cfg(target_os = "macos")]
+fn get_main_screen_dimensions() -> (f64, f64) {
+    unsafe {
+        let display_id: CGDirectDisplayID = CGMainDisplayID();
+        let width = CGDisplayPixelsWide(display_id) as f64;
+        let height = CGDisplayPixelsHigh(display_id) as f64;
+        (width, height)
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .setup(|app| {
+            let (screen_width, screen_height) = get_main_screen_dimensions();
+            println!(
+                "Detected screen dimensions: {}x{}",
+                screen_width, screen_height
+            );
+
+            if let Some(window) = app.get_webview_window("main") {
+                // Set the window to cover the entire screen at position (0,0)
+                let _ = window.set_size(tauri::LogicalSize::new(screen_width, screen_height));
+                let _ = window.set_position(tauri::LogicalPosition::new(0.0, 0.0));
+                let _ = window.set_ignore_cursor_events(true);
+                let _ = window.show();
+            }
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             greet,
             get_all_windows,
