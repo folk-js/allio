@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::panic;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
 
 #[cfg(target_os = "macos")]
@@ -119,6 +120,23 @@ fn get_active_window_info(_app: tauri::AppHandle) -> Result<Option<WindowInfo>, 
     }
 }
 
+static CLICKTHROUGH_ENABLED: AtomicBool = AtomicBool::new(true);
+
+#[tauri::command]
+fn toggle_clickthrough(app: tauri::AppHandle) -> Result<bool, String> {
+    if let Some(window) = app.get_webview_window("main") {
+        let current_ignore = CLICKTHROUGH_ENABLED.load(Ordering::Relaxed);
+        let new_ignore = !current_ignore;
+        window
+            .set_ignore_cursor_events(new_ignore)
+            .map_err(|e| e.to_string())?;
+        CLICKTHROUGH_ENABLED.store(new_ignore, Ordering::Relaxed);
+        Ok(new_ignore)
+    } else {
+        Err("Main window not found".to_string())
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn get_main_screen_dimensions() -> (f64, f64) {
     unsafe {
@@ -151,6 +169,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_all_windows,
             get_active_window_info,
+            toggle_clickthrough,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

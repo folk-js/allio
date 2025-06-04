@@ -126,3 +126,50 @@ async function fetchWindowInfo() {
 // Initialize and set up high-frequency updates (every 10ms)
 fetchWindowInfo();
 setInterval(fetchWindowInfo, 5);
+
+// Register global shortcut for toggling clickthrough
+async function setupGlobalShortcuts() {
+  let lastToggleTime = 0;
+  const DEBOUNCE_MS = 200; // Prevent multiple triggers within 200ms
+
+  try {
+    await register("CommandOrControl+Shift+E", async () => {
+      const now = Date.now();
+      if (now - lastToggleTime < DEBOUNCE_MS) {
+        return; // Ignore rapid repeated triggers
+      }
+      lastToggleTime = now;
+
+      try {
+        const isClickthrough = (await invoke("toggle_clickthrough")) as boolean;
+        console.log(`Clickthrough ${isClickthrough ? "enabled" : "disabled"}`);
+
+        // Visual feedback - briefly show a message
+        const feedback = document.createElement("div");
+        feedback.style.position = "fixed";
+        feedback.style.top = "200px";
+        feedback.style.right = "20px";
+        feedback.style.background = "rgba(0, 0, 0, 0.8)";
+        feedback.style.color = "white";
+        feedback.style.padding = "10px 15px";
+        feedback.style.borderRadius = "5px";
+        feedback.style.fontSize = "14px";
+        feedback.style.zIndex = "10000";
+        feedback.style.pointerEvents = "none";
+        feedback.textContent = `Clickthrough ${isClickthrough ? "ON" : "OFF"}`;
+
+        document.body.appendChild(feedback);
+
+        setTimeout(() => {
+          feedback.remove();
+        }, 1500);
+      } catch (error) {
+        console.error("Failed to toggle clickthrough:", error);
+      }
+    });
+  } catch (error) {
+    console.error("Failed to register global shortcut:", error);
+  }
+}
+
+setupGlobalShortcuts();
