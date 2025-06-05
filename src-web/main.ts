@@ -2,6 +2,12 @@ import { register } from "@tauri-apps/plugin-global-shortcut";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { invoke } from "@tauri-apps/api/core";
 
+// Configuration: Set to true to enable sand simulation overlay
+// To switch modes:
+// - SAND_MODE = false: Normal window overlay mode (index.html functionality)
+// - SAND_MODE = true: Sand simulation mode (sand.html functionality)
+const SAND_MODE = true;
+
 interface WindowInfo {
   id: string;
   name: string;
@@ -357,6 +363,12 @@ async function setupGlobalShortcuts() {
 
 // Initialize the application
 async function init() {
+  // Check if we should redirect to sand mode
+  if (SAND_MODE) {
+    window.location.href = "./sand/sand.html";
+    return;
+  }
+
   console.log("Initializing overlay application...");
 
   // Set up global shortcuts

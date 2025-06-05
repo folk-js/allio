@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Window Overlay</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        width: 100vw;
+        height: 100vh;
+        overflow: hidden;
+        background: transparent;
+      }
+
+      #outline {
+        position: fixed;
+        border: 3px solid #ff0000;
+        background: transparent;
+        pointer-events: none;
+        opacity: 0.8;
+        box-sizing: border-box;
+        display: none;
+        z-index: 9999;
+        transition: none; /* Remove any transitions for immediate updates */
+      }
+
+      #info {
+        position: fixed;
+        top: 50px;
+        right: 10px;
+        background: rgba(0, 0, 0, 0.8);
+        color: white;
+        padding: 10px;
+        border-radius: 5px;
+        font-size: 12px;
+        font-family: monospace;
+        pointer-events: none;
+        max-width: 300px;
+        z-index: 10000;
+      }
+
+      #ui-tree {
+        position: fixed;
+        top: 10px;
+        left: 10px;
+        background: rgba(0, 0, 0, 0.9);
+        color: white;
+        padding: 10px;
+        border-radius: 5px;
+        font-family: monospace;
+        pointer-events: none;
+        width: 800px;
+        height: calc(100vh - 20px);
+        overflow-y: auto;
+        z-index: 10000;
+        font-size: 10px;
+        line-height: 14px;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="outline"></div>
+    <div id="info">
+      <div>Press Cmd+Shift+W to log window info</div>
+      <div>Press Cmd+Shift+E to toggle clickthrough</div>
+      <div>Red: Other windows | Green: Active window</div>
+      <div id="window-details"></div>
+    </div>
+    <div id="ui-tree">
+      <div id="tree-status">No UI tree available</div>
+      <div id="tree-content"></div>
+    </div>
+    <script type="module" src="/src-web/main.ts"></script>
+  </body>
+</html>

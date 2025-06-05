@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::panic;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 #[cfg(target_os = "macos")]
 use core_graphics::display::{
@@ -73,6 +74,7 @@ fn get_all_windows(_app: tauri::AppHandle) -> Result<Vec<WindowInfo>, String> {
         Err(_) => return Err(handle_x_win_error("Panic occurred while getting windows. This usually indicates accessibility permissions are needed.".to_string())),
     };
 
+
     // Find our overlay window to get the offset
     let mut overlay_offset_x = 0;
     let mut overlay_offset_y = 0;
@@ -85,11 +87,14 @@ fn get_all_windows(_app: tauri::AppHandle) -> Result<Vec<WindowInfo>, String> {
         }
     }
 
-    // Apply offset to all windows
+    // Apply offset to all windows, excluding our own overlay
     let window_infos: Vec<WindowInfo> = windows
         .iter()
+        .filter(|w| w.info.process_id != current_pid) // Exclude overlay windows
         .map(|w| convert_window_info_with_offset(w, overlay_offset_x, overlay_offset_y))
         .collect();
+    
+    
     Ok(window_infos)
 }
 
@@ -119,6 +124,10 @@ fn get_active_window_info(_app: tauri::AppHandle) -> Result<Option<WindowInfo>, 
     let result = panic::catch_unwind(|| x_win::get_active_window());
     match result {
         Ok(Ok(active_window)) => {
+            // Don't return info for our own overlay
+            if active_window.info.process_id == current_pid {
+                return Ok(None);
+            }
             let window_info = convert_window_info_with_offset(&active_window, overlay_offset.0, overlay_offset.1);
             Ok(Some(window_info))
         }
@@ -127,7 +136,7 @@ fn get_active_window_info(_app: tauri::AppHandle) -> Result<Option<WindowInfo>, 
     }
 }
 
-static CLICKTHROUGH_ENABLED: AtomicBool = AtomicBool::new(true);
+static CLICKTHROUGH_ENABLED: AtomicBool = AtomicBool::new(false);
 
 #[tauri::command]
 fn toggle_clickthrough(app: tauri::AppHandle) -> Result<bool, String> {
@@ -214,7 +223,6 @@ fn get_main_screen_dimensions() -> (f64, f64) {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             let (screen_width, screen_height) = get_main_screen_dimensions();
             if let Some(window) = app.get_webview_window("main") {
@@ -224,8 +232,32 @@ fn main() {
                 window
                     .set_position(tauri::LogicalPosition::new(0.0, 0.0))
                     .ok();
-                window.set_ignore_cursor_events(true).ok();
+                window.set_ignore_cursor_events(false).ok();
                 window.show().ok();
+            }
+
+            // Set up global shortcut with proper state handling
+            #[cfg(desktop)]
+            {
+                let toggle_shortcut = Shortcut::new(
+                    Some(Modifiers::SUPER | Modifiers::SHIFT), 
+                    Code::KeyE
+                );
+                
+                app.handle().plugin(
+                    tauri_plugin_global_shortcut::Builder::new()
+                        .with_handler(move |app_handle, shortcut, event| {
+                            // Only handle the pressed state, ignore release
+                            if event.state() == ShortcutState::Pressed {
+                                if let Err(e) = toggle_clickthrough_rust(app_handle.clone()) {
+                                    eprintln!("Failed to toggle clickthrough: {}", e);
+                                }
+                            }
+                        })
+                        .build(),
+                )?;
+
+                app.global_shortcut().register(toggle_shortcut)?;
             }
 
             Ok(())
@@ -243,4 +275,16 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+// Add this function to handle the toggle from Rust
+fn toggle_clickthrough_rust(app: tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(window) = app.get_webview_window("main") {
+        let current_ignore = CLICKTHROUGH_ENABLED.load(Ordering::Relaxed);
+        let new_ignore = !current_ignore;
+        window.set_ignore_cursor_events(new_ignore)?;
+        CLICKTHROUGH_ENABLED.store(new_ignore, Ordering::Relaxed);
+        println!("Clickthrough {}", if new_ignore { "enabled" } else { "disabled" });
+    }
+    Ok(())
 }
