@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 interface WindowInfo {
   id: string;
@@ -25,6 +26,12 @@ interface TextElement {
   current_value: string;
   is_editable: boolean;
   app_name: string;
+}
+
+// Add event payload interface
+interface WindowUpdatePayload {
+  windows: WindowInfo[];
+  active_window: WindowInfo | null;
 }
 
 let activeWindow: WindowInfo | null = null;
@@ -124,29 +131,24 @@ function updateWindowInfo(windows: WindowInfo[], active: WindowInfo | null) {
   detailsElement.innerHTML = html;
 }
 
-// Function to fetch and update window information
-async function fetchWindowInfo() {
+// Replace fetchWindowInfo with event listener
+async function setupWindowListener() {
   try {
-    const [windows, active] = await Promise.all([
-      invoke("get_all_windows") as Promise<WindowInfo[]>,
-      invoke("get_active_window_info") as Promise<WindowInfo | null>,
-    ]);
+    await listen<WindowUpdatePayload>("window-update", (event) => {
+      const { windows, active_window } = event.payload;
 
-    activeWindow = active;
+      activeWindow = active_window;
+      currentWindows = windows;
 
-    updateAllOutlines(windows);
-    updateWindowInfo(windows, active);
+      updateAllOutlines(windows);
+      updateWindowInfo(windows, active_window);
+    });
+
+    console.log("Window update listener established");
   } catch (error) {
-    console.error("Error fetching window info:", error);
-    // Clear all outlines on error
-    outlineElements.forEach((element) => element.remove());
-    outlineElements.clear();
+    console.error("Failed to setup window listener:", error);
   }
 }
-
-// Initialize and set up high-frequency updates (every 10ms)
-fetchWindowInfo();
-setInterval(fetchWindowInfo, 5);
 
 // Update accessibility UI tree - keep last good tree
 async function updateUITree() {
@@ -181,7 +183,7 @@ function updateUITreeDisplay() {
     const secondsAgo = Math.floor((Date.now() - lastTreeUpdate) / 1000);
     const staleText = secondsAgo > 10 ? ` (${secondsAgo}s old)` : "";
     treeStatusElement.innerHTML = `<div style="color: #4CAF50; margin-bottom: 10px;">✓ Accessibility Tree${staleText}</div>`;
-    treeContentElement.innerHTML = renderUITree(uiTree);
+    treeContentElement.innerHTML = renderAccessibilityTree(uiTree);
   } else {
     treeStatusElement.innerHTML = `<div style="color: #ff9800;">○ No tree available</div>`;
     treeContentElement.innerHTML = "";
@@ -233,17 +235,6 @@ async function updateTextElements() {
   }
 }
 
-// Insert text into active field
-async function insertTextIntoActiveField(text: string) {
-  try {
-    await invoke("insert_text_active", { text });
-    console.log(`Successfully inserted text: ${text}`);
-  } catch (error) {
-    console.error("Failed to insert text:", error);
-    alert(`Failed to insert text: ${error}`);
-  }
-}
-
 // Update info panel (remove UI tree part)
 function updateInfoPanel() {
   let details = "";
@@ -283,57 +274,24 @@ function updateInfoPanel() {
   }
 }
 
-// Register global shortcut for toggling clickthrough
+function renderAccessibilityTree(node: UITreeNode): string {
+  const simpleNode = (n: UITreeNode): Record<string, any> => ({
+    role: n.role,
+    ...(n.title?.trim() && { title: n.title }),
+    ...(n.value?.trim() && { value: n.value }),
+    ...(n.children.length && { children: n.children.map(simpleNode) }),
+  });
 
-// Initialize the application
+  return JSON.stringify(simpleNode(node), null, 2);
+}
+
 async function init() {
-  console.log("Initializing overlay application...");
-
-  // Initial updates
-  await fetchWindowInfo();
+  await setupWindowListener();
   await updateUITree();
   await updateTextElements();
 
-  // Set up periodic updates
-  setInterval(fetchWindowInfo, 100); // Window tracking every 100ms for smooth outline updates
-  setInterval(updateUITree, 1000); // UI tree refresh every 1 second
-  setInterval(updateTextElements, 5000); // Text elements refresh every 5 seconds
-
-  console.log("Overlay application initialized");
+  // setInterval(updateUITree, 1000);
+  // setInterval(updateTextElements, 5000);
 }
 
-// Start the application
 init();
-
-// Clean and terse JSON rendering for debugging
-function renderUITree(node: UITreeNode): string {
-  console.log("Full UI tree:", node);
-
-  function cleanNode(n: UITreeNode): any {
-    const cleaned: any = {
-      role: n.role,
-      depth: n.depth,
-    };
-
-    // Only include title if it exists and isn't empty
-    if (n.title && n.title.trim() !== "") {
-      cleaned.title = n.title;
-    }
-
-    // Only include value if it exists and isn't empty
-    if (n.value && n.value.trim() !== "") {
-      cleaned.value = n.value;
-    }
-
-    // Skip 'enabled' property entirely
-
-    // Recursively clean children
-    if (n.children && n.children.length > 0) {
-      cleaned.children = n.children.map((child) => cleanNode(child));
-    }
-
-    return cleaned;
-  }
-
-  return JSON.stringify(cleanNode(node), null, 2);
-}

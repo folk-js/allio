@@ -2,24 +2,23 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::{Deserialize, Serialize};
-use std::panic;
-use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::Manager;
+use std::{
+    panic, sync::atomic::{AtomicBool, Ordering}, thread, time::Duration
+};
+use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 #[cfg(target_os = "macos")]
 use core_graphics::display::{
-    CGDirectDisplayID, CGDisplayPixelsHigh, CGDisplayPixelsWide, CGMainDisplayID,
+    CGDirectDisplayID, CGDisplayPixelsHigh, CGDisplayPixelsWide, CGMainDisplayID
 };
 
 mod accessibility;
 use accessibility::{
-    find_text_elements, find_text_elements_in_app,
-    insert_text_into_active_field, insert_text_into_element, walk_app_tree_by_pid,
-    walk_focused_app_tree, UITreeNode,
+    find_text_elements, find_text_elements_in_app, insert_text_into_active_field, insert_text_into_element, walk_app_tree_by_pid, walk_focused_app_tree, UITreeNode
 };
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 struct WindowInfo {
     id: String,
     name: String,
@@ -74,7 +73,6 @@ fn get_all_windows(_app: tauri::AppHandle) -> Result<Vec<WindowInfo>, String> {
         Err(_) => return Err(handle_x_win_error("Panic occurred while getting windows. This usually indicates accessibility permissions are needed.".to_string())),
     };
 
-
     // Find our overlay window to get the offset
     let mut overlay_offset_x = 0;
     let mut overlay_offset_y = 0;
@@ -93,8 +91,7 @@ fn get_all_windows(_app: tauri::AppHandle) -> Result<Vec<WindowInfo>, String> {
         .filter(|w| w.info.process_id != current_pid) // Exclude overlay windows
         .map(|w| convert_window_info_with_offset(w, overlay_offset_x, overlay_offset_y))
         .collect();
-    
-    
+
     Ok(window_infos)
 }
 
@@ -171,18 +168,18 @@ fn get_ui_tree() -> Result<UITreeNode, String> {
 #[tauri::command]
 fn get_ui_tree_for_active_window(_app: tauri::AppHandle) -> Result<Option<UITreeNode>, String> {
     let current_pid = get_current_pid();
-    
+
     // Get the active window with full x-win data to access PID
     let result = panic::catch_unwind(|| x_win::get_active_window());
     match result {
         Ok(Ok(active_window)) => {
             let active_pid = active_window.info.process_id;
-            
+
             // Don't try to get accessibility info for our own overlay
             if active_pid == current_pid {
                 return Ok(None);
             }
-            
+
             // Try to walk the tree using the active window's PID
             match walk_app_tree_by_pid(active_pid) {
                 Ok(tree) => Ok(Some(tree)),
@@ -239,11 +236,9 @@ fn main() {
             // Set up global shortcut with proper state handling
             #[cfg(desktop)]
             {
-                let toggle_shortcut = Shortcut::new(
-                    Some(Modifiers::SUPER | Modifiers::SHIFT), 
-                    Code::KeyE
-                );
-                
+                let toggle_shortcut =
+                    Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyE);
+
                 app.handle().plugin(
                     tauri_plugin_global_shortcut::Builder::new()
                         .with_handler(move |app_handle, _shortcut, event| {
@@ -260,11 +255,15 @@ fn main() {
                 app.global_shortcut().register(toggle_shortcut)?;
             }
 
+            // Start the window polling thread
+            let app_handle = app.handle().clone();
+            thread::spawn(move || {
+                window_polling_loop(app_handle);
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            get_all_windows,
-            get_active_window_info,
             toggle_clickthrough,
             get_text_elements,
             get_text_elements_in_app,
@@ -284,7 +283,60 @@ fn toggle_clickthrough_rust(app: tauri::AppHandle) -> Result<(), Box<dyn std::er
         let new_ignore = !current_ignore;
         window.set_ignore_cursor_events(new_ignore)?;
         CLICKTHROUGH_ENABLED.store(new_ignore, Ordering::Relaxed);
-        println!("Clickthrough {}", if new_ignore { "enabled" } else { "disabled" });
+        println!(
+            "Clickthrough {}",
+            if new_ignore { "enabled" } else { "disabled" }
+        );
     }
     Ok(())
+}
+
+// New background polling function
+fn window_polling_loop(app_handle: tauri::AppHandle) {
+    let mut last_windows: Option<Vec<WindowInfo>> = None;
+    let mut last_active: Option<Option<WindowInfo>> = None;
+
+    loop {
+        // Poll window information
+        let current_windows = get_all_windows_internal(&app_handle);
+        let current_active = get_active_window_info_internal(&app_handle);
+
+        // Only emit if data has changed
+        let windows_changed = last_windows.as_ref() != Some(&current_windows);
+        let active_changed = last_active.as_ref() != Some(&current_active);
+
+        if windows_changed || active_changed {
+            let payload = WindowUpdatePayload {
+                windows: current_windows.clone(),
+                active_window: current_active.clone(),
+            };
+
+            // Emit the event to the frontend
+            if let Err(e) = app_handle.emit("window-update", &payload) {
+                eprintln!("Failed to emit window update: {}", e);
+            }
+
+            last_windows = Some(current_windows);
+            last_active = Some(current_active);
+        }
+
+        // Sleep for 5ms to match your current polling rate
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+// Refactor existing functions to be internal (remove #[tauri::command])
+fn get_all_windows_internal(app_handle: &tauri::AppHandle) -> Vec<WindowInfo> {
+    get_all_windows(app_handle.clone()).unwrap_or_default()
+}
+
+fn get_active_window_info_internal(app_handle: &tauri::AppHandle) -> Option<WindowInfo> {
+    get_active_window_info(app_handle.clone()).unwrap_or(None)
+}
+
+// Add event payload structures
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct WindowUpdatePayload {
+    windows: Vec<WindowInfo>,
+    active_window: Option<WindowInfo>,
 }

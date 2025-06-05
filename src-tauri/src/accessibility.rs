@@ -28,7 +28,7 @@ pub fn walk_focused_app_tree() -> Result<UITreeNode, String> {
     match system_element.attribute(&AXAttribute::focused_window()) {
         Ok(focused_window) => {
             // Walk the tree starting from the focused window
-            walk_element_tree(&focused_window, 0, 500) // Much higher depth for debugging
+            walk_element_tree(&focused_window, 0, 500)
         }
         Err(e) => Err(format!(
             "Failed to get focused window: {:?}. Try using walk_app_tree_by_pid instead.",
