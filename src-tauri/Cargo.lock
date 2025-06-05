@@ -1917,6 +1917,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "interlay"
+version = "0.0.1"
+dependencies = [
+ "accessibility",
+ "accessibility-sys",
+ "core-foundation 0.9.4",
+ "core-graphics 0.23.2",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-shell",
+ "x-win",
+]
+
+[[package]]
 name = "interpolate_name"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2769,23 +2786,6 @@ checksum = "db335f4760b14ead6290116f2427bf33a14d4f0617d49f78a246de10c1831224"
 dependencies = [
  "libc",
  "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "overlay"
-version = "0.0.0"
-dependencies = [
- "accessibility",
- "accessibility-sys",
- "core-foundation 0.9.4",
- "core-graphics 0.23.2",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-shell",
- "x-win",
 ]
 
 [[package]]
