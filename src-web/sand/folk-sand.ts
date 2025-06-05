@@ -1,6 +1,5 @@
 import { WebGLUtils } from "./webgl";
 import { invoke } from "@tauri-apps/api/core";
-import { register } from "@tauri-apps/plugin-global-shortcut";
 import {
   collisionFragmentShader,
   collisionVertexShader,

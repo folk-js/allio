@@ -246,7 +246,7 @@ fn main() {
                 
                 app.handle().plugin(
                     tauri_plugin_global_shortcut::Builder::new()
-                        .with_handler(move |app_handle, shortcut, event| {
+                        .with_handler(move |app_handle, _shortcut, event| {
                             // Only handle the pressed state, ignore release
                             if event.state() == ShortcutState::Pressed {
                                 if let Err(e) = toggle_clickthrough_rust(app_handle.clone()) {

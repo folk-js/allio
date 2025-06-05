@@ -1,12 +1,4 @@
-import { register } from "@tauri-apps/plugin-global-shortcut";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { invoke } from "@tauri-apps/api/core";
-
-// Configuration: Set to true to enable sand simulation overlay
-// To switch modes:
-// - SAND_MODE = false: Normal window overlay mode (index.html functionality)
-// - SAND_MODE = true: Sand simulation mode (sand.html functionality)
-const SAND_MODE = true;
 
 interface WindowInfo {
   id: string;
@@ -35,10 +27,8 @@ interface TextElement {
   app_name: string;
 }
 
-const appWindow = getCurrentWebviewWindow();
 let activeWindow: WindowInfo | null = null;
 let currentWindows: WindowInfo[] = [];
-let isClickthrough = true;
 let textElements: TextElement[] = [];
 let uiTree: UITreeNode | null = null;
 
@@ -49,7 +39,7 @@ const outlineElements = new Map<string, HTMLDivElement>();
 let lastTreeUpdate = 0;
 
 // Function to create a new outline element
-function createOutlineElement(window: WindowInfo): HTMLDivElement {
+function createOutlineElement(): HTMLDivElement {
   const outlineElement = document.createElement("div");
   outlineElement.className = "window-outline";
   outlineElement.style.position = "fixed";
@@ -104,7 +94,7 @@ function updateAllOutlines(windows: WindowInfo[]) {
     let element = outlineElements.get(window.id);
     if (!element) {
       // Create new outline element for new window
-      element = createOutlineElement(window);
+      element = createOutlineElement();
       outlineElements.set(window.id, element);
     }
 
@@ -270,7 +260,7 @@ function updateInfoPanel() {
 
   if (textElements.length > 0) {
     details += `<div style="margin-top: 10px;"><strong>Text Elements Found:</strong> ${textElements.length}</div>`;
-    textElements.slice(0, 5).forEach((el, idx) => {
+    textElements.slice(0, 5).forEach((el) => {
       const statusIcon = el.is_editable ? "✎" : "👁";
       details += `<div style="font-size: 10px; margin-left: 10px;">${statusIcon} ${
         el.role
@@ -294,85 +284,10 @@ function updateInfoPanel() {
 }
 
 // Register global shortcut for toggling clickthrough
-async function setupGlobalShortcuts() {
-  let lastToggleTime = 0;
-  const DEBOUNCE_MS = 200; // Prevent multiple triggers within 200ms
-
-  try {
-    // Existing clickthrough toggle
-    await register("CommandOrControl+Shift+E", async () => {
-      const now = Date.now();
-      if (now - lastToggleTime < DEBOUNCE_MS) {
-        return; // Ignore rapid repeated triggers
-      }
-      lastToggleTime = now;
-
-      try {
-        const isClickthrough = (await invoke("toggle_clickthrough")) as boolean;
-        console.log(`Clickthrough ${isClickthrough ? "enabled" : "disabled"}`);
-
-        // Visual feedback - briefly show a message
-        const feedback = document.createElement("div");
-        feedback.style.position = "fixed";
-        feedback.style.top = "200px";
-        feedback.style.right = "20px";
-        feedback.style.background = "rgba(0, 0, 0, 0.8)";
-        feedback.style.color = "white";
-        feedback.style.padding = "10px 15px";
-        feedback.style.borderRadius = "5px";
-        feedback.style.fontSize = "14px";
-        feedback.style.zIndex = "10000";
-        feedback.style.pointerEvents = "none";
-        feedback.textContent = `Clickthrough ${isClickthrough ? "ON" : "OFF"}`;
-
-        document.body.appendChild(feedback);
-
-        setTimeout(() => {
-          feedback.remove();
-        }, 1500);
-      } catch (error) {
-        console.error("Failed to toggle clickthrough:", error);
-      }
-    });
-
-    // Window info shortcut
-    await register("CommandOrControl+Shift+W", async () => {
-      console.log("Window info:");
-      console.log("Current windows:", currentWindows);
-      console.log("Active window:", activeWindow);
-    });
-
-    // Text insertion shortcut
-    await register("CommandOrControl+Shift+T", async () => {
-      await insertTextIntoActiveField("Hello World");
-    });
-
-    // Refresh text elements shortcut
-    await register("CommandOrControl+Shift+R", async () => {
-      await updateTextElements();
-    });
-
-    // Refresh UI tree shortcut
-    await register("CommandOrControl+Shift+U", async () => {
-      await updateUITree();
-    });
-  } catch (error) {
-    console.error("Failed to register global shortcuts:", error);
-  }
-}
 
 // Initialize the application
 async function init() {
-  // Check if we should redirect to sand mode
-  if (SAND_MODE) {
-    window.location.href = "./sand/sand.html";
-    return;
-  }
-
   console.log("Initializing overlay application...");
-
-  // Set up global shortcuts
-  await setupGlobalShortcuts();
 
   // Initial updates
   await fetchWindowInfo();
@@ -381,10 +296,10 @@ async function init() {
 
   // Set up periodic updates
   setInterval(fetchWindowInfo, 100); // Window tracking every 100ms for smooth outline updates
-  setInterval(updateUITree, 5000); // UI tree refresh every 5 seconds
+  setInterval(updateUITree, 1000); // UI tree refresh every 1 second
   setInterval(updateTextElements, 5000); // Text elements refresh every 5 seconds
 
-  console.log("Overlay application initialized with auto-refresh");
+  console.log("Overlay application initialized");
 }
 
 // Start the application
