@@ -1,5 +1,5 @@
 import { WebGLUtils } from "./webgl";
-import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   collisionFragmentShader,
   collisionVertexShader,
@@ -17,6 +17,12 @@ interface WindowInfo {
   y: number;
   w: number;
   h: number;
+}
+
+// Add event payload interface
+interface WindowUpdatePayload {
+  windows: WindowInfo[];
+  active_window: WindowInfo | null;
 }
 
 export class FolkSand extends HTMLElement {
@@ -87,6 +93,9 @@ export class FolkSand extends HTMLElement {
   #shapeIndexBuffer!: WebGLBuffer;
   #shapeIndexCount = 0;
 
+  // Add property to store current windows from events
+  #currentWindows: WindowInfo[] = [];
+
   onMaterialChange?: (type: number) => void;
 
   connectedCallback(): void {
@@ -104,13 +113,11 @@ export class FolkSand extends HTMLElement {
     this.#initializeSimulation();
     this.#initializeCollisionDetection();
     this.#attachEventListeners();
+    this.#setupWindowListener();
     this.#handleShapeTransform();
     this.#render();
 
-    // Update window data periodically (every 100ms)
-    setInterval(() => {
-      this.#handleShapeTransform();
-    }, 100);
+    // Remove the periodic interval - events will trigger updates
   }
 
   disconnectedCallback() {
@@ -830,47 +837,52 @@ export class FolkSand extends HTMLElement {
     return WebGLUtils.createProgram(this.#gl, vertexShader, fragmentShader);
   }
 
-  async #collectShapeData() {
+  // Add method to setup window event listener
+  async #setupWindowListener() {
+    try {
+      await listen<WindowUpdatePayload>("window-update", (event) => {
+        const { windows } = event.payload;
+        this.#currentWindows = windows;
+        this.#handleShapeTransform();
+      });
+      console.log("Window update listener established for folk-sand");
+    } catch (error) {
+      console.error("Failed to setup window listener in folk-sand:", error);
+    }
+  }
+
+  #collectShapeData() {
     const positions: number[] = [];
     const indices: number[] = [];
     let vertexOffset = 0;
 
-    try {
-      // Get all windows from Rust
-      const windows = (await invoke("get_all_windows")) as WindowInfo[];
+    // Use stored windows instead of invoking Rust
+    this.#currentWindows.forEach((win) => {
+      // Convert window coordinates to buffer coordinates
+      const bufferPoints = [
+        this.#convertToBufferCoordinates(win.x, win.y),
+        this.#convertToBufferCoordinates(win.x + win.w, win.y),
+        this.#convertToBufferCoordinates(win.x, win.y + win.h),
+        this.#convertToBufferCoordinates(win.x + win.w, win.y + win.h),
+      ];
 
-      windows.forEach((window) => {
-        // Convert window coordinates to buffer coordinates
-        const bufferPoints = [
-          this.#convertToBufferCoordinates(window.x, window.y),
-          this.#convertToBufferCoordinates(window.x + window.w, window.y),
-          this.#convertToBufferCoordinates(window.x, window.y + window.h),
-          this.#convertToBufferCoordinates(
-            window.x + window.w,
-            window.y + window.h
-          ),
-        ];
-
-        // Add vertices
-        bufferPoints.forEach((point) => {
-          positions.push(point.x, point.y);
-        });
-
-        // Add indices for two triangles (FIXED)
-        indices.push(
-          vertexOffset, // 0 = top-left
-          vertexOffset + 1, // 1 = top-right
-          vertexOffset + 3, // 3 = bottom-right
-          vertexOffset, // 0 = top-left
-          vertexOffset + 3, // 3 = bottom-right
-          vertexOffset + 2 // 2 = bottom-left
-        );
-
-        vertexOffset += 4;
+      // Add vertices
+      bufferPoints.forEach((point) => {
+        positions.push(point.x, point.y);
       });
-    } catch (error) {
-      console.error("Failed to fetch window data:", error);
-    }
+
+      // Add indices for two triangles (FIXED)
+      indices.push(
+        vertexOffset, // 0 = top-left
+        vertexOffset + 1, // 1 = top-right
+        vertexOffset + 3, // 3 = bottom-right
+        vertexOffset, // 0 = top-left
+        vertexOffset + 3, // 3 = bottom-right
+        vertexOffset + 2 // 2 = bottom-left
+      );
+
+      vertexOffset += 4;
+    });
 
     const gl = this.#gl;
 
@@ -940,9 +952,9 @@ export class FolkSand extends HTMLElement {
   //   this.#handleShapeTransform();
   // }
 
-  async #handleShapeTransform() {
+  #handleShapeTransform() {
     // Recollect and update all shape data when any shape changes
-    await this.#collectShapeData();
+    this.#collectShapeData();
     this.#updateCollisionTexture();
   }
 }

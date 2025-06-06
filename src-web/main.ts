@@ -8,6 +8,7 @@ interface WindowInfo {
   y: number;
   w: number;
   h: number;
+  focused: boolean;
 }
 
 interface UITreeNode {
@@ -31,7 +32,6 @@ interface TextElement {
 // Add event payload interface
 interface WindowUpdatePayload {
   windows: WindowInfo[];
-  active_window: WindowInfo | null;
 }
 
 let activeWindow: WindowInfo | null = null;
@@ -96,7 +96,7 @@ function updateAllOutlines(windows: WindowInfo[]) {
 
   // Update existing and create new outline elements
   windows.forEach((window) => {
-    const isActive = activeWindow && window.id === activeWindow.id;
+    const isActive = window.focused;
 
     let element = outlineElements.get(window.id);
     if (!element) {
@@ -111,37 +111,16 @@ function updateAllOutlines(windows: WindowInfo[]) {
 }
 
 // Function to update window info display
-function updateWindowInfo(windows: WindowInfo[], active: WindowInfo | null) {
-  const detailsElement = document.getElementById("window-details");
-  if (!detailsElement) return;
-
-  let html = `<div style="margin-top: 10px;">
-    <strong>Total Windows: ${windows.length}</strong>`;
-
-  if (active) {
-    html += `
-      <div style="margin-top: 5px;">
-        <strong>Active:</strong> ${active.name}
-        <div>Size: ${Math.round(active.w)}x${Math.round(active.h)}</div>
-        <div>Position: (${Math.round(active.x)}, ${Math.round(active.y)})</div>
-      </div>`;
-  }
-
-  html += "</div>";
-  detailsElement.innerHTML = html;
-}
 
 // Replace fetchWindowInfo with event listener
 async function setupWindowListener() {
   try {
     await listen<WindowUpdatePayload>("window-update", (event) => {
-      const { windows, active_window } = event.payload;
+      const { windows } = event.payload;
 
-      activeWindow = active_window;
       currentWindows = windows;
 
       updateAllOutlines(windows);
-      updateWindowInfo(windows, active_window);
     });
 
     console.log("Window update listener established");
@@ -190,52 +169,6 @@ function updateUITreeDisplay() {
   }
 }
 
-// Update accessibility text elements
-async function updateTextElements() {
-  try {
-    // First try to get text elements from the active window's UI tree
-    if (uiTree) {
-      // Extract text elements from the current UI tree
-      const extractedElements: TextElement[] = [];
-      function extractTextFromTree(
-        node: UITreeNode,
-        appName: string = "Unknown"
-      ) {
-        const textRoles = [
-          "AXTextField",
-          "AXTextArea",
-          "AXComboBox",
-          "AXSearchField",
-          "AXSecureTextField",
-        ];
-        if (textRoles.includes(node.role)) {
-          extractedElements.push({
-            id: `${node.role}_${node.depth}`,
-            role: node.role,
-            title: node.title || "Untitled",
-            current_value: node.value || "",
-            is_editable: node.enabled,
-            app_name: appName,
-          });
-        }
-        node.children.forEach((child) => extractTextFromTree(child, appName));
-      }
-
-      extractTextFromTree(uiTree);
-      textElements = extractedElements;
-    } else {
-      // Fallback to the original method
-      textElements = (await invoke("get_text_elements")) as TextElement[];
-    }
-
-    updateInfoPanel();
-  } catch (error) {
-    // Silently handle errors, just clear text elements
-    textElements = [];
-  }
-}
-
-// Update info panel (remove UI tree part)
 function updateInfoPanel() {
   let details = "";
 
@@ -264,10 +197,6 @@ function updateInfoPanel() {
     }
   }
 
-  details += `<div style="margin-top: 10px;"><strong>Accessibility Commands:</strong></div>`;
-  details += `<div style="font-size: 10px;">Cmd+Shift+T: Insert "Hello World"</div>`;
-  details += `<div style="font-size: 10px;">Cmd+Shift+U: Manual refresh</div>`;
-
   const detailsElement = document.getElementById("window-details");
   if (detailsElement) {
     detailsElement.innerHTML = details;
@@ -288,10 +217,8 @@ function renderAccessibilityTree(node: UITreeNode): string {
 async function init() {
   await setupWindowListener();
   await updateUITree();
-  await updateTextElements();
 
-  // setInterval(updateUITree, 1000);
-  // setInterval(updateTextElements, 5000);
+  // setInterval(updateUITree, 2000);
 }
 
 init();

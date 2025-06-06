@@ -1,22 +1,39 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::{
-    panic, sync::atomic::{AtomicBool, Ordering}, thread, time::Duration
+    panic::{self},
+    sync::atomic::{AtomicBool, Ordering},
+    thread,
+    time::{Duration, Instant},
 };
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 #[cfg(target_os = "macos")]
 use core_graphics::display::{
-    CGDirectDisplayID, CGDisplayPixelsHigh, CGDisplayPixelsWide, CGMainDisplayID
+    CGDirectDisplayID, CGDisplayPixelsHigh, CGDisplayPixelsWide, CGMainDisplayID,
 };
 
 mod accessibility;
 use accessibility::{
-    find_text_elements, find_text_elements_in_app, insert_text_into_active_field, insert_text_into_element, walk_app_tree_by_pid, walk_focused_app_tree, UITreeNode
+    find_text_elements, find_text_elements_in_app, insert_text_into_active_field,
+    insert_text_into_element, walk_app_tree_by_pid, walk_focused_app_tree, UITreeNode,
 };
+
+// Constants - optimized polling rate
+const POLLING_INTERVAL_MS: u64 = 8; // ~120 FPS - fast enough for smooth tracking
+const OVERLAY_MAIN_URL: &str = "http://localhost:1420/index.html";
+const OVERLAY_SAND_URL: &str = "http://localhost:1420/src-web/sand.html";
+
+// App State
+#[derive(Default)]
+struct AppState {
+    clickthrough_enabled: AtomicBool,
+    is_sand_mode: AtomicBool,
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 struct WindowInfo {
@@ -26,21 +43,29 @@ struct WindowInfo {
     y: i32,
     w: i32,
     h: i32,
+    focused: bool,
 }
 
 // Convert x-win WindowInfo to our WindowInfo struct
-fn convert_window_info_with_offset(
-    window: &x_win::WindowInfo,
-    offset_x: i32,
-    offset_y: i32,
-) -> WindowInfo {
-    WindowInfo {
-        id: window.id.to_string(),
-        name: window.title.clone(),
-        x: window.position.x - offset_x,
-        y: window.position.y - offset_y,
-        w: window.position.width,
-        h: window.position.height,
+impl WindowInfo {
+    fn from_x_win(window: &x_win::WindowInfo, focused: bool) -> Self {
+        WindowInfo {
+            id: window.id.to_string(),
+            name: window.title.clone(),
+            x: window.position.x,
+            y: window.position.y,
+            w: window.position.width,
+            h: window.position.height,
+            focused,
+        }
+    }
+}
+
+impl WindowInfo {
+    fn with_offset(mut self, offset_x: i32, offset_y: i32) -> Self {
+        self.x -= offset_x;
+        self.y -= offset_y;
+        self
     }
 }
 
@@ -49,8 +74,9 @@ fn handle_x_win_error(e: String) -> String {
     if e.contains("nil")
         || e.contains("NSRunningApplication")
         || e.contains("accessibility permissions")
+        || e.contains("panicked")
     {
-        "Permission denied. Please grant accessibility permissions in System Preferences → Security & Privacy → Privacy → Accessibility".to_string()
+        "macOS system call failed (likely due to accessibility permissions or system state). Please grant accessibility permissions in System Preferences → Security & Privacy → Privacy → Accessibility".to_string()
     } else {
         e
     }
@@ -61,93 +87,26 @@ fn get_current_pid() -> u32 {
     std::process::id()
 }
 
-// Gets all open windows and extracts overlay offset in one pass
 #[tauri::command]
-fn get_all_windows(_app: tauri::AppHandle) -> Result<Vec<WindowInfo>, String> {
-    let current_pid = get_current_pid();
+fn toggle_clickthrough(
+    state: tauri::State<AppState>,
+    app: tauri::AppHandle,
+) -> Result<bool, String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or("Main window not found")?;
 
-    let result = panic::catch_unwind(|| x_win::get_open_windows());
-    let windows = match result {
-        Ok(Ok(windows)) => windows,
-        Ok(Err(e)) => return Err(handle_x_win_error(format!("Failed to get windows: {}", e))),
-        Err(_) => return Err(handle_x_win_error("Panic occurred while getting windows. This usually indicates accessibility permissions are needed.".to_string())),
-    };
+    let current_ignore = state.clickthrough_enabled.load(Ordering::Relaxed);
+    let new_ignore = !current_ignore;
 
-    // Find our overlay window to get the offset
-    let mut overlay_offset_x = 0;
-    let mut overlay_offset_y = 0;
+    window
+        .set_ignore_cursor_events(new_ignore)
+        .map_err(|e| e.to_string())?;
 
-    for window in &windows {
-        if window.info.process_id == current_pid {
-            overlay_offset_x = window.position.x;
-            overlay_offset_y = window.position.y;
-            break;
-        }
-    }
-
-    // Apply offset to all windows, excluding our own overlay
-    let window_infos: Vec<WindowInfo> = windows
-        .iter()
-        .filter(|w| w.info.process_id != current_pid) // Exclude overlay windows
-        .map(|w| convert_window_info_with_offset(w, overlay_offset_x, overlay_offset_y))
-        .collect();
-
-    Ok(window_infos)
-}
-
-#[tauri::command]
-fn get_active_window_info(_app: tauri::AppHandle) -> Result<Option<WindowInfo>, String> {
-    let current_pid = get_current_pid();
-
-    // Get overlay offset from all windows first
-    let overlay_offset = {
-        let result = panic::catch_unwind(|| x_win::get_open_windows());
-        match result {
-            Ok(Ok(windows)) => {
-                let mut offset = (0, 0);
-                for window in &windows {
-                    if window.info.process_id == current_pid {
-                        offset = (window.position.x, window.position.y);
-                        break;
-                    }
-                }
-                offset
-            }
-            Ok(Err(_)) => (0, 0),
-            Err(_) => (0, 0),
-        }
-    };
-
-    let result = panic::catch_unwind(|| x_win::get_active_window());
-    match result {
-        Ok(Ok(active_window)) => {
-            // Don't return info for our own overlay
-            if active_window.info.process_id == current_pid {
-                return Ok(None);
-            }
-            let window_info = convert_window_info_with_offset(&active_window, overlay_offset.0, overlay_offset.1);
-            Ok(Some(window_info))
-        }
-        Ok(Err(e)) => Err(handle_x_win_error(format!("Failed to get active window: {}", e))),
-        Err(_) => Err(handle_x_win_error("Panic occurred while getting active window. This usually indicates accessibility permissions are needed.".to_string())),
-    }
-}
-
-static CLICKTHROUGH_ENABLED: AtomicBool = AtomicBool::new(false);
-
-#[tauri::command]
-fn toggle_clickthrough(app: tauri::AppHandle) -> Result<bool, String> {
-    if let Some(window) = app.get_webview_window("main") {
-        let current_ignore = CLICKTHROUGH_ENABLED.load(Ordering::Relaxed);
-        let new_ignore = !current_ignore;
-        window
-            .set_ignore_cursor_events(new_ignore)
-            .map_err(|e| e.to_string())?;
-        CLICKTHROUGH_ENABLED.store(new_ignore, Ordering::Relaxed);
-        Ok(new_ignore)
-    } else {
-        Err("Main window not found".to_string())
-    }
+    state
+        .clickthrough_enabled
+        .store(new_ignore, Ordering::Relaxed);
+    Ok(new_ignore)
 }
 
 #[tauri::command]
@@ -169,9 +128,8 @@ fn get_ui_tree() -> Result<UITreeNode, String> {
 fn get_ui_tree_for_active_window(_app: tauri::AppHandle) -> Result<Option<UITreeNode>, String> {
     let current_pid = get_current_pid();
 
-    // Get the active window with full x-win data to access PID
-    let result = panic::catch_unwind(|| x_win::get_active_window());
-    match result {
+    // Get the active window with full x-win data to access PID - use panic handling
+    match panic::catch_unwind(|| x_win::get_active_window()) {
         Ok(Ok(active_window)) => {
             let active_pid = active_window.info.process_id;
 
@@ -187,13 +145,21 @@ fn get_ui_tree_for_active_window(_app: tauri::AppHandle) -> Result<Option<UITree
                     // If PID-based approach fails, try the focused window approach as fallback
                     match walk_focused_app_tree() {
                         Ok(tree) => Ok(Some(tree)),
-                        Err(_) => Err(format!("Failed to get UI tree for PID {}: {}", active_pid, e))
+                        Err(_) => Err(format!(
+                            "Failed to get UI tree for PID {}: {}",
+                            active_pid, e
+                        )),
                     }
                 }
             }
         }
-        Ok(Err(e)) => Err(handle_x_win_error(format!("Failed to get active window: {}", e))),
-        Err(_) => Err(handle_x_win_error("Panic occurred while getting active window. This usually indicates accessibility permissions are needed.".to_string())),
+        Ok(Err(e)) => Err(handle_x_win_error(format!(
+            "Failed to get active window: {}",
+            e
+        ))),
+        Err(_) => Err(handle_x_win_error(
+            "System call panicked while getting active window for UI tree - likely due to macOS accessibility permissions or nil objects".to_string()
+        )),
     }
 }
 
@@ -217,9 +183,32 @@ fn get_main_screen_dimensions() -> (f64, f64) {
     }
 }
 
+#[tauri::command]
+fn toggle_page_mode(state: tauri::State<AppState>, app: tauri::AppHandle) -> Result<bool, String> {
+    let current_mode = state.is_sand_mode.load(Ordering::Relaxed);
+    let new_mode = !current_mode;
+    state.is_sand_mode.store(new_mode, Ordering::Relaxed);
+
+    let window = app
+        .get_webview_window("main")
+        .ok_or("Main window not found")?;
+
+    let url = if new_mode {
+        OVERLAY_SAND_URL
+    } else {
+        OVERLAY_MAIN_URL
+    };
+
+    window
+        .navigate(url.parse().unwrap())
+        .map_err(|e| e.to_string())?;
+    Ok(new_mode)
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .manage(AppState::default())
         .setup(|app| {
             let (screen_width, screen_height) = get_main_screen_dimensions();
             if let Some(window) = app.get_webview_window("main") {
@@ -239,13 +228,18 @@ fn main() {
                 let toggle_shortcut =
                     Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyE);
 
+                // New shortcut for page switching
+                let page_toggle_shortcut =
+                    Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyP);
+
                 app.handle().plugin(
                     tauri_plugin_global_shortcut::Builder::new()
-                        .with_handler(move |app_handle, _shortcut, event| {
-                            // Only handle the pressed state, ignore release
+                        .with_handler(move |app_handle, shortcut, event| {
                             if event.state() == ShortcutState::Pressed {
-                                if let Err(e) = toggle_clickthrough_rust(app_handle.clone()) {
-                                    eprintln!("Failed to toggle clickthrough: {}", e);
+                                if shortcut == &toggle_shortcut {
+                                    let _ = toggle_clickthrough_rust(app_handle.clone());
+                                } else if shortcut == &page_toggle_shortcut {
+                                    let _ = toggle_page_mode_rust(app_handle.clone());
                                 }
                             }
                         })
@@ -253,18 +247,26 @@ fn main() {
                 )?;
 
                 app.global_shortcut().register(toggle_shortcut)?;
+                app.global_shortcut().register(page_toggle_shortcut)?;
             }
 
-            // Start the window polling thread
+            // Start the window polling thread (fast, no accessibility calls)
             let app_handle = app.handle().clone();
             thread::spawn(move || {
                 window_polling_loop(app_handle);
+            });
+
+            // Start the accessibility polling thread (slow, separate)
+            let app_handle_accessibility = app.handle().clone();
+            thread::spawn(move || {
+                accessibility_polling_loop(app_handle_accessibility);
             });
 
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             toggle_clickthrough,
+            toggle_page_mode,
             get_text_elements,
             get_text_elements_in_app,
             get_ui_tree,
@@ -276,67 +278,131 @@ fn main() {
         .expect("error while running tauri application");
 }
 
-// Add this function to handle the toggle from Rust
+// Add this function to handle the toggle from Rust (for shortcuts)
 fn toggle_clickthrough_rust(app: tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(window) = app.get_webview_window("main") {
-        let current_ignore = CLICKTHROUGH_ENABLED.load(Ordering::Relaxed);
-        let new_ignore = !current_ignore;
-        window.set_ignore_cursor_events(new_ignore)?;
-        CLICKTHROUGH_ENABLED.store(new_ignore, Ordering::Relaxed);
-        println!(
-            "Clickthrough {}",
-            if new_ignore { "enabled" } else { "disabled" }
-        );
-    }
+    let state = app.state::<AppState>();
+    let window = app
+        .get_webview_window("main")
+        .ok_or("Main window not found")?;
+
+    let current_ignore = state.clickthrough_enabled.load(Ordering::Relaxed);
+    let new_ignore = !current_ignore;
+
+    window.set_ignore_cursor_events(new_ignore)?;
+    state
+        .clickthrough_enabled
+        .store(new_ignore, Ordering::Relaxed);
+
     Ok(())
 }
 
-// New background polling function
+// Add this function to handle page mode toggle from Rust (for shortcuts)
+fn toggle_page_mode_rust(app: tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    let state = app.state::<AppState>();
+    let current_mode = state.is_sand_mode.load(Ordering::Relaxed);
+    let new_mode = !current_mode;
+    state.is_sand_mode.store(new_mode, Ordering::Relaxed);
+
+    let window = app
+        .get_webview_window("main")
+        .ok_or("Main window not found")?;
+
+    let url = if new_mode {
+        OVERLAY_SAND_URL
+    } else {
+        OVERLAY_MAIN_URL
+    };
+
+    window.navigate(url.parse().unwrap())?;
+    Ok(())
+}
+
+// Simple polling loop - poll and emit immediately when data changes
 fn window_polling_loop(app_handle: tauri::AppHandle) {
     let mut last_windows: Option<Vec<WindowInfo>> = None;
-    let mut last_active: Option<Option<WindowInfo>> = None;
 
     loop {
-        // Poll window information
-        let current_windows = get_all_windows_internal(&app_handle);
-        let current_active = get_active_window_info_internal(&app_handle);
+        let loop_start = Instant::now();
 
-        // Only emit if data has changed
+        // Get fresh data from system
+        let current_windows = get_all_windows_with_focus();
+
+        // Check if data changed
         let windows_changed = last_windows.as_ref() != Some(&current_windows);
-        let active_changed = last_active.as_ref() != Some(&current_active);
 
-        if windows_changed || active_changed {
+        // Only emit if something actually changed
+        if windows_changed {
             let payload = WindowUpdatePayload {
                 windows: current_windows.clone(),
-                active_window: current_active.clone(),
             };
 
-            // Emit the event to the frontend
-            if let Err(e) = app_handle.emit("window-update", &payload) {
-                eprintln!("Failed to emit window update: {}", e);
+            if let Err(_) = app_handle.emit("window-update", &payload) {
+                // Silently ignore errors
             }
 
             last_windows = Some(current_windows);
-            last_active = Some(current_active);
         }
 
-        // Sleep for 5ms to match your current polling rate
-        thread::sleep(Duration::from_millis(5));
+        // Precise interval handling - sleep for remaining time, or skip if behind
+        let elapsed = loop_start.elapsed();
+        let target_interval = Duration::from_millis(POLLING_INTERVAL_MS);
+        if elapsed < target_interval {
+            thread::sleep(target_interval - elapsed);
+        }
     }
 }
 
-// Refactor existing functions to be internal (remove #[tauri::command])
-fn get_all_windows_internal(app_handle: &tauri::AppHandle) -> Vec<WindowInfo> {
-    get_all_windows(app_handle.clone()).unwrap_or_default()
+// Combined function to get all windows with focused state in single call
+fn get_all_windows_with_focus() -> Vec<WindowInfo> {
+    let current_pid = get_current_pid();
+
+    // Get all windows and active window in parallel
+    let all_windows_result = panic::catch_unwind(|| x_win::get_open_windows());
+    let active_window_result = panic::catch_unwind(|| x_win::get_active_window());
+
+    let (all_windows, active_window_id) = match (all_windows_result, active_window_result) {
+        (Ok(Ok(windows)), Ok(Ok(active))) => (windows, Some(active.id)),
+        (Ok(Ok(windows)), _) => (windows, None),
+        _ => return Vec::new(),
+    };
+
+    // Find overlay offset
+    let mut overlay_offset = (0, 0);
+    for window in &all_windows {
+        if window.info.process_id == current_pid {
+            overlay_offset = (window.position.x, window.position.y);
+            break;
+        }
+    }
+
+    // Convert all windows, excluding our overlay, and mark focused
+    all_windows
+        .iter()
+        .filter(|w| w.info.process_id != current_pid)
+        .map(|w| {
+            let focused = active_window_id.map_or(false, |id| id == w.id);
+            WindowInfo::from_x_win(w, focused).with_offset(overlay_offset.0, overlay_offset.1)
+        })
+        .collect()
 }
 
-fn get_active_window_info_internal(app_handle: &tauri::AppHandle) -> Option<WindowInfo> {
-    get_active_window_info(app_handle.clone()).unwrap_or(None)
-}
-
-// Add event payload structures
+// Event payload structures
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct WindowUpdatePayload {
     windows: Vec<WindowInfo>,
-    active_window: Option<WindowInfo>,
+}
+
+// Separate polling loop for slow accessibility calls
+fn accessibility_polling_loop(app_handle: tauri::AppHandle) {
+    loop {
+        // Get UI tree for active window (this is slow)
+        if let Ok(Some(tree)) = get_ui_tree_for_active_window(app_handle.clone()) {
+            if let Err(_) = app_handle.emit("ui-tree-update", &tree) {
+                // Silently ignore errors
+            }
+        }
+
+        // Run accessibility checks every 500ms (much less frequent)
+        thread::sleep(Duration::from_millis(500));
+    }
 }

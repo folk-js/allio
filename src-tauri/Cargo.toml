@@ -18,6 +18,7 @@ x-win = "5.0.1"
 tauri-plugin-shell = "2"
 accessibility = "0.2.0"
 accessibility-sys = "0.2.0"
+anyhow = "1.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.23"
