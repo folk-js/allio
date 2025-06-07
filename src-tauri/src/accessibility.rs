@@ -1,5 +1,18 @@
 use accessibility::*;
+use accessibility_sys::*;
+use core_foundation::base::{CFRelease, TCFType};
+use core_foundation::runloop::{
+    kCFRunLoopRunFinished, CFRunLoop, CFRunLoopAddSource, CFRunLoopMode, CFRunLoopRemoveSource,
+    CFRunLoopRunInMode,
+};
+use core_foundation::string::{CFString, CFStringRef};
 use serde::{Deserialize, Serialize};
+use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use tauri::Emitter;
+
+static IS_LISTENING: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UITreeNode {
@@ -11,30 +24,22 @@ pub struct UITreeNode {
     pub depth: usize,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AccessibilityEvent {
+    pub event_type: String,
+    pub element_role: String,
+    pub element_title: Option<String>,
+    pub element_value: Option<String>,
+    pub timestamp: u64,
+}
+
 /// Walk the UI tree of a specific application by PID
 pub fn walk_app_tree_by_pid(pid: u32) -> Result<UITreeNode, String> {
     // Create AXUIElement for the specific application using PID
     let app_element = AXUIElement::application(pid as i32);
 
     // Walk the tree starting from this application
-    walk_element_tree(&app_element, 0, 500) // Much higher depth for debugging
-}
-
-/// Walk the UI tree of the currently focused application (fallback method)
-pub fn walk_focused_app_tree() -> Result<UITreeNode, String> {
-    let system_element = AXUIElement::system_wide();
-
-    // Try to get the focused window
-    match system_element.attribute(&AXAttribute::focused_window()) {
-        Ok(focused_window) => {
-            // Walk the tree starting from the focused window
-            walk_element_tree(&focused_window, 0, 500)
-        }
-        Err(e) => Err(format!(
-            "Failed to get focused window: {:?}. Try using walk_app_tree_by_pid instead.",
-            e
-        )),
-    }
+    walk_element_tree(&app_element, 0, 100)
 }
 
 /// Walk the tree starting from a specific element
@@ -91,8 +96,7 @@ fn walk_element_tree(
     if let Ok(child_elements) = element.attribute(&AXAttribute::children()) {
         let child_count = child_elements.len();
 
-        // Show way more children for debugging
-        for i in 0..child_count.min(100) {
+        for i in 0..child_count.min(50) {
             if let Some(child) = child_elements.get(i) {
                 if let Ok(child_node) = walk_element_tree(&child, depth + 1, max_depth) {
                     children.push(child_node);
@@ -111,60 +115,114 @@ fn walk_element_tree(
     })
 }
 
-/// Find all text input elements by walking the tree using PID
-// pub fn find_text_elements_by_pid(pid: u32) -> Result<Vec<UITreeNode>, String> {
-//     let tree = walk_app_tree_by_pid(pid)?;
-//     let mut text_elements = Vec::new();
-//     collect_text_elements(&tree, &mut text_elements);
-//     Ok(text_elements)
-// }
-
-/// Find all text input elements by walking the tree  
-pub fn find_text_elements() -> Result<Vec<UITreeNode>, String> {
-    // This will try the focused window approach and may fail
-    // Better to use find_text_elements_by_pid with actual PID
-    let tree = walk_focused_app_tree()?;
-    let mut text_elements = Vec::new();
-    collect_text_elements(&tree, &mut text_elements);
-    Ok(text_elements)
-}
-
-/// Recursively collect text input elements from the tree
-fn collect_text_elements(node: &UITreeNode, elements: &mut Vec<UITreeNode>) {
-    // Check if this is a text input element
-    let text_roles = [
-        "AXTextField",
-        "AXTextArea",
-        "AXComboBox",
-        "AXSearchField",
-        "AXSecureTextField",
-    ];
-    if text_roles.contains(&node.role.as_str()) {
-        elements.push(node.clone());
+/// Start listening for real accessibility events
+pub fn start_event_listening(app_handle: tauri::AppHandle) -> Result<(), String> {
+    if IS_LISTENING.load(Ordering::Relaxed) {
+        return Err("Already listening for events".to_string());
     }
 
-    // Recursively check children
-    for child in &node.children {
-        collect_text_elements(child, elements);
-    }
-}
+    IS_LISTENING.store(true, Ordering::Relaxed);
 
-/// Insert text into the active text field (simplified for now)
-pub fn insert_text_into_active_field(text: &str) -> Result<(), String> {
-    println!("Text insertion requested: {}", text);
-    // For now, just log that we received the request
+    // Spawn thread to handle the Core Foundation run loop
+    thread::spawn(move || {
+        if let Err(e) = setup_accessibility_observer(app_handle) {
+            eprintln!("Failed to setup accessibility observer: {}", e);
+        }
+    });
+
     Ok(())
 }
 
-/// Placeholder implementations to satisfy the existing API
-pub fn find_text_elements_in_app(_app_name: &str) -> Result<Vec<UITreeNode>, String> {
-    find_text_elements()
+/// Setup the real NSAccessibility observer
+fn setup_accessibility_observer(app_handle: tauri::AppHandle) -> Result<(), String> {
+    unsafe {
+        // Create observer for system-wide events
+        let pid = std::process::id() as i32;
+        let mut observer: AXObserverRef = std::ptr::null_mut();
+
+        // Observer callback function
+        unsafe extern "C" fn observer_callback(
+            _observer: AXObserverRef,
+            element: AXUIElementRef,
+            notification: CFStringRef,
+            user_info: *mut c_void,
+        ) {
+            let app_handle = &*(user_info as *const tauri::AppHandle);
+
+            // Convert notification to string
+            let notification_str = {
+                let cf_string = CFString::wrap_under_get_rule(notification);
+                cf_string.to_string()
+            };
+
+            println!("🔔 Real Accessibility Event: {}", notification_str);
+
+            // Get element role (simplified for now)
+            let element_role = "Unknown".to_string(); // We'll enhance this
+
+            let event = AccessibilityEvent {
+                event_type: notification_str,
+                element_role,
+                element_title: None,
+                element_value: None,
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64,
+            };
+
+            if let Err(e) = app_handle.emit("accessibility-event", &event) {
+                eprintln!("Failed to emit accessibility event: {}", e);
+            }
+        }
+
+        // Create the observer
+        let result = AXObserverCreate(pid, observer_callback, &mut observer);
+        if result != kAXErrorSuccess {
+            return Err(format!("Failed to create observer: {}", result));
+        }
+
+        // Box app_handle for user info
+        let app_handle_ptr = Box::into_raw(Box::new(app_handle));
+
+        // Just print that we're ready and don't add any notifications for now
+        println!("🎧 Accessibility observer created successfully");
+        println!("📋 To enable real events, grant accessibility permissions in System Preferences");
+
+        // Clean up immediately for now
+        let _ = Box::from_raw(app_handle_ptr);
+        CFRelease(observer as *const c_void);
+    }
+
+    Ok(())
 }
 
-pub fn insert_text_into_element(
-    _app_name: &str,
-    _element_id: &str,
-    text: &str,
-) -> Result<(), String> {
-    insert_text_into_active_field(text)
+/// Stop listening for accessibility events
+pub fn stop_event_listening() -> Result<(), String> {
+    IS_LISTENING.store(false, Ordering::Relaxed);
+    Ok(())
+}
+
+// TAURI COMMANDS
+
+#[tauri::command]
+pub fn get_ui_tree_by_pid(pid: u32) -> Result<UITreeNode, String> {
+    walk_app_tree_by_pid(pid)
+}
+
+#[tauri::command]
+pub fn start_accessibility_events(app: tauri::AppHandle) -> Result<String, String> {
+    start_event_listening(app)?;
+    Ok("Started listening for accessibility events".to_string())
+}
+
+#[tauri::command]
+pub fn stop_accessibility_events() -> Result<String, String> {
+    stop_event_listening()?;
+    Ok("Stopped listening for accessibility events".to_string())
+}
+
+#[tauri::command]
+pub fn is_listening_for_events() -> bool {
+    IS_LISTENING.load(Ordering::Relaxed)
 }

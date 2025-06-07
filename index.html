@@ -31,6 +31,30 @@
         transition: none; /* Remove any transitions for immediate updates */
       }
 
+      #app-sidebar {
+        position: fixed;
+        top: 50px;
+        left: 10px;
+        background: rgba(0, 0, 0, 0.9);
+        color: white;
+        padding: 15px;
+        border-radius: 5px;
+        font-family: sans-serif;
+        pointer-events: auto;
+        width: 280px;
+        height: calc(100vh - 60px);
+        overflow-y: auto;
+        z-index: 10000;
+        font-size: 12px;
+      }
+
+      #app-sidebar h3 {
+        color: #4caf50;
+        margin-bottom: 15px;
+        border-bottom: 1px solid #333;
+        padding-bottom: 5px;
+      }
+
       #info {
         position: fixed;
         top: 50px;
@@ -39,25 +63,25 @@
         color: white;
         padding: 10px;
         border-radius: 5px;
-        font-size: 12px;
+        font-size: 11px;
         font-family: monospace;
         pointer-events: none;
-        max-width: 300px;
+        width: 250px;
         z-index: 10000;
       }
 
       #ui-tree {
         position: fixed;
-        top: 10px;
-        left: 10px;
+        top: 50px;
+        left: 300px;
         background: rgba(0, 0, 0, 0.9);
         color: white;
         padding: 10px;
         border-radius: 5px;
         font-family: monospace;
         pointer-events: none;
-        width: 800px;
-        height: calc(100vh - 20px);
+        width: calc((100vw - 570px) / 2);
+        height: calc(100vh - 60px);
         overflow-y: auto;
         z-index: 10000;
         font-size: 10px;
@@ -69,13 +93,17 @@
 
   <body>
     <div id="outline"></div>
+    <div id="app-sidebar">
+      <h3>📱 Open Apps</h3>
+      <div id="app-list"></div>
+    </div>
     <div id="info">
       <div>Cmd+Shift+P: toggle sand</div>
       <div>Cmd+Shift+E: toggle clickthrough</div>
       <div id="window-details"></div>
     </div>
     <div id="ui-tree">
-      <div id="tree-status">No UI tree available</div>
+      <div id="tree-status">Select an app to view its accessibility tree</div>
       <div id="tree-content"></div>
     </div>
     <script type="module" src="/src-web/main.ts"></script>

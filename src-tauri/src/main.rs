@@ -19,8 +19,8 @@ use core_graphics::display::{
 
 mod accessibility;
 use accessibility::{
-    find_text_elements, find_text_elements_in_app, insert_text_into_active_field,
-    insert_text_into_element, walk_app_tree_by_pid, walk_focused_app_tree, UITreeNode,
+    get_ui_tree_by_pid, is_listening_for_events, start_accessibility_events,
+    stop_accessibility_events,
 };
 
 // Constants - optimized polling rate
@@ -44,6 +44,7 @@ struct WindowInfo {
     w: i32,
     h: i32,
     focused: bool,
+    process_id: u32,
 }
 
 // Convert x-win WindowInfo to our WindowInfo struct
@@ -57,6 +58,7 @@ impl WindowInfo {
             w: window.position.width,
             h: window.position.height,
             focused,
+            process_id: window.info.process_id,
         }
     }
 }
@@ -67,24 +69,6 @@ impl WindowInfo {
         self.y -= offset_y;
         self
     }
-}
-
-// Helper for permission error handling
-fn handle_x_win_error(e: String) -> String {
-    if e.contains("nil")
-        || e.contains("NSRunningApplication")
-        || e.contains("accessibility permissions")
-        || e.contains("panicked")
-    {
-        "macOS system call failed (likely due to accessibility permissions or system state). Please grant accessibility permissions in System Preferences → Security & Privacy → Privacy → Accessibility".to_string()
-    } else {
-        e
-    }
-}
-
-// Get the current process PID
-fn get_current_pid() -> u32 {
-    std::process::id()
 }
 
 #[tauri::command]
@@ -109,69 +93,7 @@ fn toggle_clickthrough(
     Ok(new_ignore)
 }
 
-#[tauri::command]
-fn get_text_elements() -> Result<Vec<UITreeNode>, String> {
-    find_text_elements()
-}
-
-#[tauri::command]
-fn get_text_elements_in_app(app_name: String) -> Result<Vec<UITreeNode>, String> {
-    find_text_elements_in_app(&app_name)
-}
-
-#[tauri::command]
-fn get_ui_tree() -> Result<UITreeNode, String> {
-    walk_focused_app_tree()
-}
-
-#[tauri::command]
-fn get_ui_tree_for_active_window(_app: tauri::AppHandle) -> Result<Option<UITreeNode>, String> {
-    let current_pid = get_current_pid();
-
-    // Get the active window with full x-win data to access PID - use panic handling
-    match panic::catch_unwind(|| x_win::get_active_window()) {
-        Ok(Ok(active_window)) => {
-            let active_pid = active_window.info.process_id;
-
-            // Don't try to get accessibility info for our own overlay
-            if active_pid == current_pid {
-                return Ok(None);
-            }
-
-            // Try to walk the tree using the active window's PID
-            match walk_app_tree_by_pid(active_pid) {
-                Ok(tree) => Ok(Some(tree)),
-                Err(e) => {
-                    // If PID-based approach fails, try the focused window approach as fallback
-                    match walk_focused_app_tree() {
-                        Ok(tree) => Ok(Some(tree)),
-                        Err(_) => Err(format!(
-                            "Failed to get UI tree for PID {}: {}",
-                            active_pid, e
-                        )),
-                    }
-                }
-            }
-        }
-        Ok(Err(e)) => Err(handle_x_win_error(format!(
-            "Failed to get active window: {}",
-            e
-        ))),
-        Err(_) => Err(handle_x_win_error(
-            "System call panicked while getting active window for UI tree - likely due to macOS accessibility permissions or nil objects".to_string()
-        )),
-    }
-}
-
-#[tauri::command]
-fn insert_text(app_name: String, element_id: String, text: String) -> Result<(), String> {
-    insert_text_into_element(&app_name, &element_id, &text)
-}
-
-#[tauri::command]
-fn insert_text_active(text: String) -> Result<(), String> {
-    insert_text_into_active_field(&text)
-}
+// Accessibility commands are now in accessibility.rs
 
 #[cfg(target_os = "macos")]
 fn get_main_screen_dimensions() -> (f64, f64) {
@@ -256,23 +178,17 @@ fn main() {
                 window_polling_loop(app_handle);
             });
 
-            // Start the accessibility polling thread (slow, separate)
-            let app_handle_accessibility = app.handle().clone();
-            thread::spawn(move || {
-                accessibility_polling_loop(app_handle_accessibility);
-            });
+            // Accessibility system is now command-based only
 
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             toggle_clickthrough,
             toggle_page_mode,
-            get_text_elements,
-            get_text_elements_in_app,
-            get_ui_tree,
-            get_ui_tree_for_active_window,
-            insert_text,
-            insert_text_active,
+            get_ui_tree_by_pid,
+            start_accessibility_events,
+            stop_accessibility_events,
+            is_listening_for_events,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -354,7 +270,7 @@ fn window_polling_loop(app_handle: tauri::AppHandle) {
 
 // Combined function to get all windows with focused state in single call
 fn get_all_windows_with_focus() -> Vec<WindowInfo> {
-    let current_pid = get_current_pid();
+    let current_pid = std::process::id();
 
     // Get all windows and active window in parallel
     let all_windows_result = panic::catch_unwind(|| x_win::get_open_windows());
@@ -390,19 +306,4 @@ fn get_all_windows_with_focus() -> Vec<WindowInfo> {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct WindowUpdatePayload {
     windows: Vec<WindowInfo>,
-}
-
-// Separate polling loop for slow accessibility calls
-fn accessibility_polling_loop(app_handle: tauri::AppHandle) {
-    loop {
-        // Get UI tree for active window (this is slow)
-        if let Ok(Some(tree)) = get_ui_tree_for_active_window(app_handle.clone()) {
-            if let Err(_) = app_handle.emit("ui-tree-update", &tree) {
-                // Silently ignore errors
-            }
-        }
-
-        // Run accessibility checks every 500ms (much less frequent)
-        thread::sleep(Duration::from_millis(500));
-    }
 }

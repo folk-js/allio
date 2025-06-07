@@ -9,6 +9,7 @@ interface WindowInfo {
   w: number;
   h: number;
   focused: boolean;
+  process_id: number;
 }
 
 interface UITreeNode {
@@ -20,13 +21,19 @@ interface UITreeNode {
   depth: number;
 }
 
-interface TextElement {
-  id: string;
-  role: string;
-  title: string;
-  current_value: string;
-  is_editable: boolean;
-  app_name: string;
+interface AppInfo {
+  process_id: number;
+  name: string;
+  window_count: number;
+  has_focused_window: boolean;
+}
+
+interface AccessibilityEvent {
+  event_type: string;
+  element_role: string;
+  element_title?: string;
+  element_value?: string;
+  timestamp: number;
 }
 
 // Add event payload interface
@@ -34,16 +41,15 @@ interface WindowUpdatePayload {
   windows: WindowInfo[];
 }
 
-let activeWindow: WindowInfo | null = null;
 let currentWindows: WindowInfo[] = [];
-let textElements: TextElement[] = [];
+let currentApps: AppInfo[] = [];
+let selectedAppPid: number | null = null;
 let uiTree: UITreeNode | null = null;
+let isListeningForEvents: boolean = false;
+let eventLog: AccessibilityEvent[] = [];
 
 // Map to track outline elements by window ID
 const outlineElements = new Map<string, HTMLDivElement>();
-
-// Track when we last got a fresh tree
-let lastTreeUpdate = 0;
 
 // Function to create a new outline element
 function createOutlineElement(): HTMLDivElement {
@@ -110,7 +116,154 @@ function updateAllOutlines(windows: WindowInfo[]) {
   });
 }
 
-// Function to update window info display
+// Function to group windows by app
+function groupWindowsByApp(windows: WindowInfo[]): AppInfo[] {
+  const appMap = new Map<number, AppInfo>();
+
+  windows.forEach((window) => {
+    const pid = window.process_id;
+
+    if (!appMap.has(pid)) {
+      appMap.set(pid, {
+        process_id: pid,
+        name: window.name.split(" - ")[0] || window.name, // Try to get app name from window title
+        window_count: 0,
+        has_focused_window: false,
+      });
+    }
+
+    const app = appMap.get(pid)!;
+    app.window_count++;
+    if (window.focused) {
+      app.has_focused_window = true;
+    }
+  });
+
+  return Array.from(appMap.values()).sort((a, b) => {
+    // Sort by focused first, then by name
+    if (a.has_focused_window && !b.has_focused_window) return -1;
+    if (!a.has_focused_window && b.has_focused_window) return 1;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+// Function to update app buttons
+function updateAppButtons(apps: AppInfo[]) {
+  const appListElement = document.getElementById("app-list");
+  if (!appListElement) return;
+
+  appListElement.innerHTML = "";
+
+  apps.forEach((app) => {
+    const button = document.createElement("button");
+    button.className = "app-button";
+    button.style.cssText = `
+      display: block;
+      width: 100%;
+      margin: 5px 0;
+      padding: 10px;
+      border: 2px solid ${app.has_focused_window ? "#4CAF50" : "#ccc"};
+      background: ${selectedAppPid === app.process_id ? "#e3f2fd" : "white"};
+      border-radius: 5px;
+      cursor: pointer;
+      text-align: left;
+      font-size: 14px;
+    `;
+
+    const statusIcon = app.has_focused_window ? "🎯" : "📱";
+    button.innerHTML = `
+      ${statusIcon} <strong>${app.name}</strong><br>
+      <small>PID: ${app.process_id} • ${app.window_count} window${
+      app.window_count !== 1 ? "s" : ""
+    }</small>
+    `;
+
+    button.addEventListener("click", () => {
+      selectApp(app.process_id);
+    });
+
+    appListElement.appendChild(button);
+  });
+
+  // Add event listener controls
+  const eventControls = document.createElement("div");
+  eventControls.style.cssText = `
+    margin-top: 20px;
+    padding-top: 15px;
+    border-top: 1px solid #333;
+  `;
+
+  const eventButton = document.createElement("button");
+  eventButton.style.cssText = `
+    width: 100%;
+    padding: 10px;
+    border: 2px solid ${isListeningForEvents ? "#f44336" : "#4CAF50"};
+    background: ${isListeningForEvents ? "#ffebee" : "#e8f5e9"};
+    color: ${isListeningForEvents ? "#f44336" : "#4CAF50"};
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: bold;
+  `;
+
+  eventButton.textContent = isListeningForEvents
+    ? "🛑 Stop Event Listening"
+    : "🎧 Start Event Listening";
+
+  eventButton.addEventListener("click", toggleEventListening);
+
+  eventControls.appendChild(eventButton);
+
+  if (eventLog.length > 0) {
+    const eventCount = document.createElement("div");
+    eventCount.style.cssText = `
+      margin-top: 10px;
+      font-size: 12px;
+      color: #666;
+      text-align: center;
+    `;
+    eventCount.textContent = `📝 ${eventLog.length} events logged`;
+    eventControls.appendChild(eventCount);
+  }
+
+  appListElement.appendChild(eventControls);
+}
+
+// Function to select an app and fetch its accessibility tree
+async function selectApp(pid: number) {
+  selectedAppPid = pid;
+  updateAppButtons(currentApps); // Refresh button styles
+
+  try {
+    console.log(`Fetching accessibility tree for PID: ${pid}`);
+    const result = (await invoke("get_ui_tree_by_pid", { pid })) as UITreeNode;
+    uiTree = result;
+    console.log("UI Tree fetched successfully");
+  } catch (error) {
+    console.error("Failed to fetch UI tree:", error);
+    uiTree = null;
+  }
+
+  updateUITreeDisplay();
+  updateInfoPanel();
+}
+
+// Toggle event listening
+async function toggleEventListening() {
+  try {
+    if (isListeningForEvents) {
+      await invoke("stop_accessibility_events");
+      isListeningForEvents = false;
+      console.log("Stopped listening for accessibility events");
+    } else {
+      await invoke("start_accessibility_events");
+      isListeningForEvents = true;
+      console.log("Started listening for accessibility events");
+    }
+    updateAppButtons(currentApps); // Refresh button styles
+  } catch (error) {
+    console.error("Failed to toggle event listening:", error);
+  }
+}
 
 // Replace fetchWindowInfo with event listener
 async function setupWindowListener() {
@@ -119,35 +272,30 @@ async function setupWindowListener() {
       const { windows } = event.payload;
 
       currentWindows = windows;
+      currentApps = groupWindowsByApp(windows);
 
       updateAllOutlines(windows);
+      updateAppButtons(currentApps);
+      updateInfoPanel();
     });
 
     console.log("Window update listener established");
+
+    // Setup accessibility event listener
+    await listen<AccessibilityEvent>("accessibility-event", (event) => {
+      const accessibilityEvent = event.payload;
+      eventLog.push(accessibilityEvent);
+
+      // Keep only last 50 events
+      if (eventLog.length > 50) {
+        eventLog.shift();
+      }
+
+      console.log("🔔 Accessibility Event:", accessibilityEvent);
+      updateAppButtons(currentApps); // Refresh to show event count
+    });
   } catch (error) {
     console.error("Failed to setup window listener:", error);
-  }
-}
-
-// Update accessibility UI tree - keep last good tree
-async function updateUITree() {
-  try {
-    const result = (await invoke(
-      "get_ui_tree_for_active_window"
-    )) as UITreeNode | null;
-
-    if (result) {
-      uiTree = result;
-      lastTreeUpdate = Date.now();
-      console.log("UI Tree updated successfully");
-    }
-
-    updateUITreeDisplay();
-    updateInfoPanel();
-  } catch (error) {
-    // Keep the last good tree
-    updateUITreeDisplay();
-    updateInfoPanel();
   }
 }
 
@@ -158,13 +306,18 @@ function updateUITreeDisplay() {
 
   if (!treeStatusElement || !treeContentElement) return;
 
-  if (uiTree) {
-    const secondsAgo = Math.floor((Date.now() - lastTreeUpdate) / 1000);
-    const staleText = secondsAgo > 10 ? ` (${secondsAgo}s old)` : "";
-    treeStatusElement.innerHTML = `<div style="color: #4CAF50; margin-bottom: 10px;">✓ Accessibility Tree${staleText}</div>`;
+  if (uiTree && selectedAppPid) {
+    const selectedApp = currentApps.find(
+      (app) => app.process_id === selectedAppPid
+    );
+    const appName = selectedApp ? selectedApp.name : `PID ${selectedAppPid}`;
+    treeStatusElement.innerHTML = `<div style="color: #4CAF50; margin-bottom: 10px;">✓ Accessibility Tree - ${appName}</div>`;
     treeContentElement.innerHTML = renderAccessibilityTree(uiTree);
+  } else if (selectedAppPid) {
+    treeStatusElement.innerHTML = `<div style="color: #ff9800;">⚠ Failed to load tree for PID ${selectedAppPid}</div>`;
+    treeContentElement.innerHTML = "";
   } else {
-    treeStatusElement.innerHTML = `<div style="color: #ff9800;">○ No tree available</div>`;
+    treeStatusElement.innerHTML = `<div style="color: #999;">Select an app to view its accessibility tree</div>`;
     treeContentElement.innerHTML = "";
   }
 }
@@ -172,30 +325,23 @@ function updateUITreeDisplay() {
 function updateInfoPanel() {
   let details = "";
 
-  if (activeWindow) {
-    details += `<div><strong>Active Window:</strong></div>`;
-    details += `<div>Name: ${activeWindow.name}</div>`;
-    details += `<div>Position: ${activeWindow.x}, ${activeWindow.y}</div>`;
-    details += `<div>Size: ${activeWindow.w} × ${activeWindow.h}</div>`;
-    details += `<div>ID: ${activeWindow.id}</div>`;
-  }
-
-  details += `<div style="margin-top: 10px;"><strong>Total Windows:</strong> ${currentWindows.length}</div>`;
-
-  if (textElements.length > 0) {
-    details += `<div style="margin-top: 10px;"><strong>Text Elements Found:</strong> ${textElements.length}</div>`;
-    textElements.slice(0, 5).forEach((el) => {
-      const statusIcon = el.is_editable ? "✎" : "👁";
-      details += `<div style="font-size: 10px; margin-left: 10px;">${statusIcon} ${
-        el.role
-      }: ${el.title || "Untitled"}</div>`;
-    });
-    if (textElements.length > 5) {
-      details += `<div style="font-size: 10px; margin-left: 10px; color: #666;">... ${
-        textElements.length - 5
-      } more</div>`;
+  if (selectedAppPid) {
+    const selectedApp = currentApps.find(
+      (app) => app.process_id === selectedAppPid
+    );
+    if (selectedApp) {
+      details += `<div><strong>Selected App:</strong></div>`;
+      details += `<div>Name: ${selectedApp.name}</div>`;
+      details += `<div>PID: ${selectedApp.process_id}</div>`;
+      details += `<div>Windows: ${selectedApp.window_count}</div>`;
+      details += `<div>Focused: ${
+        selectedApp.has_focused_window ? "Yes" : "No"
+      }</div>`;
     }
   }
+
+  details += `<div style="margin-top: 10px;"><strong>Total Apps:</strong> ${currentApps.length}</div>`;
+  details += `<div><strong>Total Windows:</strong> ${currentWindows.length}</div>`;
 
   const detailsElement = document.getElementById("window-details");
   if (detailsElement) {
@@ -216,9 +362,6 @@ function renderAccessibilityTree(node: UITreeNode): string {
 
 async function init() {
   await setupWindowListener();
-  await updateUITree();
-
-  // setInterval(updateUITree, 2000);
 }
 
 init();
