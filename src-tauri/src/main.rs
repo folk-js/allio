@@ -4,6 +4,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::{
+    fs,
     panic::{self},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -12,6 +13,8 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
+use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
@@ -32,43 +35,53 @@ use websocket::WebSocketState;
 // Constants - optimized polling rate
 const POLLING_INTERVAL_MS: u64 = 8; // ~120 FPS - fast enough for smooth tracking
 
-// App modes
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum OverlayMode {
-    Main = 0,  // Coordinate card
-    Debug = 1, // Full debug interface
-    Sand = 2,  // Sand simulation
-}
+// Dynamic overlay handling
+fn get_overlay_files() -> Vec<String> {
+    let exe_path = std::env::current_exe().unwrap();
+    let exe_dir = exe_path.parent().unwrap();
 
-impl Default for OverlayMode {
-    fn default() -> Self {
-        OverlayMode::Main
-    }
-}
+    // In development: src-tauri/target/debug -> go up 3 levels to project root
+    // In production: executable location varies
+    let project_root = if exe_dir.ends_with("debug") || exe_dir.ends_with("release") {
+        exe_dir
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+    } else {
+        exe_dir
+    };
 
-impl OverlayMode {
-    fn next(self) -> Self {
-        match self {
-            OverlayMode::Main => OverlayMode::Debug,
-            OverlayMode::Debug => OverlayMode::Sand,
-            OverlayMode::Sand => OverlayMode::Main,
+    let overlays_path = project_root.join("src-web").join("overlays");
+    let mut overlays = Vec::new();
+
+    if overlays_path.exists() {
+        if let Ok(entries) = fs::read_dir(&overlays_path) {
+            for entry in entries.flatten() {
+                if let Some(file_name) = entry.file_name().to_str() {
+                    if file_name.ends_with(".html") {
+                        overlays.push(file_name.to_string());
+                    }
+                }
+            }
         }
     }
 
-    fn url(self) -> &'static str {
-        match self {
-            OverlayMode::Main => "http://localhost:1420/index.html",
-            OverlayMode::Debug => "http://localhost:1420/debug.html",
-            OverlayMode::Sand => "http://localhost:1420/src-web/sand.html",
-        }
-    }
+    overlays.sort();
+    overlays
+}
+
+fn get_overlay_url(filename: &str) -> String {
+    format!("http://localhost:1420/src-web/overlays/{}", filename)
 }
 
 // App State
 #[derive(Default)]
 struct AppState {
     clickthrough_enabled: AtomicBool,
-    current_mode: Mutex<OverlayMode>,
+    current_overlay: Mutex<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -141,20 +154,86 @@ fn get_main_screen_dimensions() -> (f64, f64) {
     }
 }
 
-// Simple function to cycle through modes
-fn cycle_overlay_mode(app: &tauri::AppHandle) -> Result<OverlayMode, Box<dyn std::error::Error>> {
+// Function to switch to a specific overlay
+fn switch_overlay(
+    app: &tauri::AppHandle,
+    filename: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let state = app.state::<AppState>();
-    let mut current_mode = state.current_mode.lock().unwrap();
-    *current_mode = current_mode.next();
-    let new_mode = *current_mode;
-    drop(current_mode); // Release lock early
+    let mut current_overlay = state.current_overlay.lock().unwrap();
+    *current_overlay = filename.to_string();
+    drop(current_overlay);
 
     let window = app
         .get_webview_window("main")
         .ok_or("Main window not found")?;
 
-    window.navigate(new_mode.url().parse().unwrap())?;
-    Ok(new_mode)
+    let url = get_overlay_url(filename);
+    window.navigate(url.parse().unwrap())?;
+    Ok(())
+}
+
+// Build tray menu with overlay options
+fn build_overlay_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    let overlay_files = get_overlay_files();
+    let mut menu_builder = MenuBuilder::new(app);
+
+    // Add overlay options
+    if overlay_files.is_empty() {
+        let no_overlays_item = MenuItemBuilder::new("No overlays found")
+            .id("no_overlays")
+            .enabled(false)
+            .build(app)?;
+        menu_builder = menu_builder.item(&no_overlays_item);
+    } else {
+        for filename in overlay_files {
+            let menu_item = MenuItemBuilder::new(&filename).id(&filename).build(app)?;
+            menu_builder = menu_builder.item(&menu_item);
+        }
+    }
+
+    // Add separator
+    let separator = PredefinedMenuItem::separator(app)?;
+    menu_builder = menu_builder.item(&separator);
+
+    // Add toggle clickthrough option
+    let state = app.state::<AppState>();
+    let clickthrough_enabled = state.clickthrough_enabled.load(Ordering::Relaxed);
+    let clickthrough_text = if clickthrough_enabled {
+        "🔓 Disable Clickthrough"
+    } else {
+        "🔒 Enable Clickthrough"
+    };
+
+    let toggle_clickthrough_item = MenuItemBuilder::new(clickthrough_text)
+        .id("toggle_clickthrough")
+        .build(app)?;
+    menu_builder = menu_builder.item(&toggle_clickthrough_item);
+
+    let menu = menu_builder.build()?;
+
+    let _tray = TrayIconBuilder::new()
+        .menu(&menu)
+        .icon(app.default_window_icon().unwrap().clone())
+        .on_menu_event(move |app_handle, event| {
+            let event_id = event.id().0.clone();
+            match event_id.as_str() {
+                "toggle_clickthrough" => {
+                    let _ = toggle_clickthrough_rust(app_handle.clone());
+                    // Note: Menu text will update on next app restart
+                }
+                "no_overlays" => {
+                    // Do nothing for disabled item
+                }
+                _ => {
+                    // Handle overlay selection
+                    let _ = switch_overlay(&app_handle, &event_id);
+                }
+            }
+        })
+        .build(app)?;
+
+    Ok(())
 }
 
 fn main() {
@@ -183,18 +262,12 @@ fn main() {
                 let toggle_shortcut =
                     Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyE);
 
-                // New shortcut for page switching
-                let page_toggle_shortcut =
-                    Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyP);
-
                 app.handle().plugin(
                     tauri_plugin_global_shortcut::Builder::new()
                         .with_handler(move |app_handle, shortcut, event| {
                             if event.state() == ShortcutState::Pressed {
                                 if shortcut == &toggle_shortcut {
                                     let _ = toggle_clickthrough_rust(app_handle.clone());
-                                } else if shortcut == &page_toggle_shortcut {
-                                    let _ = cycle_overlay_mode(&app_handle);
                                 }
                             }
                         })
@@ -202,7 +275,15 @@ fn main() {
                 )?;
 
                 app.global_shortcut().register(toggle_shortcut)?;
-                app.global_shortcut().register(page_toggle_shortcut)?;
+            }
+
+            // Build overlay tray
+            build_overlay_tray(&app.handle())?;
+
+            // Load the first overlay if any exist
+            let overlay_files = get_overlay_files();
+            if let Some(first_overlay) = overlay_files.first() {
+                let _ = switch_overlay(&app.handle(), first_overlay);
             }
 
             // Start the window polling thread first to populate initial windows

@@ -107,36 +107,49 @@
       </div>
     </div>
 
-    <script>
+    <script type="module">
+      import { WebSocketClient } from "./interlay.js";
+
       class BrowserClient {
         constructor() {
-          this.ws = null;
           this.statusDot = document.getElementById("statusDot");
           this.connectionStatus = document.getElementById("connectionStatus");
           this.windowInfo = document.getElementById("windowInfo");
           this.serverResponse = document.getElementById("serverResponse");
           this.windowId = document.getElementById("windowId");
 
+          this.wsClient = new WebSocketClient();
           this.init();
         }
 
         async init() {
           // Get window coordinates first
-          const coords = this.getWindowCoordinates();
+          const coords = this.wsClient.getWindowCoordinates();
           this.updateWindowInfo(coords);
 
+          // Set up event handlers
+          this.wsClient.onConnectionChange = (status, message) => {
+            this.updateStatus(status, message);
+            if (status === "connected") {
+              this.serverResponse.innerHTML =
+                "Connected! Click 'Identify This Window' to match.";
+            }
+          };
+
+          this.wsClient.onMessage = (data) => {
+            this.handleServerMessage(data);
+          };
+
           // Auto-connect to WebSocket
-          await this.connect();
+          await this.wsClient.connect();
         }
 
         // Manual identification triggered by button
         identifyWindow() {
-          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            const coords = this.getWindowCoordinates();
-            const identification = JSON.stringify(coords);
-
+          if (this.wsClient.isConnected()) {
+            const coords = this.wsClient.getWindowCoordinates();
             console.log("🎯 Manual identification requested:", coords);
-            this.ws.send(identification);
+            this.wsClient.sendIdentification(coords);
 
             // Update display
             this.updateWindowInfo(coords);
@@ -145,18 +158,6 @@
             this.serverResponse.innerHTML =
               "<strong style='color: red'>❌ Not connected to overlay</strong>";
           }
-        }
-
-        getWindowCoordinates() {
-          // Use bottom-left corner + width for reliable matching
-          const bottomX = window.screenX;
-          const bottomY = window.screenY + window.outerHeight;
-
-          return {
-            bottom_left_x: bottomX,
-            bottom_left_y: bottomY,
-            window_width: window.outerWidth,
-          };
         }
 
         updateWindowInfo(coords) {
@@ -169,66 +170,6 @@
         updateStatus(status, message) {
           this.statusDot.className = `status-indicator ${status}`;
           this.connectionStatus.textContent = message;
-        }
-
-        async connect() {
-          try {
-            this.updateStatus("connecting", "Connecting to overlay...");
-
-            this.ws = new WebSocket("ws://127.0.0.1:3030/ws");
-
-            this.ws.onopen = () => {
-              this.updateStatus("connected", "✅ Connected to overlay app");
-              console.log("🔗 Connected to overlay WebSocket");
-
-              // Don't auto-identify, wait for manual button press
-              this.serverResponse.innerHTML =
-                "Connected! Click 'Identify This Window' to match.";
-            };
-
-            this.ws.onmessage = (event) => {
-              try {
-                const data = JSON.parse(event.data);
-                this.handleServerMessage(data);
-              } catch (e) {
-                console.log("📨 Received:", event.data);
-              }
-            };
-
-            this.ws.onclose = () => {
-              this.updateStatus("disconnected", "❌ Disconnected from overlay");
-              console.log("🔌 Disconnected from overlay WebSocket");
-
-              // Auto-reconnect after 3 seconds
-              setTimeout(() => {
-                if (this.ws?.readyState === WebSocket.CLOSED) {
-                  console.log("🔄 Attempting to reconnect...");
-                  this.connect();
-                }
-              }, 3000);
-            };
-
-            this.ws.onerror = (error) => {
-              this.updateStatus("disconnected", "❌ Connection error");
-              console.error("❌ WebSocket error:", error);
-            };
-          } catch (error) {
-            this.updateStatus("disconnected", "❌ Failed to connect");
-            console.error("Failed to connect:", error);
-          }
-        }
-
-        sendIdentification() {
-          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            const coords = this.getWindowCoordinates();
-            const identification = JSON.stringify(coords);
-
-            console.log("📤 Sending identification:", coords);
-            this.ws.send(identification);
-
-            // Update display
-            this.updateWindowInfo(coords);
-          }
         }
 
         handleServerMessage(data) {
@@ -272,8 +213,9 @@
           const updateCoords = () => {
             clearTimeout(updateTimeout);
             updateTimeout = setTimeout(() => {
-              if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                this.sendIdentification();
+              if (this.wsClient.isConnected()) {
+                const coords = this.wsClient.getWindowCoordinates();
+                this.wsClient.sendIdentification(coords);
               }
             }, 500); // Debounce updates
           };
@@ -283,7 +225,7 @@
 
           // For browsers that don't support move event, poll occasionally
           setInterval(() => {
-            const newCoords = this.getWindowCoordinates();
+            const newCoords = this.wsClient.getWindowCoordinates();
             this.updateWindowInfo(newCoords);
           }, 5000);
         }

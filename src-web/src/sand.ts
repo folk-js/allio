@@ -25,23 +25,6 @@ interface WindowUpdatePayload {
 }
 
 export class FolkSand extends HTMLElement {
-  // static override tagName = "folk-sand";
-
-  // static override styles = [
-  //   FolkBaseSet.styles,
-  //   css`
-  //     canvas {
-  //       height: 100%;
-  //       width: 100%;
-  //       pointer-events: auto;
-  //     }
-  //   `,
-  // ];
-
-  // static override properties = {
-  //   initialSand: { type: Number, attribute: "initial-sand" },
-  // };
-
   initialSand = 0.15;
 
   #canvas = document.createElement("canvas");
@@ -942,14 +925,6 @@ export class FolkSand extends HTMLElement {
     gl.bindVertexArray(null);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
-
-  // override update(changedProperties: PropertyValues<this>) {
-  //   super.update(changedProperties);
-
-  //   if (this.sourcesMap.size !== this.sourceElements.size) return;
-
-  //   this.#handleShapeTransform();
-  // }
 
   #handleShapeTransform() {
     // Recollect and update all shape data when any shape changes

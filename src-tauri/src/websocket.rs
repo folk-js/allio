@@ -12,7 +12,6 @@ use serde_json;
 use std::{collections::HashSet, sync::Arc};
 use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::{Any, CorsLayer};
-use uuid;
 
 use crate::{WindowInfo, WindowUpdatePayload};
 
