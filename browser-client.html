@@ -148,8 +148,7 @@
         }
 
         getWindowCoordinates() {
-          // Use bottom-left corner + width for more reliable matching
-          // This avoids issues with browser toolbars, scrollbars, etc.
+          // Use bottom-left corner + width for reliable matching
           const bottomX = window.screenX;
           const bottomY = window.screenY + window.outerHeight;
 
@@ -157,26 +156,14 @@
             bottom_left_x: bottomX,
             bottom_left_y: bottomY,
             window_width: window.outerWidth,
-            // Send both for debugging, but focus on bottom-left + width for matching
-            debug_info: {
-              screenX: window.screenX,
-              screenY: window.screenY,
-              outerWidth: window.outerWidth,
-              outerHeight: window.outerHeight,
-              innerWidth: window.innerWidth,
-              innerHeight: window.innerHeight,
-            },
           };
         }
 
         updateWindowInfo(coords) {
           this.windowInfo.innerHTML = `
-                    Bottom-Left: (${coords.bottom_left_x}, ${coords.bottom_left_y})<br>
-                    Width: ${coords.window_width}px<br>
-                    <small>Top-Left: (${coords.debug_info.screenX}, ${coords.debug_info.screenY})</small><br>
-                    <small>Size: ${coords.debug_info.outerWidth}×${coords.debug_info.outerHeight} (outer)</small><br>
-                    <small>Inner: ${coords.debug_info.innerWidth}×${coords.debug_info.innerHeight}</small>
-                `;
+            Bottom-Left: (${coords.bottom_left_x}, ${coords.bottom_left_y})<br>
+            Width: ${coords.window_width}px
+          `;
         }
 
         updateStatus(status, message) {

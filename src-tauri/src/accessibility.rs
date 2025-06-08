@@ -1,10 +1,6 @@
 use accessibility::*;
 use accessibility_sys::*;
 use core_foundation::base::{CFRelease, TCFType};
-use core_foundation::runloop::{
-    kCFRunLoopRunFinished, CFRunLoop, CFRunLoopAddSource, CFRunLoopMode, CFRunLoopRemoveSource,
-    CFRunLoopRunInMode,
-};
 use core_foundation::string::{CFString, CFStringRef};
 use serde::{Deserialize, Serialize};
 use std::ffi::c_void;
@@ -143,7 +139,7 @@ fn setup_accessibility_observer(app_handle: tauri::AppHandle) -> Result<(), Stri
         // Observer callback function
         unsafe extern "C" fn observer_callback(
             _observer: AXObserverRef,
-            element: AXUIElementRef,
+            _element: AXUIElementRef,
             notification: CFStringRef,
             user_info: *mut c_void,
         ) {

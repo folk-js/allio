@@ -213,22 +213,13 @@ fn main() {
             thread::spawn(move || {
                 // Do an initial window poll to populate the state
                 let current_windows = get_all_windows_with_focus();
-                println!(
-                    "🔍 Initial window poll found {} windows",
-                    current_windows.len()
-                );
 
                 // Update WebSocket state with initial windows
                 let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
                 rt.block_on(async move {
                     ws_state_for_polling.update_windows(&current_windows).await;
-                    println!(
-                        "📦 WebSocket state initialized with {} windows",
-                        current_windows.len()
-                    );
 
-                    // Now start the WebSocket server
-                    println!("🚀 Starting WebSocket server...");
+                    // Start the WebSocket server
                     tokio::spawn(async move {
                         websocket::start_websocket_server(ws_state_for_server).await;
                     });
@@ -335,13 +326,13 @@ async fn create_enhanced_windows(
     windows: &[WindowInfo],
     ws_state: &WebSocketState,
 ) -> Vec<EnhancedWindowInfo> {
-    let clients = ws_state.clients.read().await;
+    let connected_windows = ws_state.connected_windows.read().await;
 
     windows
         .iter()
         .map(|window| {
             // Check if this window has a connected client
-            let client_id = if clients.contains_key(&window.id) {
+            let client_id = if connected_windows.contains(&window.id) {
                 Some(window.id.clone()) // Use window ID as the client identifier
             } else {
                 None
@@ -400,10 +391,10 @@ struct EnhancedWindowUpdatePayload {
     windows: Vec<EnhancedWindowInfo>,
 }
 
-// Enhanced window info with client ID for display
+// Enhanced window info with client connection status
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct EnhancedWindowInfo {
     #[serde(flatten)]
     window: WindowInfo,
-    client_id: Option<String>, // Full client UUID
+    client_id: Option<String>, // Window ID if client is connected
 }
