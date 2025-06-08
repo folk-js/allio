@@ -5,7 +5,10 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::{
     panic::{self},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -18,21 +21,54 @@ use core_graphics::display::{
 };
 
 mod accessibility;
+mod websocket;
+
 use accessibility::{
     get_ui_tree_by_pid, is_listening_for_events, start_accessibility_events,
     stop_accessibility_events,
 };
+use websocket::WebSocketState;
 
 // Constants - optimized polling rate
 const POLLING_INTERVAL_MS: u64 = 8; // ~120 FPS - fast enough for smooth tracking
-const OVERLAY_MAIN_URL: &str = "http://localhost:1420/index.html";
-const OVERLAY_SAND_URL: &str = "http://localhost:1420/src-web/sand.html";
+
+// App modes
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum OverlayMode {
+    Main = 0,  // Coordinate card
+    Debug = 1, // Full debug interface
+    Sand = 2,  // Sand simulation
+}
+
+impl Default for OverlayMode {
+    fn default() -> Self {
+        OverlayMode::Main
+    }
+}
+
+impl OverlayMode {
+    fn next(self) -> Self {
+        match self {
+            OverlayMode::Main => OverlayMode::Debug,
+            OverlayMode::Debug => OverlayMode::Sand,
+            OverlayMode::Sand => OverlayMode::Main,
+        }
+    }
+
+    fn url(self) -> &'static str {
+        match self {
+            OverlayMode::Main => "http://localhost:1420/index.html",
+            OverlayMode::Debug => "http://localhost:1420/debug.html",
+            OverlayMode::Sand => "http://localhost:1420/src-web/sand.html",
+        }
+    }
+}
 
 // App State
 #[derive(Default)]
 struct AppState {
     clickthrough_enabled: AtomicBool,
-    is_sand_mode: AtomicBool,
+    current_mode: Mutex<OverlayMode>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -105,25 +141,19 @@ fn get_main_screen_dimensions() -> (f64, f64) {
     }
 }
 
-#[tauri::command]
-fn toggle_page_mode(state: tauri::State<AppState>, app: tauri::AppHandle) -> Result<bool, String> {
-    let current_mode = state.is_sand_mode.load(Ordering::Relaxed);
-    let new_mode = !current_mode;
-    state.is_sand_mode.store(new_mode, Ordering::Relaxed);
+// Simple function to cycle through modes
+fn cycle_overlay_mode(app: &tauri::AppHandle) -> Result<OverlayMode, Box<dyn std::error::Error>> {
+    let state = app.state::<AppState>();
+    let mut current_mode = state.current_mode.lock().unwrap();
+    *current_mode = current_mode.next();
+    let new_mode = *current_mode;
+    drop(current_mode); // Release lock early
 
     let window = app
         .get_webview_window("main")
         .ok_or("Main window not found")?;
 
-    let url = if new_mode {
-        OVERLAY_SAND_URL
-    } else {
-        OVERLAY_MAIN_URL
-    };
-
-    window
-        .navigate(url.parse().unwrap())
-        .map_err(|e| e.to_string())?;
+    window.navigate(new_mode.url().parse().unwrap())?;
     Ok(new_mode)
 }
 
@@ -132,6 +162,9 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .manage(AppState::default())
         .setup(|app| {
+            // Initialize WebSocket state
+            let ws_state = WebSocketState::new();
+
             let (screen_width, screen_height) = get_main_screen_dimensions();
             if let Some(window) = app.get_webview_window("main") {
                 window
@@ -161,7 +194,7 @@ fn main() {
                                 if shortcut == &toggle_shortcut {
                                     let _ = toggle_clickthrough_rust(app_handle.clone());
                                 } else if shortcut == &page_toggle_shortcut {
-                                    let _ = toggle_page_mode_rust(app_handle.clone());
+                                    let _ = cycle_overlay_mode(&app_handle);
                                 }
                             }
                         })
@@ -172,10 +205,37 @@ fn main() {
                 app.global_shortcut().register(page_toggle_shortcut)?;
             }
 
-            // Start the window polling thread (fast, no accessibility calls)
+            // Start the window polling thread first to populate initial windows
             let app_handle = app.handle().clone();
+            let ws_state_for_polling = ws_state.clone();
+            let ws_state_for_server = ws_state.clone();
+
             thread::spawn(move || {
-                window_polling_loop(app_handle);
+                // Do an initial window poll to populate the state
+                let current_windows = get_all_windows_with_focus();
+                println!(
+                    "🔍 Initial window poll found {} windows",
+                    current_windows.len()
+                );
+
+                // Update WebSocket state with initial windows
+                let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+                rt.block_on(async move {
+                    ws_state_for_polling.update_windows(&current_windows).await;
+                    println!(
+                        "📦 WebSocket state initialized with {} windows",
+                        current_windows.len()
+                    );
+
+                    // Now start the WebSocket server
+                    println!("🚀 Starting WebSocket server...");
+                    tokio::spawn(async move {
+                        websocket::start_websocket_server(ws_state_for_server).await;
+                    });
+
+                    // Continue with the polling loop
+                    window_polling_loop(app_handle, ws_state_for_polling);
+                });
             });
 
             // Accessibility system is now command-based only
@@ -184,7 +244,6 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             toggle_clickthrough,
-            toggle_page_mode,
             get_ui_tree_by_pid,
             start_accessibility_events,
             stop_accessibility_events,
@@ -212,29 +271,8 @@ fn toggle_clickthrough_rust(app: tauri::AppHandle) -> Result<(), Box<dyn std::er
     Ok(())
 }
 
-// Add this function to handle page mode toggle from Rust (for shortcuts)
-fn toggle_page_mode_rust(app: tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let state = app.state::<AppState>();
-    let current_mode = state.is_sand_mode.load(Ordering::Relaxed);
-    let new_mode = !current_mode;
-    state.is_sand_mode.store(new_mode, Ordering::Relaxed);
-
-    let window = app
-        .get_webview_window("main")
-        .ok_or("Main window not found")?;
-
-    let url = if new_mode {
-        OVERLAY_SAND_URL
-    } else {
-        OVERLAY_MAIN_URL
-    };
-
-    window.navigate(url.parse().unwrap())?;
-    Ok(())
-}
-
-// Simple polling loop - poll and emit immediately when data changes
-fn window_polling_loop(app_handle: tauri::AppHandle) {
+// Modified polling loop to broadcast to WebSocket clients
+fn window_polling_loop(app_handle: tauri::AppHandle, ws_state: WebSocketState) {
     let mut last_windows: Option<Vec<WindowInfo>> = None;
 
     loop {
@@ -248,13 +286,37 @@ fn window_polling_loop(app_handle: tauri::AppHandle) {
 
         // Only emit if something actually changed
         if windows_changed {
+            // Update WebSocket state with current windows for matching
+            let rt = tokio::runtime::Handle::try_current();
+            if let Ok(handle) = rt {
+                let ws_state_clone = ws_state.clone();
+                let windows_clone = current_windows.clone();
+                let app_handle_clone = app_handle.clone();
+                handle.spawn(async move {
+                    ws_state_clone.update_windows(&windows_clone).await;
+
+                    // Create enhanced windows with client information
+                    let enhanced_windows =
+                        create_enhanced_windows(&windows_clone, &ws_state_clone).await;
+                    let enhanced_payload = EnhancedWindowUpdatePayload {
+                        windows: enhanced_windows,
+                    };
+
+                    // Emit enhanced payload to Tauri frontend
+                    if let Err(_) =
+                        app_handle_clone.emit("enhanced-window-update", &enhanced_payload)
+                    {
+                        // Silently ignore errors
+                    }
+                });
+            }
+
             let payload = WindowUpdatePayload {
                 windows: current_windows.clone(),
             };
 
-            if let Err(_) = app_handle.emit("window-update", &payload) {
-                // Silently ignore errors
-            }
+            // NEW: Also broadcast to WebSocket clients
+            ws_state.broadcast(&payload);
 
             last_windows = Some(current_windows);
         }
@@ -266,6 +328,31 @@ fn window_polling_loop(app_handle: tauri::AppHandle) {
             thread::sleep(target_interval - elapsed);
         }
     }
+}
+
+// Create enhanced windows with client information
+async fn create_enhanced_windows(
+    windows: &[WindowInfo],
+    ws_state: &WebSocketState,
+) -> Vec<EnhancedWindowInfo> {
+    let clients = ws_state.clients.read().await;
+
+    windows
+        .iter()
+        .map(|window| {
+            // Check if this window has a connected client
+            let client_id = if clients.contains_key(&window.id) {
+                Some(window.id.clone()) // Use window ID as the client identifier
+            } else {
+                None
+            };
+
+            EnhancedWindowInfo {
+                window: window.clone(),
+                client_id,
+            }
+        })
+        .collect()
 }
 
 // Combined function to get all windows with focused state in single call
@@ -306,4 +393,17 @@ fn get_all_windows_with_focus() -> Vec<WindowInfo> {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct WindowUpdatePayload {
     windows: Vec<WindowInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct EnhancedWindowUpdatePayload {
+    windows: Vec<EnhancedWindowInfo>,
+}
+
+// Enhanced window info with client ID for display
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct EnhancedWindowInfo {
+    #[serde(flatten)]
+    window: WindowInfo,
+    client_id: Option<String>, // Full client UUID
 }
