@@ -24,8 +24,8 @@
       "signingIdentity": null
     }
   },
-  "productName": "overlay",
-  "mainBinaryName": "overlay",
+  "productName": "interlay",
+  "mainBinaryName": "interlay",
   "version": "0.0.0",
   "identifier": "com.tauri.dev",
   "plugins": {},
@@ -35,7 +35,7 @@
     },
     "windows": [
       {
-        "title": "overlay",
+        "title": "interlay",
         "label": "main",
         "width": 800,
         "height": 600,
