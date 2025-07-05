@@ -1,4 +1,4 @@
-import { WebSocketClient, type ServerMessage } from "../client/interlay.js";
+import { InterlayClient, type ServerMessage } from "./interlay-client.js";
 import {
   collisionFragmentShader,
   collisionVertexShader,
@@ -153,14 +153,14 @@ export class FolkSand extends HTMLElement {
   #shapeIndexCount = 0;
 
   // Add WebSocket client for receiving window updates
-  #wsClient: WebSocketClient;
+  #wsClient: InterlayClient;
   #currentWindows: WindowInfo[] = [];
 
   onMaterialChange?: (type: number) => void;
 
   constructor() {
     super();
-    this.#wsClient = new WebSocketClient();
+    this.#wsClient = new InterlayClient();
   }
 
   connectedCallback(): void {

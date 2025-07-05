@@ -1,4 +1,4 @@
-import { WebSocketClient } from "../client/interlay.ts";
+import { InterlayClient } from "./interlay-client.ts";
 
 interface WindowInfo {
   id: string;
@@ -13,11 +13,11 @@ interface WindowInfo {
 
 class CoordinateOverlay {
   private coordinateCard: HTMLElement;
-  private wsClient: WebSocketClient;
+  private wsClient: InterlayClient;
 
   constructor() {
     this.coordinateCard = document.getElementById("coordinateCard")!;
-    this.wsClient = new WebSocketClient();
+    this.wsClient = new InterlayClient();
     this.setupWebSocketListener();
   }
 

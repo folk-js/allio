@@ -13,7 +13,7 @@ export interface ServerMessage {
   [key: string]: any;
 }
 
-export class WebSocketClient {
+export class InterlayClient {
   private ws: WebSocket | null = null;
   private reconnectTimeout: number | null = null;
   private reconnectDelay = 3000;

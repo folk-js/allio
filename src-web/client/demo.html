@@ -108,7 +108,7 @@
     </div>
 
     <script type="module">
-      import { WebSocketClient } from "./interlay.js";
+      import { InterlayClient } from "../src/interlay-client.js";
 
       class BrowserClient {
         constructor() {
@@ -118,7 +118,7 @@
           this.serverResponse = document.getElementById("serverResponse");
           this.windowId = document.getElementById("windowId");
 
-          this.wsClient = new WebSocketClient();
+          this.wsClient = new InterlayClient();
           this.init();
         }
 
