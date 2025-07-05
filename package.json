@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "client:dev": "vite --config vite.client.config.ts",
+    "client:build": "vite build --config vite.client.config.ts",
+    "client:preview": "vite preview --config vite.client.config.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.5.0",
