@@ -11,12 +11,13 @@ interface WindowInfo {
   process_id: number;
 }
 
-class CoordinateOverlay {
-  private coordinateCard: HTMLElement;
+class WindowOverlay {
+  private windowContainer: HTMLElement;
   private wsClient: InterlayClient;
+  private windowElements: Map<string, HTMLElement> = new Map();
 
   constructor() {
-    this.coordinateCard = document.getElementById("coordinateCard")!;
+    this.windowContainer = document.getElementById("windowContainer")!;
     this.wsClient = new InterlayClient();
     this.setupWebSocketListener();
   }
@@ -26,7 +27,7 @@ class CoordinateOverlay {
       // Set up message handler for window updates
       this.wsClient.onMessage = (data) => {
         if (data.windows) {
-          this.updateCoordinateCard(data.windows);
+          this.updateWindowRectangles(data.windows);
         }
       };
 
@@ -39,48 +40,80 @@ class CoordinateOverlay {
     }
   }
 
-  private updateCoordinateCard(windows: WindowInfo[]) {
-    // Find the focused window
-    const focusedWindow = windows.find((w) => w.focused);
+  private updateWindowRectangles(windows: WindowInfo[]) {
+    // Keep track of current window IDs
+    const currentWindowIds = new Set(windows.map((w) => w.id));
 
-    if (focusedWindow) {
-      // Position the card slightly above and to the right of the window's top-left corner
-      const cardX = focusedWindow.x + 8;
-      const cardY = focusedWindow.y - 30; // 30px above the window
-
-      // Get window ID and client status
-      const windowId = focusedWindow.id;
-      const hasClient = !!(focusedWindow as any).client_id;
-      const clientStatus = hasClient ? "🔗" : "○";
-
-      // Update card content and position - show coordinates and connection status
-      this.coordinateCard.innerHTML = `
-        <div style="font-size: 11px; opacity: 0.8; line-height: 1.2; color: ${
-          hasClient ? "#4CAF50" : "#999"
-        };">
-          ${clientStatus} ${windowId}
-        </div>
-        <div style="line-height: 1.2;">${focusedWindow.x}, ${
-        focusedWindow.y
-      }</div>
-      `;
-      this.coordinateCard.style.left = `${cardX}px`;
-      this.coordinateCard.style.top = `${cardY}px`;
-      this.coordinateCard.style.display = "block";
-
-      // Hide the card if it would be off-screen or too close to edges
-      if (cardY < 0 || cardX < 0) {
-        this.coordinateCard.style.display = "none";
+    // Remove rectangles for windows that no longer exist
+    for (const [windowId, element] of this.windowElements) {
+      if (!currentWindowIds.has(windowId)) {
+        element.remove();
+        this.windowElements.delete(windowId);
       }
+    }
+
+    // Update or create rectangles for each window
+    windows.forEach((window) => {
+      this.updateWindowRectangle(window);
+    });
+  }
+
+  private updateWindowRectangle(window: WindowInfo) {
+    let windowElement = this.windowElements.get(window.id);
+
+    // Create new rectangle element if it doesn't exist
+    if (!windowElement) {
+      windowElement = document.createElement("div");
+      windowElement.className = "window-rectangle";
+
+      // Create label element
+      const label = document.createElement("div");
+      label.className = "window-label";
+      windowElement.appendChild(label);
+
+      this.windowContainer.appendChild(windowElement);
+      this.windowElements.set(window.id, windowElement);
+    }
+
+    // Get client status
+    const hasClient = !!(window as any).client_id;
+    const clientStatus = hasClient ? "🔗" : "○";
+
+    // Update label content
+    const label = windowElement.querySelector(".window-label") as HTMLElement;
+    label.textContent = `${clientStatus} ${window.name} (${window.id})`;
+
+    // Update CSS classes
+    windowElement.className = "window-rectangle";
+    label.className = "window-label";
+
+    if (window.focused) {
+      windowElement.classList.add("focused");
+      label.classList.add("focused");
+    }
+
+    if (hasClient) {
+      windowElement.classList.add("has-client");
+      label.classList.add("has-client");
+    }
+
+    // Position and size the rectangle
+    windowElement.style.left = `${window.x}px`;
+    windowElement.style.top = `${window.y}px`;
+    windowElement.style.width = `${window.w}px`;
+    windowElement.style.height = `${window.h}px`;
+
+    // Hide very small windows (they might be system UI elements)
+    if (window.w < 50 || window.h < 50) {
+      windowElement.style.display = "none";
     } else {
-      // No focused window, hide the card
-      this.coordinateCard.style.display = "none";
+      windowElement.style.display = "block";
     }
   }
 }
 
 // Initialize the overlay when the page loads
 document.addEventListener("DOMContentLoaded", () => {
-  new CoordinateOverlay();
-  console.log("🎯 Coordinate overlay initialized");
+  new WindowOverlay();
+  console.log("🪟 Window overlay initialized");
 });

@@ -15,24 +15,69 @@
         pointer-events: none;
       }
 
-      .coordinate-card {
+      .window-rectangle {
         position: absolute;
+        border: 2px solid rgba(255, 255, 255, 0.6);
+        background: rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(2px);
+        border-radius: 4px;
+        transition: all 0.2s ease;
+        z-index: 1000;
+      }
+
+      .window-rectangle.focused {
+        border-color: #4caf50;
+        background: rgba(76, 175, 80, 0.15);
+        box-shadow: 0 0 12px rgba(76, 175, 80, 0.3);
+      }
+
+      .window-rectangle.has-client {
+        border-color: #2196f3;
+        background: rgba(33, 150, 243, 0.15);
+      }
+
+      .window-rectangle.focused.has-client {
+        border-color: #4caf50;
+        background: rgba(76, 175, 80, 0.15);
+        box-shadow: 0 0 12px rgba(76, 175, 80, 0.3);
+      }
+
+      .window-label {
+        position: absolute;
+        top: -24px;
+        left: 0;
         background: rgba(0, 0, 0, 0.8);
         color: white;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-size: 12px;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-size: 10px;
         font-weight: 500;
+        white-space: nowrap;
         border: 1px solid rgba(255, 255, 255, 0.2);
         backdrop-filter: blur(10px);
-        z-index: 1000;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-        display: none;
+        max-width: 200px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .window-label.focused {
+        background: rgba(76, 175, 80, 0.9);
+        border-color: #4caf50;
+      }
+
+      .window-label.has-client {
+        background: rgba(33, 150, 243, 0.9);
+        border-color: #2196f3;
+      }
+
+      .window-label.focused.has-client {
+        background: rgba(76, 175, 80, 0.9);
+        border-color: #4caf50;
       }
     </style>
   </head>
   <body>
-    <div id="coordinateCard" class="coordinate-card"></div>
+    <div id="windowContainer"></div>
     <script type="module" src="../src/identifiers.ts"></script>
   </body>
 </html>
