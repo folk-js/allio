@@ -82,13 +82,11 @@ pub fn get_all_windows_with_focus() -> Vec<WindowInfo> {
     };
 
     // Find overlay offset
-    let mut overlay_offset = (0, 0);
-    for window in &all_windows {
-        if window.info.process_id == current_pid {
-            overlay_offset = (window.position.x, window.position.y);
-            break;
-        }
-    }
+    let overlay_offset = all_windows
+        .iter()
+        .find(|w| w.info.process_id == current_pid)
+        .map(|w| (w.position.x, w.position.y))
+        .unwrap_or((0, 0));
 
     // Convert all windows, excluding our overlay, and mark focused
     all_windows
@@ -111,32 +109,24 @@ pub fn window_polling_loop(ws_state: WebSocketState) {
         // Get fresh data from system
         let current_windows = get_all_windows_with_focus();
 
-        // Check if data changed
-        let windows_changed = last_windows.as_ref() != Some(&current_windows);
-
         // Only broadcast if something actually changed
-        if windows_changed {
-            // Update WebSocket state with current windows for matching
-            let rt = tokio::runtime::Handle::try_current();
-            if let Ok(handle) = rt {
-                let ws_state_clone = ws_state.clone();
-                let windows_clone = current_windows.clone();
-                handle.spawn(async move {
-                    ws_state_clone.update_windows(&windows_clone).await;
-                });
-            }
+        if last_windows.as_ref() != Some(&current_windows) {
+            // Update WebSocket state and broadcast
+            let ws_state_clone = ws_state.clone();
+            let windows_clone = current_windows.clone();
 
-            let payload = WindowUpdatePayload {
+            tokio::spawn(async move {
+                ws_state_clone.update_windows(&windows_clone).await;
+            });
+
+            ws_state.broadcast(&WindowUpdatePayload {
                 windows: current_windows.clone(),
-            };
-
-            // Broadcast to WebSocket clients
-            ws_state.broadcast(&payload);
+            });
 
             last_windows = Some(current_windows);
         }
 
-        // Precise interval handling - sleep for remaining time, or skip if behind
+        // Precise interval handling
         let elapsed = loop_start.elapsed();
         let target_interval = Duration::from_millis(POLLING_INTERVAL_MS);
         if elapsed < target_interval {

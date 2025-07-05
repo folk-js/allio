@@ -18,10 +18,6 @@ mod accessibility;
 mod websocket;
 mod windows;
 
-use accessibility::{
-    get_ui_tree_by_pid, is_listening_for_events, start_accessibility_events,
-    stop_accessibility_events,
-};
 use websocket::WebSocketState;
 use windows::{get_all_windows_with_focus, get_main_screen_dimensions, window_polling_loop};
 
@@ -67,6 +63,14 @@ fn get_overlay_url(filename: &str) -> String {
     format!("http://localhost:1420/src-web/overlays/{}", filename)
 }
 
+// Helper function to get main window
+fn get_main_window(
+    app: &tauri::AppHandle,
+) -> Result<tauri::WebviewWindow, Box<dyn std::error::Error>> {
+    app.get_webview_window("main")
+        .ok_or("Main window not found".into())
+}
+
 // App State
 #[derive(Default)]
 struct AppState {
@@ -74,29 +78,23 @@ struct AppState {
     current_overlay: Mutex<String>,
 }
 
-#[tauri::command]
-fn toggle_clickthrough(
-    state: tauri::State<AppState>,
-    app: tauri::AppHandle,
-) -> Result<bool, String> {
-    let window = app
-        .get_webview_window("main")
-        .ok_or("Main window not found")?;
+// Consolidated clickthrough toggle logic
+fn toggle_clickthrough_internal(
+    app: &tauri::AppHandle,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let state = app.state::<AppState>();
+    let window = get_main_window(app)?;
 
     let current_ignore = state.clickthrough_enabled.load(Ordering::Relaxed);
     let new_ignore = !current_ignore;
 
-    window
-        .set_ignore_cursor_events(new_ignore)
-        .map_err(|e| e.to_string())?;
-
+    window.set_ignore_cursor_events(new_ignore)?;
     state
         .clickthrough_enabled
         .store(new_ignore, Ordering::Relaxed);
+
     Ok(new_ignore)
 }
-
-// Accessibility commands are now in accessibility.rs
 
 // Function to switch to a specific overlay
 fn switch_overlay(
@@ -108,18 +106,17 @@ fn switch_overlay(
     *current_overlay = filename.to_string();
     drop(current_overlay);
 
-    let window = app
-        .get_webview_window("main")
-        .ok_or("Main window not found")?;
-
+    let window = get_main_window(app)?;
     let url = get_overlay_url(filename);
     window.navigate(url.parse().unwrap())?;
     Ok(())
 }
 
 // Build tray menu with overlay options
-fn build_overlay_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let overlay_files = get_overlay_files();
+fn build_overlay_tray(
+    app: &tauri::AppHandle,
+    overlay_files: &[String],
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut menu_builder = MenuBuilder::new(app);
 
     // Add overlay options
@@ -131,7 +128,7 @@ fn build_overlay_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::
         menu_builder = menu_builder.item(&no_overlays_item);
     } else {
         for filename in overlay_files {
-            let menu_item = MenuItemBuilder::new(&filename).id(&filename).build(app)?;
+            let menu_item = MenuItemBuilder::new(filename).id(filename).build(app)?;
             menu_builder = menu_builder.item(&menu_item);
         }
     }
@@ -163,7 +160,7 @@ fn build_overlay_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::
             let event_id = event.id().0.clone();
             match event_id.as_str() {
                 "toggle_clickthrough" => {
-                    let _ = toggle_clickthrough_rust(app_handle.clone());
+                    let _ = toggle_clickthrough_internal(&app_handle);
                     // Note: Menu text will update on next app restart
                 }
                 "no_overlays" => {
@@ -211,7 +208,7 @@ fn main() {
                         .with_handler(move |app_handle, shortcut, event| {
                             if event.state() == ShortcutState::Pressed {
                                 if shortcut == &toggle_shortcut {
-                                    let _ = toggle_clickthrough_rust(app_handle.clone());
+                                    let _ = toggle_clickthrough_internal(&app_handle);
                                 }
                             }
                         })
@@ -221,19 +218,19 @@ fn main() {
                 app.global_shortcut().register(toggle_shortcut)?;
             }
 
+            // Get overlay files once and reuse
+            let overlay_files = get_overlay_files();
+
             // Build overlay tray
-            build_overlay_tray(&app.handle())?;
+            build_overlay_tray(&app.handle(), &overlay_files)?;
 
             // Load the first overlay if any exist
-            let overlay_files = get_overlay_files();
             if let Some(first_overlay) = overlay_files.first() {
                 let _ = switch_overlay(&app.handle(), first_overlay);
             }
 
-            // Start the window polling thread first to populate initial windows
-            let ws_state_for_polling = ws_state.clone();
-            let ws_state_for_server = ws_state.clone();
-
+            // Start WebSocket server and window polling
+            let ws_state_clone = ws_state.clone();
             thread::spawn(move || {
                 // Do an initial window poll to populate the state
                 let current_windows = get_all_windows_with_focus();
@@ -241,47 +238,20 @@ fn main() {
                 // Update WebSocket state with initial windows
                 let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
                 rt.block_on(async move {
-                    ws_state_for_polling.update_windows(&current_windows).await;
+                    ws_state.update_windows(&current_windows).await;
 
                     // Start the WebSocket server
                     tokio::spawn(async move {
-                        websocket::start_websocket_server(ws_state_for_server).await;
+                        websocket::start_websocket_server(ws_state_clone).await;
                     });
 
                     // Continue with the polling loop
-                    window_polling_loop(ws_state_for_polling);
+                    window_polling_loop(ws_state);
                 });
             });
 
-            // Accessibility system is now command-based only
-
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            toggle_clickthrough,
-            get_ui_tree_by_pid,
-            start_accessibility_events,
-            stop_accessibility_events,
-            is_listening_for_events,
-        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-}
-
-// Add this function to handle the toggle from Rust (for shortcuts)
-fn toggle_clickthrough_rust(app: tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let state = app.state::<AppState>();
-    let window = app
-        .get_webview_window("main")
-        .ok_or("Main window not found")?;
-
-    let current_ignore = state.clickthrough_enabled.load(Ordering::Relaxed);
-    let new_ignore = !current_ignore;
-
-    window.set_ignore_cursor_events(new_ignore)?;
-    state
-        .clickthrough_enabled
-        .store(new_ignore, Ordering::Relaxed);
-
-    Ok(())
 }
