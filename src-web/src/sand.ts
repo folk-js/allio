@@ -1,4 +1,4 @@
-import { listen } from "@tauri-apps/api/event";
+import { WebSocketClient, type ServerMessage } from "../client/interlay.js";
 import {
   collisionFragmentShader,
   collisionVertexShader,
@@ -18,10 +18,87 @@ interface WindowInfo {
   h: number;
 }
 
-// Add event payload interface
-interface WindowUpdatePayload {
-  windows: WindowInfo[];
-  active_window: WindowInfo | null;
+class WebGLUtils {
+  static createShader(
+    gl: WebGL2RenderingContext,
+    type: GLenum,
+    source: string
+  ): WebGLShader {
+    const shader = gl.createShader(type)!;
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+
+    const success = gl.getShaderParameter(shader, gl.COMPILE_STATUS);
+    if (!success) {
+      const error = gl.getShaderInfoLog(shader);
+      gl.deleteShader(shader);
+      throw new Error(`Shader compilation failed: ${error}`);
+    }
+    return shader;
+  }
+
+  static createProgram(
+    gl: WebGL2RenderingContext,
+    vertexShader: WebGLShader,
+    fragmentShader?: WebGLShader
+  ): WebGLProgram {
+    const program = gl.createProgram()!;
+    gl.attachShader(program, vertexShader);
+    if (fragmentShader) {
+      gl.attachShader(program, fragmentShader);
+    }
+    gl.linkProgram(program);
+
+    const success = gl.getProgramParameter(program, gl.LINK_STATUS);
+    if (!success) {
+      const error = gl.getProgramInfoLog(program);
+      gl.deleteProgram(program);
+      throw new Error(`Program linking failed: ${error}`);
+    }
+    return program;
+  }
+
+  static createWebGLCanvas(
+    width: number,
+    height: number
+  ): { gl: WebGL2RenderingContext | undefined; canvas: HTMLCanvasElement } {
+    const canvas = document.createElement("canvas");
+
+    // Set canvas styles
+    canvas.style.position = "absolute";
+    canvas.style.inset = "0";
+    canvas.style.zIndex = "-1";
+
+    canvas.width = width;
+    canvas.height = height;
+
+    const gl = canvas.getContext("webgl2", { antialias: true });
+    if (!gl) {
+      console.error("WebGL2 is not available.");
+      return { gl: undefined, canvas };
+    }
+    return { gl, canvas };
+  }
+
+  static createShaderProgram(
+    gl: WebGL2RenderingContext,
+    vertexSource: string,
+    fragmentSource: string
+  ): WebGLProgram {
+    const vertexShader = this.createShader(gl, gl.VERTEX_SHADER, vertexSource);
+    const fragmentShader = this.createShader(
+      gl,
+      gl.FRAGMENT_SHADER,
+      fragmentSource
+    );
+    const program = this.createProgram(gl, vertexShader, fragmentShader);
+
+    // Clean up shaders since they're now linked to the program
+    gl.deleteShader(vertexShader);
+    gl.deleteShader(fragmentShader);
+
+    return program;
+  }
 }
 
 export class FolkSand extends HTMLElement {
@@ -75,10 +152,16 @@ export class FolkSand extends HTMLElement {
   #shapeIndexBuffer!: WebGLBuffer;
   #shapeIndexCount = 0;
 
-  // Add property to store current windows from events
+  // Add WebSocket client for receiving window updates
+  #wsClient: WebSocketClient;
   #currentWindows: WindowInfo[] = [];
 
   onMaterialChange?: (type: number) => void;
+
+  constructor() {
+    super();
+    this.#wsClient = new WebSocketClient();
+  }
 
   connectedCallback(): void {
     // Style the canvas for full screen overlay
@@ -95,15 +178,14 @@ export class FolkSand extends HTMLElement {
     this.#initializeSimulation();
     this.#initializeCollisionDetection();
     this.#attachEventListeners();
-    this.#setupWindowListener();
+    this.#setupWebSocketConnection();
     this.#handleShapeTransform();
     this.#render();
-
-    // Remove the periodic interval - events will trigger updates
   }
 
   disconnectedCallback() {
     this.#detachEventListeners();
+    this.#wsClient.disconnect();
   }
 
   #initializeWebGL() {
@@ -122,6 +204,8 @@ export class FolkSand extends HTMLElement {
   }
 
   #initializeSimulation() {
+    console.log("initializing", vertexShader);
+    console.log("initializingfrag", simulationShader);
     // Create shaders and programs
     this.#program = this.#createProgramFromStrings({
       vertex: vertexShader,
@@ -800,6 +884,9 @@ export class FolkSand extends HTMLElement {
     vertex: string;
     fragment: string;
   }): WebGLProgram | undefined {
+    console.log("utils", WebGLUtils);
+    console.log("gl", this.#gl);
+    console.log(vertex);
     const vertexShader = WebGLUtils.createShader(
       this.#gl,
       this.#gl.VERTEX_SHADER,
@@ -819,17 +906,38 @@ export class FolkSand extends HTMLElement {
     return WebGLUtils.createProgram(this.#gl, vertexShader, fragmentShader);
   }
 
-  // Add method to setup window event listener
-  async #setupWindowListener() {
+  // Add method to setup WebSocket connection
+  async #setupWebSocketConnection() {
     try {
-      await listen<WindowUpdatePayload>("window-update", (event) => {
-        const { windows } = event.payload;
-        this.#currentWindows = windows;
-        this.#handleShapeTransform();
-      });
-      console.log("Window update listener established for folk-sand");
+      // Set up message handlers
+      this.#wsClient.onMessage = (data) => {
+        this.#handleWebSocketMessage(data);
+      };
+
+      this.#wsClient.onError = (error) => {
+        console.error("WebSocket error in sand overlay:", error);
+      };
+
+      await this.#wsClient.connect();
+      console.log(
+        "WebSocket connection established for folk-sand - listening for window updates"
+      );
     } catch (error) {
-      console.error("Failed to setup window listener in folk-sand:", error);
+      console.error(
+        "Failed to setup WebSocket connection in folk-sand:",
+        error
+      );
+    }
+  }
+
+  #handleWebSocketMessage(data: ServerMessage) {
+    console.log("Sand overlay received WebSocket message:", data);
+
+    if (data.windows) {
+      // Handle window updates (any message with windows array)
+      this.#currentWindows = data.windows;
+      this.#handleShapeTransform();
+      console.log(`Sand overlay updated with ${data.windows.length} windows`);
     }
   }
 
@@ -935,86 +1043,3 @@ export class FolkSand extends HTMLElement {
 
 // Register the custom element
 customElements.define("folk-sand", FolkSand);
-
-class WebGLUtils {
-  static createShader(
-    gl: WebGL2RenderingContext,
-    type: GLenum,
-    source: string
-  ): WebGLShader {
-    const shader = gl.createShader(type)!;
-    gl.shaderSource(shader, source);
-    gl.compileShader(shader);
-
-    const success = gl.getShaderParameter(shader, gl.COMPILE_STATUS);
-    if (!success) {
-      const error = gl.getShaderInfoLog(shader);
-      gl.deleteShader(shader);
-      throw new Error(`Shader compilation failed: ${error}`);
-    }
-    return shader;
-  }
-
-  static createProgram(
-    gl: WebGL2RenderingContext,
-    vertexShader: WebGLShader,
-    fragmentShader?: WebGLShader
-  ): WebGLProgram {
-    const program = gl.createProgram()!;
-    gl.attachShader(program, vertexShader);
-    if (fragmentShader) {
-      gl.attachShader(program, fragmentShader);
-    }
-    gl.linkProgram(program);
-
-    const success = gl.getProgramParameter(program, gl.LINK_STATUS);
-    if (!success) {
-      const error = gl.getProgramInfoLog(program);
-      gl.deleteProgram(program);
-      throw new Error(`Program linking failed: ${error}`);
-    }
-    return program;
-  }
-
-  static createWebGLCanvas(
-    width: number,
-    height: number
-  ): { gl: WebGL2RenderingContext | undefined; canvas: HTMLCanvasElement } {
-    const canvas = document.createElement("canvas");
-
-    // Set canvas styles
-    canvas.style.position = "absolute";
-    canvas.style.inset = "0";
-    canvas.style.zIndex = "-1";
-
-    canvas.width = width;
-    canvas.height = height;
-
-    const gl = canvas.getContext("webgl2", { antialias: true });
-    if (!gl) {
-      console.error("WebGL2 is not available.");
-      return { gl: undefined, canvas };
-    }
-    return { gl, canvas };
-  }
-
-  static createShaderProgram(
-    gl: WebGL2RenderingContext,
-    vertexSource: string,
-    fragmentSource: string
-  ): WebGLProgram {
-    const vertexShader = this.createShader(gl, gl.VERTEX_SHADER, vertexSource);
-    const fragmentShader = this.createShader(
-      gl,
-      gl.FRAGMENT_SHADER,
-      fragmentSource
-    );
-    const program = this.createProgram(gl, vertexShader, fragmentShader);
-
-    // Clean up shaders since they're now linked to the program
-    gl.deleteShader(vertexShader);
-    gl.deleteShader(fragmentShader);
-
-    return program;
-  }
-}

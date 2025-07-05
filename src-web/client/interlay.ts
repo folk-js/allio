@@ -1,10 +1,10 @@
-interface WindowCoordinates {
+export interface WindowCoordinates {
   bottom_left_x: number;
   bottom_left_y: number;
   window_width: number;
 }
 
-interface ServerMessage {
+export interface ServerMessage {
   type: string;
   success?: boolean;
   message?: string;
@@ -18,11 +18,6 @@ export class WebSocketClient {
   private reconnectTimeout: number | null = null;
   private reconnectDelay = 3000;
 
-  // Event callbacks
-  public onConnectionChange?: (
-    status: "connecting" | "connected" | "disconnected",
-    message: string
-  ) => void;
   public onMessage?: (data: ServerMessage) => void;
   public onError?: (error: Event) => void;
 
@@ -30,12 +25,8 @@ export class WebSocketClient {
 
   async connect(): Promise<void> {
     try {
-      this.onConnectionChange?.("connecting", "Connecting to overlay...");
-
       this.ws = new WebSocket(this.url);
-
       this.ws.onopen = () => {
-        this.onConnectionChange?.("connected", "✅ Connected to overlay app");
         console.log("🔗 Connected to overlay WebSocket");
       };
 
@@ -49,21 +40,15 @@ export class WebSocketClient {
       };
 
       this.ws.onclose = () => {
-        this.onConnectionChange?.(
-          "disconnected",
-          "❌ Disconnected from overlay"
-        );
         console.log("🔌 Disconnected from overlay WebSocket");
         this.scheduleReconnect();
       };
 
       this.ws.onerror = (error) => {
-        this.onConnectionChange?.("disconnected", "❌ Connection error");
         console.error("❌ WebSocket error:", error);
         this.onError?.(error);
       };
     } catch (error) {
-      this.onConnectionChange?.("disconnected", "❌ Failed to connect");
       console.error("Failed to connect:", error);
     }
   }
