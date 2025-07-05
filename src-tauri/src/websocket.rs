@@ -13,7 +13,7 @@ use std::{collections::HashSet, sync::Arc};
 use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::{WindowInfo, WindowUpdatePayload};
+use crate::windows::{WindowInfo, WindowUpdatePayload};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ClientIdentification {
