@@ -19,6 +19,7 @@ interface ServerMessage {
   tree?: UITreeNode;
   error?: string;
   overlay_pid?: number;
+  message?: string;
 }
 
 interface UITreeNode {
@@ -38,6 +39,7 @@ interface UITreeNode {
   selected?: boolean;
   selected_text?: string;
   character_count?: number;
+  element_id?: string;
 }
 
 class AXTreeOverlay {
@@ -71,6 +73,8 @@ class AXTreeOverlay {
           this.updateWindows(data.windows);
         } else if (data.type === "accessibility_tree_response") {
           this.handleAccessibilityTreeResponse(data);
+        } else if (data.type === "accessibility_write_response") {
+          this.handleAccessibilityWriteResponse(data);
         } else if (data.type === "overlay_info" && data.overlay_pid) {
           this.overlayProcessId = data.overlay_pid;
           console.log(
@@ -228,6 +232,88 @@ class AXTreeOverlay {
         `❌ Accessibility tree error for PID ${data.pid}: ${data.error}`
       );
       this.showError(data.error);
+    }
+  }
+
+  private handleAccessibilityWriteResponse(data: ServerMessage) {
+    if (data.success) {
+      console.log(`✅ Write successful: ${data.message}`);
+      // Show success feedback
+      this.showWriteFeedback(true, data.message || "Write successful");
+
+      // Refresh the tree to show updated values
+      if (this.focusedWindow) {
+        this.requestAccessibilityTree(this.focusedWindow.process_id);
+      }
+    } else {
+      console.error(`❌ Write failed: ${data.error}`);
+      this.showWriteFeedback(false, data.error || "Write failed");
+    }
+  }
+
+  private showWriteFeedback(success: boolean, message: string) {
+    // Create or update feedback element
+    let feedbackEl = document.getElementById("write-feedback");
+    if (!feedbackEl) {
+      feedbackEl = document.createElement("div");
+      feedbackEl.id = "write-feedback";
+      feedbackEl.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        padding: 10px 15px;
+        border-radius: 5px;
+        color: white;
+        font-size: 12px;
+        z-index: 10000;
+        max-width: 300px;
+        word-wrap: break-word;
+      `;
+      document.body.appendChild(feedbackEl);
+    }
+
+    // Set style and content based on success
+    feedbackEl.style.backgroundColor = success ? "#4caf50" : "#f44336";
+    feedbackEl.textContent = message;
+    feedbackEl.style.display = "block";
+
+    // Hide after 3 seconds
+    setTimeout(() => {
+      if (feedbackEl) {
+        feedbackEl.style.display = "none";
+      }
+    }, 3000);
+  }
+
+  private writeToElement(elementPath: string, currentValue: string) {
+    if (!this.focusedWindow) {
+      console.error("No focused window to write to");
+      return;
+    }
+
+    // Parse element path
+    const pathArray = elementPath
+      .split("-")
+      .map((s) => parseInt(s, 10))
+      .filter((n) => !isNaN(n));
+
+    // Prompt user for text
+    const newText = prompt(
+      `Write to element (current: "${currentValue}"):\n\nPath: ${elementPath}`,
+      currentValue || ""
+    );
+
+    if (newText !== null) {
+      // User didn't cancel
+      console.log(`📝 Writing "${newText}" to element at path: ${pathArray}`);
+
+      // Send write request
+      this.wsClient.send({
+        type: "write_to_element",
+        pid: this.focusedWindow.process_id,
+        element_path: pathArray,
+        text: newText,
+      });
     }
   }
 
@@ -414,6 +500,47 @@ class AXTreeOverlay {
     }
 
     nodeContent.appendChild(nodeInfo);
+
+    // Add write button for writable elements
+    if (
+      node.element_id &&
+      (node.role === "AXTextField" ||
+        node.role === "AXTextArea" ||
+        node.role === "AXComboBox" ||
+        node.role === "AXSecureTextField")
+    ) {
+      const writeButton = document.createElement("button");
+      writeButton.className = "tree-write-button";
+      writeButton.textContent = "✏️";
+      writeButton.title = `Write to ${node.role}`;
+      writeButton.style.cssText = `
+        margin-left: 8px;
+        padding: 2px 6px;
+        font-size: 10px;
+        background: #4fc3f7;
+        color: white;
+        border: none;
+        border-radius: 3px;
+        cursor: pointer;
+        opacity: 0.8;
+      `;
+
+      writeButton.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.writeToElement(node.element_id!, node.value || "");
+      });
+
+      writeButton.addEventListener("mouseenter", () => {
+        writeButton.style.opacity = "1";
+      });
+
+      writeButton.addEventListener("mouseleave", () => {
+        writeButton.style.opacity = "0.8";
+      });
+
+      nodeContent.appendChild(writeButton);
+    }
+
     nodeElement.appendChild(nodeContent);
 
     // Add children container

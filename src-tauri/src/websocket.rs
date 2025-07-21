@@ -13,7 +13,7 @@ use std::{collections::HashSet, sync::Arc};
 use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::accessibility::{walk_app_tree_by_pid, UITreeNode};
+use crate::accessibility::{walk_app_tree_by_pid, write_to_element_by_pid_and_path, UITreeNode};
 use crate::windows::{WindowInfo, WindowUpdatePayload};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -28,6 +28,15 @@ struct AccessibilityTreeRequest {
     #[serde(rename = "type")]
     msg_type: String,
     pid: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AccessibilityWriteRequest {
+    #[serde(rename = "type")]
+    msg_type: String,
+    pid: u32,
+    element_path: Vec<usize>,
+    text: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -46,6 +55,16 @@ struct AccessibilityTreeResponse {
     pid: u32,
     success: bool,
     tree: Option<UITreeNode>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AccessibilityWriteResponse {
+    #[serde(rename = "type")]
+    msg_type: String,
+    pid: u32,
+    success: bool,
+    message: String,
     error: Option<String>,
 }
 
@@ -300,6 +319,49 @@ async fn handle_client_message(
                     "❌ Failed to get accessibility tree for PID {}",
                     ax_request.pid
                 );
+            }
+        }
+    }
+    // Try to parse as AccessibilityWriteRequest
+    else if let Ok(write_request) = serde_json::from_str::<AccessibilityWriteRequest>(message) {
+        if write_request.msg_type == "write_to_element" {
+            println!(
+                "✏️ Client requesting write to element in PID: {}, path: {:?}, text: '{}'",
+                write_request.pid, write_request.element_path, write_request.text
+            );
+
+            // Attempt to write to the element
+            let (success, message, error) = match write_to_element_by_pid_and_path(
+                write_request.pid,
+                &write_request.element_path,
+                &write_request.text,
+            ) {
+                Ok(_) => (
+                    true,
+                    format!("Successfully wrote '{}' to element", write_request.text),
+                    None,
+                ),
+                Err(e) => (false, "Failed to write to element".to_string(), Some(e)),
+            };
+
+            let response = AccessibilityWriteResponse {
+                msg_type: "accessibility_write_response".to_string(),
+                pid: write_request.pid,
+                success,
+                message,
+                error,
+            };
+
+            let response_json = serde_json::to_string(&response)?;
+            socket.send(Message::Text(response_json)).await.ok();
+
+            if success {
+                println!(
+                    "✅ Successfully wrote to element in PID {}",
+                    write_request.pid
+                );
+            } else {
+                println!("❌ Failed to write to element in PID {}", write_request.pid);
             }
         }
     }
