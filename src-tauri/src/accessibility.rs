@@ -16,6 +16,16 @@ pub struct UITreeNode {
     pub enabled: bool,
     pub children: Vec<UITreeNode>,
     pub depth: usize,
+    // Additional attributes for richer information
+    pub description: Option<String>,
+    pub help: Option<String>,
+    pub placeholder: Option<String>,
+    pub role_description: Option<String>,
+    pub subrole: Option<String>,
+    pub focused: Option<bool>,
+    pub selected: Option<bool>,
+    pub selected_text: Option<String>,
+    pub character_count: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -50,6 +60,15 @@ fn walk_element_tree(
             enabled: false,
             children: vec![],
             depth,
+            description: None,
+            help: None,
+            placeholder: None,
+            role_description: None,
+            subrole: None,
+            focused: None,
+            selected: None,
+            selected_text: None,
+            character_count: None,
         });
     }
 
@@ -85,6 +104,74 @@ fn walk_element_tree(
         .and_then(|e| e.try_into().ok())
         .unwrap_or(false);
 
+    // Extract additional attributes for richer information
+    let description = element
+        .attribute(&AXAttribute::description())
+        .ok()
+        .and_then(|d| {
+            let s = d.to_string();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        });
+
+    let help = element.attribute(&AXAttribute::help()).ok().and_then(|h| {
+        let s = h.to_string();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    });
+
+    let placeholder = element
+        .attribute(&AXAttribute::placeholder_value())
+        .ok()
+        .and_then(|p| {
+            let s = p.to_string();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        });
+
+    let role_description = element
+        .attribute(&AXAttribute::role_description())
+        .ok()
+        .and_then(|rd| {
+            let s = rd.to_string();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        });
+
+    let subrole = element
+        .attribute(&AXAttribute::subrole())
+        .ok()
+        .and_then(|sr| {
+            let s = sr.to_string();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        });
+
+    let focused = element
+        .attribute(&AXAttribute::focused())
+        .ok()
+        .and_then(|f| f.try_into().ok());
+
+    // Note: Some attributes may not be available in all versions of the accessibility crate
+    let selected = None; // AXAttribute::selected() not available
+    let selected_text = None; // AXAttribute::selected_text() not available
+    let character_count = None; // AXAttribute::number_of_characters() not available
+
     // Get children
     let mut children = Vec::new();
     if let Ok(child_elements) = element.attribute(&AXAttribute::children()) {
@@ -106,5 +193,14 @@ fn walk_element_tree(
         enabled,
         children,
         depth,
+        description,
+        help,
+        placeholder,
+        role_description,
+        subrole,
+        focused,
+        selected,
+        selected_text,
+        character_count,
     })
 }

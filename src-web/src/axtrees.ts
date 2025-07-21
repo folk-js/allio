@@ -28,6 +28,16 @@ interface UITreeNode {
   enabled: boolean;
   children: UITreeNode[];
   depth: number;
+  // Additional attributes for richer information
+  description?: string;
+  help?: string;
+  placeholder?: string;
+  role_description?: string;
+  subrole?: string;
+  focused?: boolean;
+  selected?: boolean;
+  selected_text?: string;
+  character_count?: number;
 }
 
 class AXTreeOverlay {
@@ -39,11 +49,18 @@ class AXTreeOverlay {
   private overlayProcessId: number | null = null;
   private lastNonOverlayWindow: WindowInfo | null = null;
   private expandedNodes: Set<string> = new Set(); // Track which nodes are collapsed (prefixed with 'collapsed:')
+  private refreshTimer: number | null = null;
+  private readonly REFRESH_INTERVAL = 2000; // 2 seconds
 
   constructor() {
     this.windowContainer = document.getElementById("windowContainer")!;
     this.wsClient = new InterlayClient();
     this.setupWebSocketListener();
+
+    // Clean up timer when page unloads
+    window.addEventListener("beforeunload", () => {
+      this.stopRefreshTimer();
+    });
   }
 
   private async setupWebSocketListener() {
@@ -118,6 +135,9 @@ class AXTreeOverlay {
       // Overlay is focused - keep the existing tree visible for interaction
       console.log("🖱️ Overlay focused - preserving existing tree");
 
+      // Stop refresh timer while overlay is focused (to avoid interfering with interaction)
+      this.stopRefreshTimer();
+
       if (this.treeContainer && this.lastNonOverlayWindow) {
         this.updateTreePosition();
         console.log("✅ Tree ready for interaction");
@@ -125,6 +145,11 @@ class AXTreeOverlay {
         console.log("ℹ️ No tree to interact with");
       }
       return; // Early return to prevent tree changes
+    } else {
+      // Resume refresh timer when overlay is not focused
+      if (this.focusedWindow) {
+        this.startRefreshTimer();
+      }
     }
 
     // Store non-overlay focused windows for later reference
@@ -152,10 +177,11 @@ class AXTreeOverlay {
     ) {
       this.focusedWindow = newFocusedWindow;
       this.requestAccessibilityTree(newFocusedWindow.process_id);
+      // Timer will be started when tree is displayed
     } else if (!newFocusedWindow) {
       // No focused window, clear the tree
       this.focusedWindow = null;
-      this.clearAccessibilityTree();
+      this.clearAccessibilityTree(); // This will stop the timer
     } else if (
       newFocusedWindow &&
       this.focusedWindow &&
@@ -168,6 +194,7 @@ class AXTreeOverlay {
         this.lastNonOverlayWindow = newFocusedWindow;
       }
       this.updateTreePosition();
+      // Keep timer running for same window
     }
   }
 
@@ -186,12 +213,41 @@ class AXTreeOverlay {
 
   private handleAccessibilityTreeResponse(data: ServerMessage) {
     if (data.success && data.tree && this.focusedWindow) {
-      this.displayAccessibilityTree(data.tree, this.focusedWindow);
+      // Check if this is a refresh (tree already exists) or a new tree
+      const isRefresh = this.treeContainer !== null;
+
+      if (isRefresh) {
+        // For refresh, preserve expanded state and update content
+        this.refreshTreeContent(data.tree, this.focusedWindow);
+      } else {
+        // For new tree, display normally
+        this.displayAccessibilityTree(data.tree, this.focusedWindow);
+      }
     } else if (data.error) {
       console.warn(
         `❌ Accessibility tree error for PID ${data.pid}: ${data.error}`
       );
       this.showError(data.error);
+    }
+  }
+
+  private refreshTreeContent(tree: UITreeNode, window: WindowInfo) {
+    if (!this.treeContainer) return;
+
+    // Find the content wrapper and update it
+    const contentWrapper = this.treeContainer.querySelector(".tree-content");
+    if (contentWrapper) {
+      // Clear existing content but preserve container
+      contentWrapper.innerHTML = "";
+
+      // Create new tree content with preserved expanded state
+      const treeContent = this.createTreeElement(tree);
+      contentWrapper.appendChild(treeContent);
+
+      // Update position in case window moved
+      this.updateTreePosition();
+
+      console.log(`🔄 Refreshed accessibility tree content for ${window.name}`);
     }
   }
 
@@ -208,15 +264,25 @@ class AXTreeOverlay {
     const rightX = window.x + window.w + 10; // 10px margin
     this.treeContainer.style.left = `${rightX}px`;
     this.treeContainer.style.top = `${window.y}px`;
-    // Set max-height to allow scrolling when content exceeds container
-    this.treeContainer.style.maxHeight = `${Math.min(window.h - 20, 800)}px`;
+    // Set height to create a fixed-size container
+    this.treeContainer.style.height = `${Math.min(window.h - 20, 800)}px`;
 
-    // Create tree content
+    // Create scrollable content wrapper
+    const contentWrapper = document.createElement("div");
+    contentWrapper.className = "tree-content";
+
+    // Create tree content and add it to the wrapper
     const treeContent = this.createTreeElement(tree);
-    this.treeContainer.appendChild(treeContent);
+    contentWrapper.appendChild(treeContent);
+
+    // Add wrapper to container
+    this.treeContainer.appendChild(contentWrapper);
 
     this.windowContainer.appendChild(this.treeContainer);
     console.log(`✅ Displayed accessibility tree for ${window.name}`);
+
+    // Start auto-refresh timer
+    this.startRefreshTimer();
   }
 
   private createTreeElement(node: UITreeNode, nodeId?: string): HTMLElement {
@@ -269,6 +335,14 @@ class AXTreeOverlay {
     roleSpan.textContent = node.role;
     nodeInfo.appendChild(roleSpan);
 
+    // Subrole (if present and different from role)
+    if (node.subrole && node.subrole !== node.role) {
+      const subroleSpan = document.createElement("span");
+      subroleSpan.className = "tree-subrole";
+      subroleSpan.textContent = `:${node.subrole}`;
+      nodeInfo.appendChild(subroleSpan);
+    }
+
     // Title (if present)
     if (node.title) {
       const titleSpan = document.createElement("span");
@@ -277,27 +351,65 @@ class AXTreeOverlay {
       nodeInfo.appendChild(titleSpan);
     }
 
-    // Value (if present)
+    // Value (if present) - enhanced for text fields
     if (node.value) {
       const valueSpan = document.createElement("span");
       valueSpan.className = "tree-value";
-      valueSpan.textContent = ` = ${node.value}`;
+      // For text fields, show more detailed value information
+      if (node.role === "AXTextField" || node.role === "AXTextArea") {
+        let valueText = ` = "${node.value}"`;
+        if (node.character_count !== undefined) {
+          valueText += ` (${node.character_count} chars)`;
+        }
+        valueSpan.textContent = valueText;
+      } else {
+        valueSpan.textContent = ` = ${node.value}`;
+      }
       nodeInfo.appendChild(valueSpan);
     }
 
-    // Enabled state
-    if (!node.enabled) {
-      const disabledSpan = document.createElement("span");
-      disabledSpan.className = "tree-disabled";
-      disabledSpan.textContent = " (disabled)";
-      nodeInfo.appendChild(disabledSpan);
+    // Placeholder (if present)
+    if (node.placeholder) {
+      const placeholderSpan = document.createElement("span");
+      placeholderSpan.className = "tree-placeholder";
+      placeholderSpan.textContent = ` placeholder:"${node.placeholder}"`;
+      nodeInfo.appendChild(placeholderSpan);
+    }
+
+    // Selected text (if present)
+    if (node.selected_text) {
+      const selectedSpan = document.createElement("span");
+      selectedSpan.className = "tree-selected";
+      selectedSpan.textContent = ` selected:"${node.selected_text}"`;
+      nodeInfo.appendChild(selectedSpan);
+    }
+
+    // Description (if present)
+    if (node.description) {
+      const descSpan = document.createElement("span");
+      descSpan.className = "tree-description";
+      descSpan.textContent = ` desc:"${node.description}"`;
+      nodeInfo.appendChild(descSpan);
+    }
+
+    // State indicators
+    const stateIndicators = [];
+    if (node.focused) stateIndicators.push("focused");
+    if (node.selected) stateIndicators.push("selected");
+    if (!node.enabled) stateIndicators.push("disabled");
+
+    if (stateIndicators.length > 0) {
+      const stateSpan = document.createElement("span");
+      stateSpan.className = "tree-state";
+      stateSpan.textContent = ` [${stateIndicators.join(", ")}]`;
+      nodeInfo.appendChild(stateSpan);
     }
 
     // Children count for nodes with children
     if (hasChildren) {
       const childCountSpan = document.createElement("span");
-      childCountSpan.className = "tree-value";
-      childCountSpan.textContent = ` [${node.children.length}]`;
+      childCountSpan.className = "tree-count";
+      childCountSpan.textContent = ` (${node.children.length})`;
       nodeInfo.appendChild(childCountSpan);
     }
 
@@ -359,8 +471,8 @@ class AXTreeOverlay {
         const rightX = referenceWindow.x + referenceWindow.w + 10;
         this.treeContainer.style.left = `${rightX}px`;
         this.treeContainer.style.top = `${referenceWindow.y}px`;
-        // Set max-height to allow scrolling when content exceeds container
-        this.treeContainer.style.maxHeight = `${Math.min(
+        // Set height to maintain fixed-size container
+        this.treeContainer.style.height = `${Math.min(
           referenceWindow.h - 20,
           800
         )}px`;
@@ -374,6 +486,33 @@ class AXTreeOverlay {
     if (this.treeContainer) {
       this.treeContainer.remove();
       this.treeContainer = null;
+    }
+    // Stop refresh timer when clearing tree
+    this.stopRefreshTimer();
+  }
+
+  private startRefreshTimer() {
+    // Clear any existing timer first
+    this.stopRefreshTimer();
+
+    this.refreshTimer = window.setInterval(() => {
+      // Only refresh if we have a focused window and tree is visible
+      if (this.focusedWindow && this.treeContainer) {
+        console.log(
+          `🔄 Auto-refreshing accessibility tree for ${this.focusedWindow.name}`
+        );
+        this.requestAccessibilityTree(this.focusedWindow.process_id);
+      }
+    }, this.REFRESH_INTERVAL);
+
+    console.log(`⏰ Started auto-refresh timer (${this.REFRESH_INTERVAL}ms)`);
+  }
+
+  private stopRefreshTimer() {
+    if (this.refreshTimer !== null) {
+      window.clearInterval(this.refreshTimer);
+      this.refreshTimer = null;
+      console.log("⏰ Stopped auto-refresh timer");
     }
   }
 

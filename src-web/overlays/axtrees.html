@@ -19,20 +19,29 @@
         position: absolute;
         background: rgba(0, 0, 0, 0.9);
         color: white;
-        padding: 8px 8px 16px 8px; /* Extra bottom padding to prevent clipping */
+        padding: 0; /* Remove padding from container */
         border-radius: 6px;
         font-size: 11px;
         font-family: "Monaco", "Menlo", "Consolas", monospace;
         border: 1px solid rgba(255, 255, 255, 0.2);
         max-width: 500px;
         min-width: 300px;
-        overflow-y: auto; /* Vertical scrolling */
-        overflow-x: auto; /* Horizontal scrolling */
+        overflow: hidden; /* Hide overflow on container */
         z-index: 1001;
         backdrop-filter: blur(10px);
         box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
         pointer-events: auto;
         box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .tree-content {
+        flex: 1;
+        overflow-y: auto; /* Scrolling happens here */
+        overflow-x: auto;
+        padding: 8px 8px 16px 8px; /* Move padding to content wrapper */
+        min-height: 0; /* Allow flex child to shrink */
       }
 
       .tree-node {
@@ -96,6 +105,11 @@
         font-weight: 600;
       }
 
+      .tree-subrole {
+        color: #81d4fa;
+        font-weight: 500;
+      }
+
       .tree-title {
         color: #a5d6a7;
         font-style: italic;
@@ -106,10 +120,38 @@
         font-size: 10px;
       }
 
-      .tree-disabled {
-        color: #f48fb1;
+      .tree-placeholder {
+        color: #bcaaa4;
         font-size: 10px;
-        opacity: 0.7;
+        font-style: italic;
+      }
+
+      .tree-selected {
+        color: #f8bbd9;
+        font-size: 10px;
+        background: rgba(233, 30, 99, 0.2);
+        padding: 1px 3px;
+        border-radius: 2px;
+      }
+
+      .tree-description {
+        color: #b39ddb;
+        font-size: 10px;
+      }
+
+      .tree-state {
+        color: #e1bee7;
+        font-size: 9px;
+        font-weight: 500;
+        background: rgba(142, 36, 170, 0.2);
+        padding: 1px 3px;
+        border-radius: 2px;
+        margin-left: 4px;
+      }
+
+      .tree-count {
+        color: #90a4ae;
+        font-size: 9px;
       }
 
       .accessibility-error {
