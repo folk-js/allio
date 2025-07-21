@@ -247,6 +247,7 @@ async fn handle_client_message(
     ws_state: &WebSocketState,
     socket: &mut WebSocket,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    println!("📨 Received WebSocket message: {}", message);
     // Try to parse as ClientIdentification first
     if let Ok(identification) = serde_json::from_str::<ClientIdentification>(message) {
         println!(
@@ -287,43 +288,12 @@ async fn handle_client_message(
         let response_json = serde_json::to_string(&response)?;
         socket.send(Message::Text(response_json)).await.ok();
     }
-    // Try to parse as AccessibilityTreeRequest
-    else if let Ok(ax_request) = serde_json::from_str::<AccessibilityTreeRequest>(message) {
-        if ax_request.msg_type == "get_accessibility_tree" {
-            println!(
-                "🌳 Client requesting accessibility tree for PID: {}",
-                ax_request.pid
-            );
-
-            // Get the accessibility tree
-            let (success, tree, error) = match walk_app_tree_by_pid(ax_request.pid) {
-                Ok(tree) => (true, Some(tree), None),
-                Err(e) => (false, None, Some(e)),
-            };
-
-            let response = AccessibilityTreeResponse {
-                msg_type: "accessibility_tree_response".to_string(),
-                pid: ax_request.pid,
-                success,
-                tree,
-                error,
-            };
-
-            let response_json = serde_json::to_string(&response)?;
-            socket.send(Message::Text(response_json)).await.ok();
-
-            if success {
-                println!("✅ Sent accessibility tree for PID {}", ax_request.pid);
-            } else {
-                println!(
-                    "❌ Failed to get accessibility tree for PID {}",
-                    ax_request.pid
-                );
-            }
-        }
-    }
-    // Try to parse as AccessibilityWriteRequest
+    // Try to parse as AccessibilityWriteRequest FIRST (more specific)
     else if let Ok(write_request) = serde_json::from_str::<AccessibilityWriteRequest>(message) {
+        println!(
+            "✅ Successfully parsed as AccessibilityWriteRequest: {:?}",
+            write_request
+        );
         if write_request.msg_type == "write_to_element" {
             println!(
                 "✏️ Client requesting write to element in PID: {}, path: {:?}, text: '{}'",
@@ -364,6 +334,51 @@ async fn handle_client_message(
                 println!("❌ Failed to write to element in PID {}", write_request.pid);
             }
         }
+    }
+    // Try to parse as AccessibilityTreeRequest (less specific)
+    else if let Ok(ax_request) = serde_json::from_str::<AccessibilityTreeRequest>(message) {
+        println!("🌳 Parsed as AccessibilityTreeRequest: {:?}", ax_request);
+        if ax_request.msg_type == "get_accessibility_tree" {
+            println!(
+                "🌳 Client requesting accessibility tree for PID: {}",
+                ax_request.pid
+            );
+
+            // Get the accessibility tree
+            let (success, tree, error) = match walk_app_tree_by_pid(ax_request.pid) {
+                Ok(tree) => (true, Some(tree), None),
+                Err(e) => (false, None, Some(e)),
+            };
+
+            let response = AccessibilityTreeResponse {
+                msg_type: "accessibility_tree_response".to_string(),
+                pid: ax_request.pid,
+                success,
+                tree,
+                error,
+            };
+
+            let response_json = serde_json::to_string(&response)?;
+            socket.send(Message::Text(response_json)).await.ok();
+
+            if success {
+                println!("✅ Sent accessibility tree for PID {}", ax_request.pid);
+            } else {
+                println!(
+                    "❌ Failed to get accessibility tree for PID {}",
+                    ax_request.pid
+                );
+            }
+        } else {
+            println!(
+                "🤔 AccessibilityTreeRequest with unexpected type: {}",
+                ax_request.msg_type
+            );
+        }
+    }
+    // Catch-all for unrecognized messages
+    else {
+        println!("❓ Unrecognized message format: {}", message);
     }
 
     Ok(())

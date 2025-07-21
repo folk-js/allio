@@ -236,14 +236,18 @@ class AXTreeOverlay {
   }
 
   private handleAccessibilityWriteResponse(data: ServerMessage) {
+    console.log(`📨 Received write response:`, data);
+
     if (data.success) {
       console.log(`✅ Write successful: ${data.message}`);
       // Show success feedback
       this.showWriteFeedback(true, data.message || "Write successful");
 
       // Refresh the tree to show updated values
-      if (this.focusedWindow) {
-        this.requestAccessibilityTree(this.focusedWindow.process_id);
+      const targetWindow = this.lastNonOverlayWindow || this.focusedWindow;
+      if (targetWindow) {
+        console.log(`🔄 Refreshing tree for ${targetWindow.name}`);
+        this.requestAccessibilityTree(targetWindow.process_id);
       }
     } else {
       console.error(`❌ Write failed: ${data.error}`);
@@ -286,8 +290,17 @@ class AXTreeOverlay {
   }
 
   private writeToElement(elementPath: string, currentValue: string) {
-    if (!this.focusedWindow) {
-      console.error("No focused window to write to");
+    // Use the last non-overlay window since overlay steals focus when clicked
+    const targetWindow = this.lastNonOverlayWindow || this.focusedWindow;
+
+    console.log(`🪟 Available windows:`, {
+      lastNonOverlayWindow: this.lastNonOverlayWindow,
+      focusedWindow: this.focusedWindow,
+      targetWindow: targetWindow,
+    });
+
+    if (!targetWindow) {
+      console.error("No target window to write to");
       return;
     }
 
@@ -297,24 +310,27 @@ class AXTreeOverlay {
       .map((s) => parseInt(s, 10))
       .filter((n) => !isNaN(n));
 
-    // Prompt user for text
-    const newText = prompt(
-      `Write to element (current: "${currentValue}"):\n\nPath: ${elementPath}`,
-      currentValue || ""
+    // Just write test text directly - no prompt needed
+    const testText = "Hello World - Test Text";
+
+    console.log(`📝 Writing "${testText}" to element at path: ${pathArray}`);
+    console.log(
+      `🎯 Target: ${targetWindow.name} (PID: ${targetWindow.process_id})`
     );
+    console.log(`🔗 Element path: [${pathArray.join(", ")}]`);
 
-    if (newText !== null) {
-      // User didn't cancel
-      console.log(`📝 Writing "${newText}" to element at path: ${pathArray}`);
+    // Send write request using target window PID
+    const writeRequest = {
+      type: "write_to_element",
+      pid: targetWindow.process_id,
+      element_path: pathArray,
+      text: testText,
+    };
 
-      // Send write request
-      this.wsClient.send({
-        type: "write_to_element",
-        pid: this.focusedWindow.process_id,
-        element_path: pathArray,
-        text: newText,
-      });
-    }
+    console.log(`📦 Sending WebSocket message:`, writeRequest);
+    this.wsClient.send(writeRequest);
+
+    console.log(`✉️ Sent write request via WebSocket`);
   }
 
   private refreshTreeContent(tree: UITreeNode, window: WindowInfo) {
@@ -527,6 +543,9 @@ class AXTreeOverlay {
 
       writeButton.addEventListener("click", (e) => {
         e.stopPropagation();
+        e.preventDefault();
+        // Prevent the overlay from stealing focus
+        (e.target as HTMLElement).blur();
         this.writeToElement(node.element_id!, node.value || "");
       });
 
