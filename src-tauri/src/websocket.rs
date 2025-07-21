@@ -13,6 +13,7 @@ use std::{collections::HashSet, sync::Arc};
 use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 
+use crate::accessibility::{walk_app_tree_by_pid, UITreeNode};
 use crate::windows::{WindowInfo, WindowUpdatePayload};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -23,12 +24,36 @@ struct ClientIdentification {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+struct AccessibilityTreeRequest {
+    #[serde(rename = "type")]
+    msg_type: String,
+    pid: u32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct ServerResponse {
     #[serde(rename = "type")]
     msg_type: String,
     window_id: Option<String>,
     success: bool,
     message: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AccessibilityTreeResponse {
+    #[serde(rename = "type")]
+    msg_type: String,
+    pid: u32,
+    success: bool,
+    tree: Option<UITreeNode>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct OverlayInfoResponse {
+    #[serde(rename = "type")]
+    msg_type: String,
+    overlay_pid: u32,
 }
 
 // WebSocket state for broadcasting to clients
@@ -141,6 +166,18 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
 
     println!("🔗 Client session started");
 
+    // Send overlay PID immediately when client connects
+    let overlay_info = OverlayInfoResponse {
+        msg_type: "overlay_info".to_string(),
+        overlay_pid: std::process::id(),
+    };
+
+    if let Ok(overlay_json) = serde_json::to_string(&overlay_info) {
+        if socket.send(Message::Text(overlay_json)).await.is_ok() {
+            println!("📡 Sent overlay PID {} to client", std::process::id());
+        }
+    }
+
     let mut current_window_id: Option<String> = None;
 
     loop {
@@ -191,6 +228,7 @@ async fn handle_client_message(
     ws_state: &WebSocketState,
     socket: &mut WebSocket,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Try to parse as ClientIdentification first
     if let Ok(identification) = serde_json::from_str::<ClientIdentification>(message) {
         println!(
             "🎯 Client requesting identification at ({}, {}) width: {}px",
@@ -229,6 +267,41 @@ async fn handle_client_message(
 
         let response_json = serde_json::to_string(&response)?;
         socket.send(Message::Text(response_json)).await.ok();
+    }
+    // Try to parse as AccessibilityTreeRequest
+    else if let Ok(ax_request) = serde_json::from_str::<AccessibilityTreeRequest>(message) {
+        if ax_request.msg_type == "get_accessibility_tree" {
+            println!(
+                "🌳 Client requesting accessibility tree for PID: {}",
+                ax_request.pid
+            );
+
+            // Get the accessibility tree
+            let (success, tree, error) = match walk_app_tree_by_pid(ax_request.pid) {
+                Ok(tree) => (true, Some(tree), None),
+                Err(e) => (false, None, Some(e)),
+            };
+
+            let response = AccessibilityTreeResponse {
+                msg_type: "accessibility_tree_response".to_string(),
+                pid: ax_request.pid,
+                success,
+                tree,
+                error,
+            };
+
+            let response_json = serde_json::to_string(&response)?;
+            socket.send(Message::Text(response_json)).await.ok();
+
+            if success {
+                println!("✅ Sent accessibility tree for PID {}", ax_request.pid);
+            } else {
+                println!(
+                    "❌ Failed to get accessibility tree for PID {}",
+                    ax_request.pid
+                );
+            }
+        }
     }
 
     Ok(())
