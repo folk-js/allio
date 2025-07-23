@@ -163,11 +163,18 @@ fn walk_element_tree(
 
     let value = element.attribute(&AXAttribute::value()).ok().and_then(|v| {
         let debug_str = format!("{:?}", v);
-        // Filter out empty, null, or weird debug formatting
+        // Strip quotes and filter out empty, null, or weird formatting
         if debug_str.is_empty() || debug_str == "null" || debug_str.contains("{contents = \"\"}") {
             None
         } else {
-            Some(debug_str)
+            // Remove surrounding quotes if present
+            let clean_str =
+                if debug_str.starts_with('"') && debug_str.ends_with('"') && debug_str.len() > 1 {
+                    debug_str[1..debug_str.len() - 1].to_string()
+                } else {
+                    debug_str
+                };
+            Some(clean_str)
         }
     });
 

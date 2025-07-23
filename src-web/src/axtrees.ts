@@ -236,22 +236,12 @@ class AXTreeOverlay {
   }
 
   private handleAccessibilityWriteResponse(data: ServerMessage) {
-    console.log(`📨 Received write response:`, data);
-
     if (data.success) {
       console.log(`✅ Write successful: ${data.message}`);
-      // Show success feedback
-      this.showWriteFeedback(true, data.message || "Write successful");
-
-      // Refresh the tree to show updated values
-      const targetWindow = this.lastNonOverlayWindow || this.focusedWindow;
-      if (targetWindow) {
-        console.log(`🔄 Refreshing tree for ${targetWindow.name}`);
-        this.requestAccessibilityTree(targetWindow.process_id);
-      }
+      // Don't auto-refresh tree to avoid losing focus on live text inputs
+      // The user can manually refresh if needed
     } else {
       console.error(`❌ Write failed: ${data.error}`);
-      this.showWriteFeedback(false, data.error || "Write failed");
     }
   }
 
@@ -289,15 +279,9 @@ class AXTreeOverlay {
     }, 3000);
   }
 
-  private writeToElement(elementPath: string, currentValue: string) {
+  private writeToElement(elementPath: string, text: string) {
     // Use the last non-overlay window since overlay steals focus when clicked
     const targetWindow = this.lastNonOverlayWindow || this.focusedWindow;
-
-    console.log(`🪟 Available windows:`, {
-      lastNonOverlayWindow: this.lastNonOverlayWindow,
-      focusedWindow: this.focusedWindow,
-      targetWindow: targetWindow,
-    });
 
     if (!targetWindow) {
       console.error("No target window to write to");
@@ -310,27 +294,15 @@ class AXTreeOverlay {
       .map((s) => parseInt(s, 10))
       .filter((n) => !isNaN(n));
 
-    // Just write test text directly - no prompt needed
-    const testText = "Hello World - Test Text";
-
-    console.log(`📝 Writing "${testText}" to element at path: ${pathArray}`);
-    console.log(
-      `🎯 Target: ${targetWindow.name} (PID: ${targetWindow.process_id})`
-    );
-    console.log(`🔗 Element path: [${pathArray.join(", ")}]`);
-
     // Send write request using target window PID
     const writeRequest = {
       type: "write_to_element",
       pid: targetWindow.process_id,
       element_path: pathArray,
-      text: testText,
+      text: text,
     };
 
-    console.log(`📦 Sending WebSocket message:`, writeRequest);
     this.wsClient.send(writeRequest);
-
-    console.log(`✉️ Sent write request via WebSocket`);
   }
 
   private refreshTreeContent(tree: UITreeNode, window: WindowInfo) {
@@ -517,7 +489,7 @@ class AXTreeOverlay {
 
     nodeContent.appendChild(nodeInfo);
 
-    // Add write button for writable elements
+    // Add live text input for writable elements
     if (
       node.element_id &&
       (node.role === "AXTextField" ||
@@ -525,39 +497,48 @@ class AXTreeOverlay {
         node.role === "AXComboBox" ||
         node.role === "AXSecureTextField")
     ) {
-      const writeButton = document.createElement("button");
-      writeButton.className = "tree-write-button";
-      writeButton.textContent = "✏️";
-      writeButton.title = `Write to ${node.role}`;
-      writeButton.style.cssText = `
+      const textInput = document.createElement("input");
+      textInput.type = "text";
+      textInput.className = "tree-text-input";
+      textInput.value = node.value || "";
+      textInput.placeholder = "Type to update...";
+      textInput.title = `Live edit ${node.role}`;
+      textInput.style.cssText = `
         margin-left: 8px;
         padding: 2px 6px;
         font-size: 10px;
-        background: #4fc3f7;
+        background: #2a2a2a;
         color: white;
-        border: none;
+        border: 1px solid #4fc3f7;
         border-radius: 3px;
-        cursor: pointer;
-        opacity: 0.8;
+        width: 120px;
+        outline: none;
       `;
 
-      writeButton.addEventListener("click", (e) => {
+      // Update on every keystroke
+      textInput.addEventListener("input", (e) => {
         e.stopPropagation();
-        e.preventDefault();
-        // Prevent the overlay from stealing focus
-        (e.target as HTMLElement).blur();
-        this.writeToElement(node.element_id!, node.value || "");
+        const inputValue = (e.target as HTMLInputElement).value;
+        this.writeToElement(node.element_id!, inputValue);
       });
 
-      writeButton.addEventListener("mouseenter", () => {
-        writeButton.style.opacity = "1";
+      // Prevent clicks from affecting tree expansion
+      textInput.addEventListener("click", (e) => {
+        e.stopPropagation();
       });
 
-      writeButton.addEventListener("mouseleave", () => {
-        writeButton.style.opacity = "0.8";
+      // Styling on focus
+      textInput.addEventListener("focus", () => {
+        textInput.style.borderColor = "#81d4fa";
+        textInput.style.background = "#1a1a1a";
       });
 
-      nodeContent.appendChild(writeButton);
+      textInput.addEventListener("blur", () => {
+        textInput.style.borderColor = "#4fc3f7";
+        textInput.style.background = "#2a2a2a";
+      });
+
+      nodeContent.appendChild(textInput);
     }
 
     nodeElement.appendChild(nodeContent);

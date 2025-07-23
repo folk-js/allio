@@ -154,29 +154,35 @@
         font-size: 9px;
       }
 
-      /* Write button styles */
-      .tree-write-button {
+      /* Live text input styles */
+      .tree-text-input {
         margin-left: 8px !important;
         padding: 2px 6px !important;
         font-size: 10px !important;
-        background: #4fc3f7 !important;
+        background: #2a2a2a !important;
         color: white !important;
-        border: none !important;
+        border: 1px solid #4fc3f7 !important;
         border-radius: 3px !important;
-        cursor: pointer !important;
-        opacity: 0.8 !important;
-        transition: all 0.2s ease !important;
+        width: 120px !important;
+        outline: none !important;
         flex-shrink: 0 !important;
+        font-family: "Monaco", "Menlo", "Consolas", monospace !important;
+        transition: all 0.2s ease !important;
       }
 
-      .tree-write-button:hover {
-        opacity: 1 !important;
-        background: #29b6f6 !important;
-        transform: scale(1.1) !important;
+      .tree-text-input:focus {
+        border-color: #81d4fa !important;
+        background: #1a1a1a !important;
+        box-shadow: 0 0 4px rgba(129, 212, 250, 0.3) !important;
       }
 
-      .tree-write-button:active {
-        transform: scale(0.95) !important;
+      .tree-text-input:hover {
+        border-color: #81d4fa !important;
+      }
+
+      .tree-text-input::placeholder {
+        color: #666 !important;
+        font-style: italic !important;
       }
 
       /* Write feedback styles */

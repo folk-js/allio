@@ -295,10 +295,7 @@ async fn handle_client_message(
             write_request
         );
         if write_request.msg_type == "write_to_element" {
-            println!(
-                "✏️ Client requesting write to element in PID: {}, path: {:?}, text: '{}'",
-                write_request.pid, write_request.element_path, write_request.text
-            );
+            // Reduced logging for live updates to avoid spam
 
             // Attempt to write to the element
             let (success, message, error) = match write_to_element_by_pid_and_path(
@@ -325,14 +322,7 @@ async fn handle_client_message(
             let response_json = serde_json::to_string(&response)?;
             socket.send(Message::Text(response_json)).await.ok();
 
-            if success {
-                println!(
-                    "✅ Successfully wrote to element in PID {}",
-                    write_request.pid
-                );
-            } else {
-                println!("❌ Failed to write to element in PID {}", write_request.pid);
-            }
+            // Reduced logging for live updates
         }
     }
     // Try to parse as AccessibilityTreeRequest (less specific)
