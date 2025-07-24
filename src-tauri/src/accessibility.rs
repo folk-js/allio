@@ -112,12 +112,6 @@ fn is_writable_element(role: &str) -> bool {
     )
 }
 
-/// Walk the UI tree of a specific application by PID
-pub fn walk_app_tree_by_pid(pid: u32) -> Result<UITreeNode, String> {
-    // Use default limits for backward compatibility
-    walk_app_tree_by_pid_with_limits(pid, 50, 2000)
-}
-
 /// Walk the UI tree of a specific application by PID with configurable limits
 pub fn walk_app_tree_by_pid_with_limits(
     pid: u32,

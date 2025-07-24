@@ -334,7 +334,7 @@ class AXTreeOverlay {
     }
   }
 
-  private writeToElement(elementPath: string, text: string) {
+  private writeToElement(elementPath: string, text: string, pid: number) {
     // Use the last non-overlay window since overlay steals focus when clicked
     const targetWindow = this.lastNonOverlayWindow || this.focusedWindow;
 
@@ -352,7 +352,7 @@ class AXTreeOverlay {
     // Send write request using target window PID
     const writeRequest = {
       type: "write_to_element",
-      pid: targetWindow.process_id,
+      pid: pid,
       element_path: pathArray,
       text: text,
     };
@@ -372,9 +372,12 @@ class AXTreeOverlay {
       // Clear existing content
       contentWrapper.innerHTML = "";
 
-      // Create new tree content with preserved expansion state
-      const treeContent = this.createTreeElement(tree);
-      contentWrapper.appendChild(treeContent);
+      // Create new tree content with preserved expansion state and filtering
+      const filteredTree = this.filterEmptyGroups(tree);
+      if (filteredTree) {
+        const treeContent = this.createTreeElement(filteredTree);
+        contentWrapper.appendChild(treeContent);
+      }
 
       console.log(`🔄 Refreshed tree content for ${window.name}`);
     }
@@ -403,9 +406,14 @@ class AXTreeOverlay {
     // Create tree content and add it to the wrapper
     console.log(`🏗️ Starting tree element creation...`);
     this.renderedNodeCount = 0; // Reset counter
-    const treeContent = this.createTreeElement(tree);
-    console.log(`🎯 Rendered ${this.renderedNodeCount} DOM elements`);
-    contentWrapper.appendChild(treeContent);
+    const filteredTree = this.filterEmptyGroups(tree);
+    if (filteredTree) {
+      const treeContent = this.createTreeElement(filteredTree);
+      console.log(`🎯 Rendered ${this.renderedNodeCount} DOM elements`);
+      contentWrapper.appendChild(treeContent);
+    } else {
+      console.log("🚫 Entire tree was filtered out");
+    }
 
     // Add wrapper to container
     this.treeContainer.appendChild(contentWrapper);
@@ -563,33 +571,42 @@ class AXTreeOverlay {
           node.role === "AXComboBox" ||
           node.role === "AXSecureTextField")
       ) {
-        // Create container for input elements
+        // Container for input and regex button
         const inputContainer = document.createElement("div");
         inputContainer.className = "tree-input-container";
 
+        // Live text input
         const textInput = document.createElement("input");
-        textInput.type = "text";
         textInput.className = "tree-text-input";
+        textInput.type = "text";
 
-        // Parse CFString format for the input value
+        // Use raw parsed value for editing (not role-formatted)
         const cleanValue = this.parseCFStringValue(node.value || "");
         textInput.value = cleanValue;
-        textInput.placeholder = "Type to update...";
-        textInput.title = `Live edit ${node.role}`;
+        textInput.placeholder = "Enter text...";
 
-        // Update on every keystroke
-        textInput.addEventListener("input", (e) => {
-          e.stopPropagation();
-          const inputValue = (e.target as HTMLInputElement).value;
-          this.writeToElement(node.element_id!, inputValue);
+        // Add write functionality on Enter key
+        textInput.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            e.stopPropagation();
+
+            if (this.focusedWindow) {
+              this.writeToElement(
+                node.element_id!,
+                textInput.value,
+                this.focusedWindow.process_id
+              );
+            }
+          }
         });
 
-        // Prevent clicks from affecting tree expansion
+        // Prevent input clicks from affecting tree expansion
         textInput.addEventListener("click", (e) => {
           e.stopPropagation();
         });
 
-        // Add regex find & replace button
+        // Regex button
         const regexButton = document.createElement("button");
         regexButton.className = "tree-regex-button";
         regexButton.textContent = ".*";
@@ -633,7 +650,13 @@ class AXTreeOverlay {
         }
 
         for (const child of node.children) {
-          childrenContainer.appendChild(this.createTreeElement(child));
+          // Filter each child and only add non-null filtered nodes
+          const filteredChild = this.filterEmptyGroups(child);
+          if (filteredChild) {
+            childrenContainer.appendChild(
+              this.createTreeElement(filteredChild)
+            );
+          }
         }
 
         nodeElement.appendChild(childrenContainer);
@@ -1129,7 +1152,11 @@ class AXTreeOverlay {
         );
 
         // Apply the change
-        this.writeToElement(this.currentTargetElement!.elementId, result);
+        this.writeToElement(
+          this.currentTargetElement!.elementId,
+          result,
+          this.focusedWindow!.process_id
+        );
 
         // Update stored current value
         this.currentTargetElement!.currentValue = result;
@@ -1246,6 +1273,37 @@ class AXTreeOverlay {
 
       return result;
     });
+  }
+
+  private filterEmptyGroups(node: UITreeNode): UITreeNode | null {
+    // First, recursively filter children
+    const filteredChildren = node.children
+      .map((child) => this.filterEmptyGroups(child))
+      .filter((child): child is UITreeNode => child !== null);
+
+    // Check if this is an empty group that should be filtered out
+    if (node.role === "AXGroup") {
+      // Filter out AXGroup if it has no meaningful content
+      const hasTitle = node.title && node.title.trim() !== "";
+      const hasValue = node.value && node.value.trim() !== "";
+      const hasDescription = node.description && node.description.trim() !== "";
+      const hasPlaceholder = node.placeholder && node.placeholder.trim() !== "";
+      const hasChildren = filteredChildren.length > 0;
+
+      // Keep the group only if it has some meaningful content or children
+      if (
+        !hasTitle &&
+        !hasValue &&
+        !hasDescription &&
+        !hasPlaceholder &&
+        !hasChildren
+      ) {
+        return null; // Filter out this empty group
+      }
+    }
+
+    // Return the node with filtered children
+    return { ...node, children: filteredChildren };
   }
 }
 
