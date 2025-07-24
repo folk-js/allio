@@ -61,6 +61,7 @@ class AXTreeOverlay {
     elementId: string;
     currentValue: string;
   } | null = null;
+  private currentTreeData: UITreeNode | null = null; // Store the current tree data for position lookups
 
   constructor() {
     this.windowContainer = document.getElementById("windowContainer")!;
@@ -74,8 +75,9 @@ class AXTreeOverlay {
   }
 
   /**
-   * Parse CFString debug output and extract the actual content
+   * Parse CFString and CFNumber debug output and extract the actual content
    * Example: '<CFString 0x155fff590 [0x20c4c0998]>{contents = "hello world"}' -> 'hello world'
+   * Example: '<CFNumber 0x9c12b19d15f2a744 [0x20c4c0998]>{value = +1, type = kCFNumberSInt32Type}' -> '1'
    */
   private parseCFStringValue(value: string): string {
     if (!value) return value;
@@ -86,14 +88,51 @@ class AXTreeOverlay {
       return cfStringMatch[1];
     }
 
+    // Check if this is a CFNumber debug representation
+    const cfNumberMatch = value.match(/\{value = \+?(-?\d+(?:\.\d+)?)/);
+    if (cfNumberMatch && cfNumberMatch[1] !== undefined) {
+      return cfNumberMatch[1];
+    }
+
     // Handle other potential CFString formats
     const simpleCFMatch = value.match(/CFString.*?"(.*?)"/);
     if (simpleCFMatch && simpleCFMatch[1] !== undefined) {
       return simpleCFMatch[1];
     }
 
-    // If it's not a CFString format, return as-is
+    // If it's not a CF format, return as-is
     return value;
+  }
+
+  /**
+   * Format values with special handling for different UI element types
+   */
+  private formatValueForRole(value: string, role: string): string {
+    const cleanValue = this.parseCFStringValue(value);
+
+    // Special formatting for radio buttons and checkboxes
+    if (role === "AXRadioButton" || role.includes("RadioButton")) {
+      if (cleanValue === "1") {
+        return "selected";
+      } else if (cleanValue === "0") {
+        return "unselected";
+      }
+    }
+
+    if (role === "AXCheckBox" || role.includes("CheckBox")) {
+      if (cleanValue === "1") {
+        return "checked";
+      } else if (cleanValue === "0") {
+        return "unchecked";
+      }
+    }
+
+    // For sliders and progress indicators, keep numeric values
+    if (role === "AXSlider" || role === "AXProgressIndicator") {
+      return cleanValue;
+    }
+
+    return cleanValue;
   }
 
   private async setupWebSocketListener() {
@@ -339,20 +378,20 @@ class AXTreeOverlay {
   private refreshTreeContent(tree: UITreeNode, window: WindowInfo) {
     if (!this.treeContainer) return;
 
-    // Find the content wrapper and update it
+    // Store the updated tree data
+    this.currentTreeData = tree;
+
+    // Find the content wrapper
     const contentWrapper = this.treeContainer.querySelector(".tree-content");
     if (contentWrapper) {
-      // Clear existing content but preserve container
+      // Clear existing content
       contentWrapper.innerHTML = "";
 
-      // Create new tree content with preserved expanded state
+      // Create new tree content with preserved expansion state
       const treeContent = this.createTreeElement(tree);
       contentWrapper.appendChild(treeContent);
 
-      // Update position in case window moved
-      this.updateTreePosition();
-
-      console.log(`🔄 Refreshed accessibility tree content for ${window.name}`);
+      console.log(`🔄 Refreshed tree content for ${window.name}`);
     }
   }
 
@@ -369,8 +408,8 @@ class AXTreeOverlay {
     const rightX = window.x + window.w + 10; // 10px margin
     this.treeContainer.style.left = `${rightX}px`;
     this.treeContainer.style.top = `${window.y}px`;
-    // Set height to create a fixed-size container
-    this.treeContainer.style.height = `${Math.min(window.h - 20, 800)}px`;
+    // Set height to match window height exactly
+    this.treeContainer.style.height = `${Math.min(window.h, 800)}px`;
 
     // Create scrollable content wrapper
     const contentWrapper = document.createElement("div");
@@ -385,6 +424,9 @@ class AXTreeOverlay {
 
     this.windowContainer.appendChild(this.treeContainer);
     console.log(`✅ Displayed accessibility tree for ${window.name}`);
+
+    // Store the current tree data for position lookups
+    this.currentTreeData = tree;
 
     // Start auto-refresh timer
     this.startRefreshTimer();
@@ -461,18 +503,18 @@ class AXTreeOverlay {
       const valueSpan = document.createElement("span");
       valueSpan.className = "tree-value";
 
-      // Parse CFString format and get clean value
-      const cleanValue = this.parseCFStringValue(node.value);
+      // Parse and format value based on role
+      const formattedValue = this.formatValueForRole(node.value, node.role);
 
       // For text fields, show more detailed value information
       if (node.role === "AXTextField" || node.role === "AXTextArea") {
-        let valueText = ` = "${cleanValue}"`;
+        let valueText = ` = "${formattedValue}"`;
         if (node.character_count !== undefined) {
           valueText += ` (${node.character_count} chars)`;
         }
         valueSpan.textContent = valueText;
       } else {
-        valueSpan.textContent = ` = ${cleanValue}`;
+        valueSpan.textContent = ` = ${formattedValue}`;
       }
       nodeInfo.appendChild(valueSpan);
     }
@@ -532,6 +574,10 @@ class AXTreeOverlay {
         node.role === "AXComboBox" ||
         node.role === "AXSecureTextField")
     ) {
+      // Create container for input elements
+      const inputContainer = document.createElement("div");
+      inputContainer.className = "tree-input-container";
+
       const textInput = document.createElement("input");
       textInput.type = "text";
       textInput.className = "tree-text-input";
@@ -541,17 +587,6 @@ class AXTreeOverlay {
       textInput.value = cleanValue;
       textInput.placeholder = "Type to update...";
       textInput.title = `Live edit ${node.role}`;
-      textInput.style.cssText = `
-        margin-left: 8px;
-        padding: 2px 6px;
-        font-size: 10px;
-        background: #2a2a2a;
-        color: white;
-        border: 1px solid #4fc3f7;
-        border-radius: 3px;
-        width: 120px;
-        outline: none;
-      `;
 
       // Update on every keystroke
       textInput.addEventListener("input", (e) => {
@@ -565,41 +600,16 @@ class AXTreeOverlay {
         e.stopPropagation();
       });
 
-      // Styling on focus
-      textInput.addEventListener("focus", () => {
-        textInput.style.borderColor = "#81d4fa";
-        textInput.style.background = "#1a1a1a";
-      });
-
-      textInput.addEventListener("blur", () => {
-        textInput.style.borderColor = "#4fc3f7";
-        textInput.style.background = "#2a2a2a";
-      });
-
-      nodeContent.appendChild(textInput);
-
       // Add regex find & replace button
       const regexButton = document.createElement("button");
       regexButton.className = "tree-regex-button";
       regexButton.textContent = ".*";
       regexButton.title = "Open regex find & replace";
-      regexButton.style.cssText = `
-        margin-left: 4px;
-        padding: 2px 6px;
-        font-size: 10px;
-        background: #ff9800;
-        color: white;
-        border: none;
-        border-radius: 3px;
-        cursor: pointer;
-        font-family: monospace;
-        outline: none;
-        transition: background-color 0.2s;
-      `;
 
       regexButton.addEventListener("click", (e) => {
         e.stopPropagation();
-        // Use clean value for regex operations and pass element position/size
+
+        // Use raw parsed value for regex operations (not role-formatted)
         this.openRegexPanel(
           node.element_id!,
           cleanValue,
@@ -608,15 +618,16 @@ class AXTreeOverlay {
         );
       });
 
-      regexButton.addEventListener("mouseenter", () => {
-        regexButton.style.backgroundColor = "#ffb74d";
+      // Add elements to container
+      inputContainer.appendChild(textInput);
+      inputContainer.appendChild(regexButton);
+
+      // Prevent container clicks from affecting tree expansion
+      inputContainer.addEventListener("click", (e) => {
+        e.stopPropagation();
       });
 
-      regexButton.addEventListener("mouseleave", () => {
-        regexButton.style.backgroundColor = "#ff9800";
-      });
-
-      nodeContent.appendChild(regexButton);
+      nodeContent.appendChild(inputContainer);
     }
 
     nodeElement.appendChild(nodeContent);
@@ -676,15 +687,88 @@ class AXTreeOverlay {
         const rightX = referenceWindow.x + referenceWindow.w + 10;
         this.treeContainer.style.left = `${rightX}px`;
         this.treeContainer.style.top = `${referenceWindow.y}px`;
-        // Set height to maintain fixed-size container
+        // Set height to match window height exactly
         this.treeContainer.style.height = `${Math.min(
-          referenceWindow.h - 20,
+          referenceWindow.h,
           800
         )}px`;
       } else {
         console.warn("⚠️ No reference window available for positioning tree");
       }
     }
+
+    // Also update regex panel position if it's open
+    this.updateRegexPanelPosition();
+  }
+
+  private updateRegexPanelPosition() {
+    if (
+      this.regexPanel &&
+      this.regexPanel.classList.contains("positioned-relative")
+    ) {
+      // Use the last non-overlay window if available, otherwise fall back to focused window
+      const referenceWindow = this.lastNonOverlayWindow || this.focusedWindow;
+      if (referenceWindow) {
+        // Get the target element's position and size from when the panel was opened
+        if (this.currentTargetElement) {
+          // Find the element in the current tree to get updated position
+          const elementPath = this.currentTargetElement.elementId
+            .split("-")
+            .map((s) => parseInt(s, 10));
+
+          const elementPosition = this.getElementPositionFromTree(elementPath);
+
+          if (elementPosition) {
+            const [x, y] = elementPosition.position;
+            const [width, height] = elementPosition.size;
+
+            // Calculate new position (consistent with openRegexPanel)
+            const panelX = Math.max(10, x + width / 2 - 140); // Center panel (280px wide / 2 = 140px offset)
+            const panelY = y + height + 6; // 6px below the element
+
+            // Ensure panel doesn't go off-screen
+            const maxX = window.screen.width - 300; // Panel width + margin
+            const maxY = window.screen.height - 180; // Estimated panel height + margin
+
+            const finalX = Math.min(panelX, maxX);
+            const finalY = Math.min(panelY, maxY);
+
+            this.regexPanel.style.left = `${finalX}px`;
+            this.regexPanel.style.top = `${finalY}px`;
+          }
+        }
+      }
+    }
+  }
+
+  private getElementPositionFromTree(
+    elementPath: number[]
+  ): { position: [number, number]; size: [number, number] } | null {
+    if (!this.currentTreeData) {
+      return null;
+    }
+
+    // Traverse the tree following the element path
+    let currentNode = this.currentTreeData;
+
+    for (let i = 0; i < elementPath.length; i++) {
+      const pathIndex = elementPath[i];
+
+      if (!currentNode.children || pathIndex >= currentNode.children.length) {
+        return null;
+      }
+      currentNode = currentNode.children[pathIndex];
+    }
+
+    // Return position and size if available
+    if (currentNode.position && currentNode.size) {
+      return {
+        position: [currentNode.position[0], currentNode.position[1]],
+        size: [currentNode.size[0], currentNode.size[1]],
+      };
+    }
+
+    return null;
   }
 
   private clearAccessibilityTree() {
@@ -759,18 +843,18 @@ class AXTreeOverlay {
     // Calculate position - prefer positioning below the element if position is available
     let panelStyle = `
       position: fixed;
-      background: rgba(0, 0, 0, 0.95);
+      background: rgba(30, 30, 30, 0.98);
       color: white;
-      padding: 20px;
+      padding: 12px;
       border-radius: 8px;
-      border: 1px solid rgba(255, 255, 255, 0.3);
-      min-width: 400px;
-      max-width: 600px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      min-width: 280px;
+      max-width: 400px;
       z-index: 2000;
-      backdrop-filter: blur(15px);
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-        sans-serif;
+      backdrop-filter: blur(20px);
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
+      font-size: 13px;
       pointer-events: auto;
     `;
 
@@ -780,12 +864,12 @@ class AXTreeOverlay {
       const [width, height] = elementSize;
 
       // Calculate position below the element
-      const panelX = Math.max(10, x + width / 2 - 200); // Center panel (400px wide / 2 = 200px offset)
-      const panelY = y + height + 10; // 10px below the element
+      const panelX = Math.max(10, x + width / 2 - 140); // Center panel (280px wide / 2 = 140px offset)
+      const panelY = y + height + 6; // 6px below the element
 
       // Ensure panel doesn't go off-screen
-      const maxX = window.screen.width - 420; // Panel width + some margin
-      const maxY = window.screen.height - 400; // Estimated panel height + margin
+      const maxX = window.screen.width - 300; // Panel width + margin
+      const maxY = window.screen.height - 180; // Estimated panel height + margin
 
       const finalX = Math.min(panelX, maxX);
       const finalY = Math.min(panelY, maxY);
@@ -800,7 +884,7 @@ class AXTreeOverlay {
       this.regexPanel.classList.add("positioned-relative");
 
       console.log(
-        `🎯 Positioning regex panel relative to element at (${x}, ${y}) size (${width}x${height}) → panel at (${finalX}, ${finalY})`
+        `🎯 Positioning regex panel at (${finalX}, ${finalY}) below element at (${x}, ${y})`
       );
     } else {
       // Fallback to center positioning
@@ -821,389 +905,281 @@ class AXTreeOverlay {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 15px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-      padding-bottom: 10px;
+      margin-bottom: 10px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
     `;
 
     const title = document.createElement("h3");
-    title.textContent = "Regex Find & Replace";
+    title.textContent = "Find & Replace";
     title.style.cssText = `
       margin: 0;
-      color: #4fc3f7;
-      font-size: 16px;
+      color: #ffffff;
+      font-size: 13px;
+      font-weight: 600;
     `;
 
     const closeButton = document.createElement("button");
-    closeButton.textContent = "×";
+    closeButton.textContent = "✕";
     closeButton.style.cssText = `
       background: none;
       border: none;
-      color: #fff;
-      font-size: 20px;
+      color: #999;
+      font-size: 14px;
       cursor: pointer;
-      padding: 0;
-      width: 24px;
-      height: 24px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      padding: 2px 6px;
+      border-radius: 4px;
+      transition: color 0.2s;
     `;
+    closeButton.addEventListener("mouseover", () => {
+      closeButton.style.color = "#fff";
+    });
+    closeButton.addEventListener("mouseout", () => {
+      closeButton.style.color = "#999";
+    });
     closeButton.addEventListener("click", () => this.closeRegexPanel());
 
     header.appendChild(title);
     header.appendChild(closeButton);
-    this.regexPanel.appendChild(header);
 
-    // Current value display
-    const currentValueSection = document.createElement("div");
-    currentValueSection.style.marginBottom = "15px";
-
-    const currentValueLabel = document.createElement("label");
-    currentValueLabel.textContent = "Current Value:";
-    currentValueLabel.style.cssText = `
+    // Pattern input
+    const patternLabel = document.createElement("label");
+    patternLabel.textContent = "Pattern:";
+    patternLabel.style.cssText = `
       display: block;
-      margin-bottom: 5px;
+      margin-bottom: 4px;
+      color: #ccc;
       font-size: 12px;
-      color: #aaa;
     `;
 
-    const currentValueDisplay = document.createElement("div");
-    // Show the clean value, not the CFString format
-    currentValueDisplay.textContent = cleanCurrentValue || "(empty)";
-    currentValueDisplay.style.cssText = `
-      background: #1a1a1a;
-      padding: 8px;
-      border-radius: 4px;
-      border: 1px solid #333;
-      font-family: "Monaco", "Menlo", "Consolas", monospace;
-      font-size: 11px;
-      max-height: 60px;
-      overflow-y: auto;
-      word-break: break-all;
-    `;
-
-    // Add a small note if the original value was a CFString
-    if (currentValue !== cleanCurrentValue) {
-      const cfStringNote = document.createElement("div");
-      cfStringNote.textContent = `(Parsed from CFString format)`;
-      cfStringNote.style.cssText = `
-        font-size: 10px;
-        color: #666;
-        font-style: italic;
-        margin-top: 4px;
-      `;
-      currentValueSection.appendChild(currentValueLabel);
-      currentValueSection.appendChild(currentValueDisplay);
-      currentValueSection.appendChild(cfStringNote);
-    } else {
-      currentValueSection.appendChild(currentValueLabel);
-      currentValueSection.appendChild(currentValueDisplay);
-    }
-
-    this.regexPanel.appendChild(currentValueSection);
-
-    // Find input
-    const findSection = document.createElement("div");
-    findSection.style.marginBottom = "10px";
-
-    const findLabel = document.createElement("label");
-    findLabel.textContent = "Find (Regex Pattern):";
-    findLabel.style.cssText = `
-      display: block;
-      margin-bottom: 5px;
-      font-size: 12px;
-      color: #aaa;
-    `;
-
-    const findInput = document.createElement("input");
-    findInput.type = "text";
-    findInput.placeholder = "Enter regex pattern...";
-    findInput.style.cssText = `
+    const patternInput = document.createElement("input");
+    patternInput.type = "text";
+    patternInput.placeholder = "/find/gi or just: find";
+    patternInput.style.cssText = `
       width: 100%;
-      padding: 8px;
-      background: #2a2a2a;
-      color: white;
-      border: 1px solid #4fc3f7;
+      padding: 6px 8px;
+      margin-bottom: 8px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
       border-radius: 4px;
-      font-family: "Monaco", "Menlo", "Consolas", monospace;
+      color: white;
       font-size: 12px;
-      outline: none;
+      font-family: "SF Mono", Monaco, monospace;
       box-sizing: border-box;
     `;
 
-    findSection.appendChild(findLabel);
-    findSection.appendChild(findInput);
-    this.regexPanel.appendChild(findSection);
-
     // Replace input
-    const replaceSection = document.createElement("div");
-    replaceSection.style.marginBottom = "10px";
-
     const replaceLabel = document.createElement("label");
-    replaceLabel.textContent = "Replace With:";
+    replaceLabel.textContent = "Replace:";
     replaceLabel.style.cssText = `
       display: block;
-      margin-bottom: 5px;
+      margin-bottom: 4px;
+      color: #ccc;
       font-size: 12px;
-      color: #aaa;
     `;
 
     const replaceInput = document.createElement("input");
     replaceInput.type = "text";
-    replaceInput.placeholder = "Enter replacement text...";
+    replaceInput.placeholder = "replacement text";
     replaceInput.style.cssText = `
       width: 100%;
-      padding: 8px;
-      background: #2a2a2a;
-      color: white;
-      border: 1px solid #4fc3f7;
+      padding: 6px 8px;
+      margin-bottom: 8px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
       border-radius: 4px;
-      font-family: "Monaco", "Menlo", "Consolas", monospace;
+      color: white;
       font-size: 12px;
-      outline: none;
+      font-family: "SF Mono", Monaco, monospace;
       box-sizing: border-box;
     `;
 
-    replaceSection.appendChild(replaceLabel);
-    replaceSection.appendChild(replaceInput);
-    this.regexPanel.appendChild(replaceSection);
-
-    // Flags section
-    const flagsSection = document.createElement("div");
-    flagsSection.style.cssText = `
-      margin-bottom: 15px;
-      display: flex;
-      gap: 15px;
-      align-items: center;
-    `;
-
-    const flagsLabel = document.createElement("span");
-    flagsLabel.textContent = "Flags:";
-    flagsLabel.style.cssText = `
-      font-size: 12px;
-      color: #aaa;
-    `;
-
-    // Global flag
-    const globalFlag = document.createElement("label");
-    globalFlag.style.cssText = `
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      font-size: 12px;
-      cursor: pointer;
-    `;
-    const globalCheckbox = document.createElement("input");
-    globalCheckbox.type = "checkbox";
-    globalCheckbox.checked = true; // Default to global
-    globalFlag.appendChild(globalCheckbox);
-    globalFlag.appendChild(document.createTextNode("Global (g)"));
-
-    // Case insensitive flag
-    const caseFlag = document.createElement("label");
-    caseFlag.style.cssText = `
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      font-size: 12px;
-      cursor: pointer;
-    `;
-    const caseCheckbox = document.createElement("input");
-    caseCheckbox.type = "checkbox";
-    caseFlag.appendChild(caseCheckbox);
-    caseFlag.appendChild(document.createTextNode("Ignore Case (i)"));
-
-    // Multiline flag
-    const multilineFlag = document.createElement("label");
-    multilineFlag.style.cssText = `
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      font-size: 12px;
-      cursor: pointer;
-    `;
-    const multilineCheckbox = document.createElement("input");
-    multilineCheckbox.type = "checkbox";
-    multilineFlag.appendChild(multilineCheckbox);
-    multilineFlag.appendChild(document.createTextNode("Multiline (m)"));
-
-    flagsSection.appendChild(flagsLabel);
-    flagsSection.appendChild(globalFlag);
-    flagsSection.appendChild(caseFlag);
-    flagsSection.appendChild(multilineFlag);
-    this.regexPanel.appendChild(flagsSection);
-
-    // Preview section
-    const previewSection = document.createElement("div");
-    previewSection.style.marginBottom = "15px";
-
+    // Preview
     const previewLabel = document.createElement("label");
     previewLabel.textContent = "Preview:";
     previewLabel.style.cssText = `
       display: block;
-      margin-bottom: 5px;
+      margin-bottom: 4px;
+      color: #ccc;
       font-size: 12px;
-      color: #aaa;
     `;
 
-    const previewDisplay = document.createElement("div");
-    previewDisplay.style.cssText = `
-      background: #1a1a1a;
-      padding: 8px;
+    const previewDiv = document.createElement("div");
+    previewDiv.style.cssText = `
+      padding: 6px 8px;
+      margin-bottom: 10px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
       border-radius: 4px;
-      border: 1px solid #333;
-      font-family: "Monaco", "Menlo", "Consolas", monospace;
-      font-size: 11px;
-      max-height: 80px;
+      color: #ddd;
+      font-size: 12px;
+      font-family: "SF Mono", Monaco, monospace;
+      min-height: 20px;
+      max-height: 60px;
       overflow-y: auto;
       word-break: break-all;
-      color: #a5d6a7;
     `;
-    previewDisplay.textContent = "(Enter pattern to see preview)";
+    previewDiv.textContent = cleanCurrentValue || "(empty)";
 
-    previewSection.appendChild(previewLabel);
-    previewSection.appendChild(previewDisplay);
-    this.regexPanel.appendChild(previewSection);
-
-    // Update preview on input changes
-    const updatePreview = () => {
-      const pattern = findInput.value;
-      const replacement = replaceInput.value;
-
-      if (!pattern) {
-        previewDisplay.textContent = "(Enter pattern to see preview)";
-        previewDisplay.style.color = "#aaa";
-        return;
-      }
-
-      try {
-        const flags =
-          (globalCheckbox.checked ? "g" : "") +
-          (caseCheckbox.checked ? "i" : "") +
-          (multilineCheckbox.checked ? "m" : "");
-
-        const regex = new RegExp(pattern, flags);
-        // Use the clean current value for preview
-        const result = cleanCurrentValue.replace(regex, replacement);
-
-        if (result === cleanCurrentValue) {
-          previewDisplay.textContent = "(No matches found)";
-          previewDisplay.style.color = "#ffb74d";
-        } else {
-          previewDisplay.textContent = result;
-          previewDisplay.style.color = "#a5d6a7";
-        }
-      } catch (error) {
-        previewDisplay.textContent = `Error: ${(error as Error).message}`;
-        previewDisplay.style.color = "#f44336";
-      }
-    };
-
-    findInput.addEventListener("input", updatePreview);
-    replaceInput.addEventListener("input", updatePreview);
-    globalCheckbox.addEventListener("change", updatePreview);
-    caseCheckbox.addEventListener("change", updatePreview);
-    multilineCheckbox.addEventListener("change", updatePreview);
-
-    // Action buttons
-    const buttonSection = document.createElement("div");
-    buttonSection.style.cssText = `
+    // Buttons
+    const buttonContainer = document.createElement("div");
+    buttonContainer.style.cssText = `
       display: flex;
-      gap: 10px;
+      gap: 8px;
       justify-content: flex-end;
     `;
+
+    const applyButton = document.createElement("button");
+    applyButton.textContent = "Apply";
+    applyButton.style.cssText = `
+      padding: 6px 16px;
+      background: #007aff;
+      border: none;
+      border-radius: 4px;
+      color: white;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
+    `;
+    applyButton.addEventListener("mouseover", () => {
+      applyButton.style.background = "#0056b3";
+    });
+    applyButton.addEventListener("mouseout", () => {
+      applyButton.style.background = "#007aff";
+    });
 
     const cancelButton = document.createElement("button");
     cancelButton.textContent = "Cancel";
     cancelButton.style.cssText = `
-      padding: 8px 16px;
-      background: #666;
-      color: white;
-      border: none;
+      padding: 6px 16px;
+      background: rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.2);
       border-radius: 4px;
-      cursor: pointer;
+      color: #ccc;
       font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
     `;
+    cancelButton.addEventListener("mouseover", () => {
+      cancelButton.style.background = "rgba(255, 255, 255, 0.2)";
+    });
+    cancelButton.addEventListener("mouseout", () => {
+      cancelButton.style.background = "rgba(255, 255, 255, 0.1)";
+    });
     cancelButton.addEventListener("click", () => this.closeRegexPanel());
 
-    const applyButton = document.createElement("button");
-    applyButton.textContent = "Apply Replace";
-    applyButton.style.cssText = `
-      padding: 8px 16px;
-      background: #4caf50;
-      color: white;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 12px;
-    `;
+    // Update preview function
+    const updatePreview = () => {
+      const pattern = patternInput.value.trim();
+      const replacement = replaceInput.value;
 
-    applyButton.addEventListener("click", () => {
-      this.applyRegexReplace(
-        findInput.value,
-        replaceInput.value,
-        globalCheckbox.checked,
-        caseCheckbox.checked,
-        multilineCheckbox.checked
-      );
-    });
+      if (!pattern) {
+        previewDiv.textContent = cleanCurrentValue || "(empty)";
+        return;
+      }
 
-    buttonSection.appendChild(cancelButton);
-    buttonSection.appendChild(applyButton);
-    this.regexPanel.appendChild(buttonSection);
+      try {
+        // Parse regex pattern with flags (e.g., /pattern/gi)
+        let regex: RegExp;
+        const regexMatch = pattern.match(/^\/(.+)\/([gimuy]*)$/);
 
-    // Add to document
-    document.body.appendChild(this.regexPanel);
+        if (regexMatch) {
+          // Full regex format with flags
+          regex = new RegExp(regexMatch[1], regexMatch[2]);
+        } else {
+          // Plain pattern, default to global
+          regex = new RegExp(pattern, "g");
+        }
 
-    // Focus the find input
-    findInput.focus();
+        const result = this.currentTargetElement!.currentValue.replace(
+          regex,
+          replacement
+        );
+        previewDiv.textContent = result || "(empty)";
+      } catch (e) {
+        previewDiv.textContent = "⚠️ Invalid regex pattern";
+        previewDiv.style.color = "#ff6b6b";
+        return;
+      }
 
-    // Close on Escape key
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
+      previewDiv.style.color = "#ddd";
+    };
+
+    // Apply regex function
+    const applyRegex = () => {
+      const pattern = patternInput.value.trim();
+      const replacement = replaceInput.value;
+
+      if (!pattern) return;
+
+      try {
+        // Parse regex pattern with flags (e.g., /pattern/gi)
+        let regex: RegExp;
+        const regexMatch = pattern.match(/^\/(.+)\/([gimuy]*)$/);
+
+        if (regexMatch) {
+          // Full regex format with flags
+          regex = new RegExp(regexMatch[1], regexMatch[2]);
+        } else {
+          // Plain pattern, default to global
+          regex = new RegExp(pattern, "g");
+        }
+
+        const result = this.currentTargetElement!.currentValue.replace(
+          regex,
+          replacement
+        );
+
+        // Apply the change
+        this.writeToElement(this.currentTargetElement!.elementId, result);
+
+        // Update stored current value
+        this.currentTargetElement!.currentValue = result;
+
+        // Close panel
         this.closeRegexPanel();
-        document.removeEventListener("keydown", handleKeyDown);
+      } catch (e) {
+        console.error("Regex application failed:", e);
       }
     };
-    document.addEventListener("keydown", handleKeyDown);
-  }
 
-  private applyRegexReplace(
-    pattern: string,
-    replacement: string,
-    global: boolean,
-    ignoreCase: boolean,
-    multiline: boolean
-  ) {
-    if (!this.currentTargetElement || !pattern) {
-      return;
-    }
+    // Event listeners
+    patternInput.addEventListener("input", updatePreview);
+    replaceInput.addEventListener("input", updatePreview);
+    applyButton.addEventListener("click", applyRegex);
 
-    try {
-      const flags =
-        (global ? "g" : "") + (ignoreCase ? "i" : "") + (multiline ? "m" : "");
+    // Handle Enter key
+    const handleEnter = (e: KeyboardEvent) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        applyRegex();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        this.closeRegexPanel();
+      }
+    };
+    patternInput.addEventListener("keydown", handleEnter);
+    replaceInput.addEventListener("keydown", handleEnter);
 
-      const regex = new RegExp(pattern, flags);
-      const result = this.currentTargetElement.currentValue.replace(
-        regex,
-        replacement
-      );
+    // Assemble panel
+    buttonContainer.appendChild(cancelButton);
+    buttonContainer.appendChild(applyButton);
 
-      // Apply the result
-      this.writeToElement(this.currentTargetElement.elementId, result);
+    this.regexPanel.appendChild(header);
+    this.regexPanel.appendChild(patternLabel);
+    this.regexPanel.appendChild(patternInput);
+    this.regexPanel.appendChild(replaceLabel);
+    this.regexPanel.appendChild(replaceInput);
+    this.regexPanel.appendChild(previewLabel);
+    this.regexPanel.appendChild(previewDiv);
+    this.regexPanel.appendChild(buttonContainer);
 
-      // Show success feedback
-      this.showWriteFeedback(
-        true,
-        `Regex replace applied: ${pattern} → ${replacement}`
-      );
+    document.body.appendChild(this.regexPanel);
 
-      // Close panel
-      this.closeRegexPanel();
-    } catch (error) {
-      this.showWriteFeedback(false, `Regex error: ${(error as Error).message}`);
-    }
+    // Focus the pattern input
+    patternInput.focus();
   }
 
   private closeRegexPanel() {

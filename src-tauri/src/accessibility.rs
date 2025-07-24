@@ -118,7 +118,7 @@ pub fn walk_app_tree_by_pid(pid: u32) -> Result<UITreeNode, String> {
     let app_element = AXUIElement::application(pid as i32);
 
     // Walk the tree starting from this application
-    walk_element_tree(&app_element, 0, 100, &[])
+    walk_element_tree(&app_element, 0, 150, &[])
 }
 
 /// Walk the tree starting from a specific element
@@ -374,7 +374,15 @@ fn walk_element_tree(
     if let Ok(child_elements) = element.attribute(&AXAttribute::children()) {
         let child_count = child_elements.len();
 
-        for i in 0..child_count.min(50) {
+        // Log when we hit the child limit
+        if child_count > 200 {
+            println!(
+                "⚠️ Hit child limit: {} children at depth {}, showing first 200",
+                child_count, depth
+            );
+        }
+
+        for i in 0..child_count.min(200) {
             if let Some(child_ref) = child_elements.get(i) {
                 let mut child_path = current_path.to_vec();
                 child_path.push(i as usize);

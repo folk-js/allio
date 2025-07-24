@@ -9,7 +9,7 @@
         margin: 0;
         padding: 0;
         background: transparent;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display",
           sans-serif;
         overflow: hidden;
         pointer-events: none;
@@ -17,19 +17,19 @@
 
       .accessibility-tree {
         position: absolute;
-        background: rgba(0, 0, 0, 0.9);
+        background: rgba(30, 30, 30, 0.95);
         color: white;
-        padding: 0; /* Remove padding from container */
-        border-radius: 6px;
+        padding: 0;
+        border-radius: 10px;
         font-size: 11px;
-        font-family: "Monaco", "Menlo", "Consolas", monospace;
-        border: 1px solid rgba(255, 255, 255, 0.2);
-        max-width: 500px;
-        min-width: 300px;
-        overflow: hidden; /* Hide overflow on container */
+        font-family: "SF Mono", Menlo, Monaco, monospace;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        max-width: 600px;
+        min-width: 400px;
+        overflow: hidden;
         z-index: 1001;
-        backdrop-filter: blur(10px);
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        backdrop-filter: blur(20px);
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
         pointer-events: auto;
         box-sizing: border-box;
         display: flex;
@@ -38,28 +38,31 @@
 
       .tree-content {
         flex: 1;
-        overflow-y: auto; /* Scrolling happens here */
+        overflow-y: auto;
         overflow-x: auto;
-        padding: 8px 8px 16px 8px; /* Move padding to content wrapper */
-        min-height: 0; /* Allow flex child to shrink */
+        padding: 12px 12px 20px 12px;
+        min-height: 0;
       }
 
       .tree-node {
         margin: 1px 0;
-        line-height: 1.4; /* Slightly more line height to prevent clipping */
+        line-height: 1.3;
       }
 
       .tree-node-content {
-        padding: 1px 0;
+        padding: 2px 0;
         word-wrap: break-word;
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         cursor: pointer;
-        border-radius: 2px;
+        border-radius: 4px;
+        transition: background-color 0.1s ease;
+        flex-wrap: wrap;
+        gap: 4px;
       }
 
       .tree-node-content:hover {
-        background-color: rgba(255, 255, 255, 0.1);
+        background-color: rgba(255, 255, 255, 0.08);
       }
 
       .tree-expander {
@@ -69,25 +72,25 @@
         margin-right: 4px;
         text-align: center;
         font-size: 10px;
-        color: #888;
+        color: #8e8e93;
         user-select: none;
         flex-shrink: 0;
       }
 
       .tree-expander.expandable {
-        color: #4fc3f7;
+        color: #007aff;
         cursor: pointer;
       }
 
       .tree-expander:hover.expandable {
-        color: #81d4fa;
+        color: #409cff;
       }
 
       .tree-children {
-        transition: max-height 0.2s ease-out, opacity 0.2s ease-out;
+        transition: max-height 0.15s ease-out, opacity 0.15s ease-out;
         overflow: hidden;
         opacity: 1;
-        max-height: 1000px; /* Large enough for most content */
+        max-height: 1000px;
       }
 
       .tree-children.collapsed {
@@ -95,94 +98,176 @@
         opacity: 0;
       }
 
-      /* Add space at the bottom of the tree */
       .accessibility-tree > .tree-node:last-child {
         margin-bottom: 8px;
       }
 
       .tree-role {
-        color: #4fc3f7;
+        color: #007aff;
         font-weight: 600;
       }
 
       .tree-subrole {
-        color: #81d4fa;
+        color: #409cff;
         font-weight: 500;
       }
 
       .tree-title {
-        color: #a5d6a7;
+        color: #34c759;
         font-style: italic;
       }
 
       .tree-value {
-        color: #ffb74d;
+        color: #ff9f0a;
         font-size: 10px;
       }
 
       .tree-placeholder {
-        color: #bcaaa4;
+        color: #8e8e93;
         font-size: 10px;
         font-style: italic;
       }
 
       .tree-selected {
-        color: #f8bbd9;
+        color: #ff375f;
         font-size: 10px;
-        background: rgba(233, 30, 99, 0.2);
+        background: rgba(255, 55, 95, 0.15);
         padding: 1px 3px;
-        border-radius: 2px;
+        border-radius: 3px;
       }
 
       .tree-description {
-        color: #b39ddb;
+        color: #bf5af2;
         font-size: 10px;
       }
 
       .tree-state {
-        color: #e1bee7;
+        color: #ff375f;
         font-size: 9px;
         font-weight: 500;
-        background: rgba(142, 36, 170, 0.2);
-        padding: 1px 3px;
-        border-radius: 2px;
+        background: rgba(255, 55, 95, 0.15);
+        padding: 1px 4px;
+        border-radius: 3px;
         margin-left: 4px;
       }
 
       .tree-count {
-        color: #90a4ae;
+        color: #8e8e93;
         font-size: 9px;
       }
 
       /* Live text input styles */
       .tree-text-input {
         margin-left: 8px !important;
-        padding: 2px 6px !important;
+        padding: 3px 6px !important;
         font-size: 10px !important;
-        background: #2a2a2a !important;
+        background: rgba(0, 0, 0, 0.2) !important;
         color: white !important;
-        border: 1px solid #4fc3f7 !important;
-        border-radius: 3px !important;
-        width: 120px !important;
+        border: 1px solid rgba(255, 255, 255, 0.2) !important;
+        border-radius: 4px !important;
+        width: 100px !important;
         outline: none !important;
         flex-shrink: 0 !important;
-        font-family: "Monaco", "Menlo", "Consolas", monospace !important;
-        transition: all 0.2s ease !important;
+        font-family: "SF Mono", Menlo, Monaco, monospace !important;
+        transition: all 0.15s ease !important;
       }
 
       .tree-text-input:focus {
-        border-color: #81d4fa !important;
-        background: #1a1a1a !important;
-        box-shadow: 0 0 4px rgba(129, 212, 250, 0.3) !important;
+        border-color: #007aff !important;
+        background: rgba(0, 0, 0, 0.1) !important;
+        box-shadow: 0 0 4px rgba(0, 122, 255, 0.3) !important;
       }
 
       .tree-text-input:hover {
-        border-color: #81d4fa !important;
+        border-color: rgba(255, 255, 255, 0.3) !important;
       }
 
       .tree-text-input::placeholder {
-        color: #666 !important;
+        color: #8e8e93 !important;
         font-style: italic !important;
+      }
+
+      /* Regex button styles */
+      .tree-regex-button {
+        margin-left: 4px !important;
+        padding: 3px 6px !important;
+        font-size: 9px !important;
+        background: #ff9f0a !important;
+        color: white !important;
+        border: none !important;
+        border-radius: 4px !important;
+        cursor: pointer !important;
+        font-family: "SF Mono", Menlo, Monaco, monospace !important;
+        font-weight: 600 !important;
+        outline: none !important;
+        transition: all 0.15s ease !important;
+        flex-shrink: 0 !important;
+        min-width: 24px !important;
+      }
+
+      .tree-regex-button:hover {
+        background: #ffad33 !important;
+        transform: scale(1.05) !important;
+      }
+
+      .tree-regex-button:active {
+        background: #e6890a !important;
+        transform: scale(0.95) !important;
+      }
+
+      /* Input container for better layout */
+      .tree-input-container {
+        display: flex !important;
+        align-items: center !important;
+        gap: 4px !important;
+        margin-left: 8px !important;
+        flex-wrap: nowrap !important;
+      }
+
+      /* Regex panel styles */
+      .regex-panel {
+        position: fixed !important;
+        z-index: 2000 !important;
+        background: rgba(30, 30, 30, 0.98) !important;
+        padding: 12px !important;
+        border-radius: 8px !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        min-width: 280px !important;
+        max-width: 400px !important;
+        backdrop-filter: blur(20px) !important;
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6) !important;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display",
+          sans-serif !important;
+        font-size: 13px !important;
+        animation: fadeInScale 0.2s ease-out !important;
+        transform-origin: top left !important;
+      }
+
+      .regex-panel.positioned-relative {
+        animation: fadeInSlideUp 0.2s ease-out !important;
+      }
+
+      @keyframes fadeInScale {
+        from {
+          opacity: 0;
+          transform: scale(0.95);
+        }
+        to {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
+
+      /* Alternative animation for element-positioned panels */
+      @keyframes fadeInSlideUp {
+        from {
+          opacity: 0;
+          transform: translateY(8px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
       }
 
       /* Write feedback styles */
@@ -190,16 +275,17 @@
         position: fixed !important;
         top: 20px !important;
         right: 20px !important;
-        padding: 10px 15px !important;
-        border-radius: 5px !important;
+        padding: 12px 16px !important;
+        border-radius: 8px !important;
         color: white !important;
         font-size: 12px !important;
         z-index: 10000 !important;
         max-width: 300px !important;
         word-wrap: break-word !important;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display",
           sans-serif !important;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3) !important;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4) !important;
+        backdrop-filter: blur(20px) !important;
         animation: slideIn 0.3s ease-out !important;
       }
 
@@ -214,191 +300,37 @@
         }
       }
 
-      /* Regex button styles */
-      .tree-regex-button {
-        margin-left: 4px !important;
-        padding: 2px 6px !important;
-        font-size: 10px !important;
-        background: #ff9800 !important;
-        color: white !important;
-        border: none !important;
-        border-radius: 3px !important;
-        cursor: pointer !important;
-        font-family: monospace !important;
-        outline: none !important;
-        transition: background-color 0.2s !important;
-        flex-shrink: 0 !important;
-      }
-
-      .tree-regex-button:hover {
-        background: #ffb74d !important;
-        transform: scale(1.05) !important;
-      }
-
-      .tree-regex-button:active {
-        background: #f57c00 !important;
-        transform: scale(0.95) !important;
-      }
-
-      /* Regex panel styles */
-      .regex-panel {
-        position: fixed !important;
-        background: rgba(0, 0, 0, 0.95) !important;
-        color: white !important;
-        padding: 20px !important;
-        border-radius: 8px !important;
-        border: 1px solid rgba(255, 255, 255, 0.3) !important;
-        min-width: 400px !important;
-        max-width: 600px !important;
-        z-index: 2000 !important;
-        backdrop-filter: blur(15px) !important;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-          sans-serif !important;
-        pointer-events: auto !important;
-        animation: fadeInScale 0.3s ease-out !important;
-        /* Allow dynamic positioning via JavaScript */
-        transform-origin: top left !important;
-      }
-
-      @keyframes fadeInScale {
-        from {
-          opacity: 0;
-          transform: scale(0.9);
-        }
-        to {
-          opacity: 1;
-          transform: scale(1);
-        }
-      }
-
-      /* Alternative animation for element-positioned panels */
-      .regex-panel.positioned-relative {
-        animation: fadeInSlideUp 0.3s ease-out !important;
-      }
-
-      @keyframes fadeInSlideUp {
-        from {
-          opacity: 0;
-          transform: translateY(20px);
-        }
-        to {
-          opacity: 1;
-          transform: translateY(0);
-        }
-      }
-
-      .regex-panel input[type="text"] {
-        width: 100% !important;
-        padding: 8px !important;
-        background: #2a2a2a !important;
-        color: white !important;
-        border: 1px solid #4fc3f7 !important;
-        border-radius: 4px !important;
-        font-family: "Monaco", "Menlo", "Consolas", monospace !important;
-        font-size: 12px !important;
-        outline: none !important;
-        box-sizing: border-box !important;
-        transition: border-color 0.2s, box-shadow 0.2s !important;
-      }
-
-      .regex-panel input[type="text"]:focus {
-        border-color: #81d4fa !important;
-        box-shadow: 0 0 6px rgba(129, 212, 250, 0.3) !important;
-      }
-
-      .regex-panel input[type="checkbox"] {
-        accent-color: #4fc3f7 !important;
-        margin-right: 5px !important;
-      }
-
-      .regex-panel button {
-        padding: 8px 16px !important;
-        border: none !important;
-        border-radius: 4px !important;
-        cursor: pointer !important;
-        font-size: 12px !important;
-        transition: background-color 0.2s, transform 0.1s !important;
-        outline: none !important;
-      }
-
-      .regex-panel button:hover {
-        transform: translateY(-1px) !important;
-      }
-
-      .regex-panel button:active {
-        transform: translateY(0) !important;
-      }
-
-      /* Close button specific styles */
-      .regex-panel button[title]:not([title=""]) {
-        background: none !important;
-        color: #fff !important;
-        font-size: 20px !important;
-        width: 24px !important;
-        height: 24px !important;
-        padding: 0 !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        border-radius: 50% !important;
-      }
-
-      .regex-panel button[title]:hover {
-        background: rgba(255, 255, 255, 0.1) !important;
-      }
-
-      /* Apply button styles */
-      .regex-panel button:last-child {
-        background: #4caf50 !important;
-        color: white !important;
-      }
-
-      .regex-panel button:last-child:hover {
-        background: #66bb6a !important;
-      }
-
-      /* Cancel button styles */
-      .regex-panel button:nth-last-child(2) {
-        background: #666 !important;
-        color: white !important;
-      }
-
-      .regex-panel button:nth-last-child(2):hover {
-        background: #777 !important;
-      }
-
       .accessibility-error {
         position: absolute;
-        background: rgba(244, 67, 54, 0.9);
+        background: rgba(255, 69, 58, 0.95);
         color: white;
-        padding: 8px;
-        border-radius: 6px;
+        padding: 12px;
+        border-radius: 8px;
         font-size: 11px;
-        border: 1px solid rgba(255, 255, 255, 0.2);
+        border: 1px solid rgba(255, 255, 255, 0.1);
         max-width: 300px;
         z-index: 1001;
-        backdrop-filter: blur(10px);
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        backdrop-filter: blur(20px);
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
       }
 
       /* Scrollbar styling for better visual integration */
-      .accessibility-tree::-webkit-scrollbar {
+      .tree-content::-webkit-scrollbar {
         width: 6px;
       }
 
-      .accessibility-tree::-webkit-scrollbar-track {
-        background: rgba(255, 255, 255, 0.1);
+      .tree-content::-webkit-scrollbar-track {
+        background: rgba(255, 255, 255, 0.05);
         border-radius: 3px;
       }
 
-      .accessibility-tree::-webkit-scrollbar-thumb {
+      .tree-content::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.2);
+        border-radius: 3px;
+      }
+
+      .tree-content::-webkit-scrollbar-thumb:hover {
         background: rgba(255, 255, 255, 0.3);
-        border-radius: 3px;
-      }
-
-      .accessibility-tree::-webkit-scrollbar-thumb:hover {
-        background: rgba(255, 255, 255, 0.5);
       }
     </style>
   </head>
