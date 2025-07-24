@@ -13,7 +13,7 @@ use std::{collections::HashSet, sync::Arc};
 use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::accessibility::{walk_app_tree_by_pid, write_to_element_by_pid_and_path, UITreeNode};
+use crate::accessibility::{walk_app_tree_by_pid_with_limits, write_to_element_by_pid_and_path, UITreeNode};
 use crate::windows::{WindowInfo, WindowUpdatePayload};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -28,6 +28,18 @@ struct AccessibilityTreeRequest {
     #[serde(rename = "type")]
     msg_type: String,
     pid: u32,
+    #[serde(default = "default_max_depth")]
+    max_depth: usize,
+    #[serde(default = "default_max_children_per_level")]
+    max_children_per_level: usize,
+}
+
+fn default_max_depth() -> usize {
+    50
+}
+
+fn default_max_children_per_level() -> usize {
+    2000
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -330,12 +342,16 @@ async fn handle_client_message(
         println!("🌳 Parsed as AccessibilityTreeRequest: {:?}", ax_request);
         if ax_request.msg_type == "get_accessibility_tree" {
             println!(
-                "🌳 Client requesting accessibility tree for PID: {}",
-                ax_request.pid
+                "🌳 Client requesting accessibility tree for PID: {} (max_depth: {}, max_children: {})",
+                ax_request.pid, ax_request.max_depth, ax_request.max_children_per_level
             );
 
-            // Get the accessibility tree
-            let (success, tree, error) = match walk_app_tree_by_pid(ax_request.pid) {
+            // Get the accessibility tree with configurable limits
+            let (success, tree, error) = match walk_app_tree_by_pid_with_limits(
+                ax_request.pid,
+                ax_request.max_depth,
+                ax_request.max_children_per_level,
+            ) {
                 Ok(tree) => (true, Some(tree), None),
                 Err(e) => (false, None, Some(e)),
             };

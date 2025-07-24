@@ -1,5 +1,5 @@
 use accessibility::*;
-use accessibility_sys::*;
+use accessibility_sys::{kAXPositionAttribute, kAXSizeAttribute};
 use core_foundation::base::TCFType;
 use core_foundation::string::CFString;
 use serde::{Deserialize, Serialize};
@@ -114,11 +114,21 @@ fn is_writable_element(role: &str) -> bool {
 
 /// Walk the UI tree of a specific application by PID
 pub fn walk_app_tree_by_pid(pid: u32) -> Result<UITreeNode, String> {
+    // Use default limits for backward compatibility
+    walk_app_tree_by_pid_with_limits(pid, 50, 2000)
+}
+
+/// Walk the UI tree of a specific application by PID with configurable limits
+pub fn walk_app_tree_by_pid_with_limits(
+    pid: u32,
+    max_depth: usize,
+    max_children_per_level: usize,
+) -> Result<UITreeNode, String> {
     // Create AXUIElement for the specific application using PID
     let app_element = AXUIElement::application(pid as i32);
 
-    // Walk the tree starting from this application
-    walk_element_tree(&app_element, 0, 150, &[])
+    // Walk the tree starting from this application with configurable limits
+    walk_element_tree(&app_element, 0, max_depth, max_children_per_level, &[])
 }
 
 /// Walk the tree starting from a specific element
@@ -126,6 +136,7 @@ fn walk_element_tree(
     element: &AXUIElement,
     depth: usize,
     max_depth: usize,
+    max_children_per_level: usize,
     current_path: &[usize],
 ) -> Result<UITreeNode, String> {
     if depth > max_depth {
@@ -255,9 +266,6 @@ fn walk_element_tree(
 
     // Extract position and size using accessibility-sys constants
     let position = {
-        use accessibility_sys::kAXPositionAttribute;
-        use core_foundation::string::CFString;
-
         // Create CFString from the string constant
         let position_attr = CFString::new(kAXPositionAttribute);
         let ax_position_attr = AXAttribute::new(&position_attr);
@@ -297,9 +305,6 @@ fn walk_element_tree(
     };
 
     let size = {
-        use accessibility_sys::kAXSizeAttribute;
-        use core_foundation::string::CFString;
-
         // Create CFString from the string constant
         let size_attr = CFString::new(kAXSizeAttribute);
         let ax_size_attr = AXAttribute::new(&size_attr);
@@ -375,21 +380,25 @@ fn walk_element_tree(
         let child_count = child_elements.len();
 
         // Log when we hit the child limit
-        if child_count > 200 {
+        if child_count > max_children_per_level as isize {
             println!(
-                "⚠️ Hit child limit: {} children at depth {}, showing first 200",
-                child_count, depth
+                "⚠️ Hit child limit: {} children at depth {}, showing first {}",
+                child_count, depth, max_children_per_level
             );
         }
 
-        for i in 0..child_count.min(200) {
+        for i in 0..child_count.min(max_children_per_level as isize) {
             if let Some(child_ref) = child_elements.get(i) {
                 let mut child_path = current_path.to_vec();
                 child_path.push(i as usize);
 
-                if let Ok(child_node) =
-                    walk_element_tree(&(*child_ref), depth + 1, max_depth, &child_path)
-                {
+                if let Ok(child_node) = walk_element_tree(
+                    &(*child_ref),
+                    depth + 1,
+                    max_depth,
+                    max_children_per_level,
+                    &child_path,
+                ) {
                     children.push(child_node);
                 }
             }

@@ -48,7 +48,6 @@ interface UITreeNode {
 class AXTreeOverlay {
   private windowContainer: HTMLElement;
   private wsClient: InterlayClient;
-  private currentWindows: WindowInfo[] = [];
   private focusedWindow: WindowInfo | null = null;
   private treeContainer: HTMLElement | null = null;
   private overlayProcessId: number | null = null;
@@ -62,6 +61,11 @@ class AXTreeOverlay {
     currentValue: string;
   } | null = null;
   private currentTreeData: UITreeNode | null = null; // Store the current tree data for position lookups
+  private renderedNodeCount: number = 0; // Track rendered DOM elements
+
+  // Configurable traversal limits
+  private readonly MAX_DEPTH = 100;
+  private readonly MAX_CHILDREN_PER_LEVEL = 5000;
 
   constructor() {
     this.windowContainer = document.getElementById("windowContainer")!;
@@ -166,7 +170,6 @@ class AXTreeOverlay {
   }
 
   private updateWindows(windows: WindowInfo[]) {
-    this.currentWindows = windows;
     const newFocusedWindow = windows.find((w) => w.focused);
 
     // Overlay is filtered out of windows list by backend, so this is expected
@@ -277,9 +280,13 @@ class AXTreeOverlay {
       this.wsClient.send({
         type: "get_accessibility_tree",
         pid: pid,
+        max_depth: this.MAX_DEPTH,
+        max_children_per_level: this.MAX_CHILDREN_PER_LEVEL,
       })
     ) {
-      console.log(`🌳 Requesting accessibility tree for PID: ${pid}`);
+      console.log(
+        `🌳 Requesting accessibility tree for PID: ${pid} (max_depth: ${this.MAX_DEPTH}, max_children: ${this.MAX_CHILDREN_PER_LEVEL})`
+      );
     } else {
       console.warn("❌ Failed to send accessibility tree request");
     }
@@ -287,6 +294,10 @@ class AXTreeOverlay {
 
   private handleAccessibilityTreeResponse(data: ServerMessage) {
     if (data.success && data.tree && this.focusedWindow) {
+      // Count nodes for debugging
+      const nodeCount = this.countTreeNodes(data.tree);
+      console.log(`🌳 Received tree with ${nodeCount} total nodes`);
+
       // Check if this is a refresh (tree already exists) or a new tree
       const isRefresh = this.treeContainer !== null;
 
@@ -305,6 +316,14 @@ class AXTreeOverlay {
     }
   }
 
+  private countTreeNodes(node: UITreeNode): number {
+    let count = 1; // Count this node
+    for (const child of node.children) {
+      count += this.countTreeNodes(child);
+    }
+    return count;
+  }
+
   private handleAccessibilityWriteResponse(data: ServerMessage) {
     if (data.success) {
       console.log(`✅ Write successful: ${data.message}`);
@@ -313,40 +332,6 @@ class AXTreeOverlay {
     } else {
       console.error(`❌ Write failed: ${data.error}`);
     }
-  }
-
-  private showWriteFeedback(success: boolean, message: string) {
-    // Create or update feedback element
-    let feedbackEl = document.getElementById("write-feedback");
-    if (!feedbackEl) {
-      feedbackEl = document.createElement("div");
-      feedbackEl.id = "write-feedback";
-      feedbackEl.style.cssText = `
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        padding: 10px 15px;
-        border-radius: 5px;
-        color: white;
-        font-size: 12px;
-        z-index: 10000;
-        max-width: 300px;
-        word-wrap: break-word;
-      `;
-      document.body.appendChild(feedbackEl);
-    }
-
-    // Set style and content based on success
-    feedbackEl.style.backgroundColor = success ? "#4caf50" : "#f44336";
-    feedbackEl.textContent = message;
-    feedbackEl.style.display = "block";
-
-    // Hide after 3 seconds
-    setTimeout(() => {
-      if (feedbackEl) {
-        feedbackEl.style.display = "none";
-      }
-    }, 3000);
   }
 
   private writeToElement(elementPath: string, text: string) {
@@ -409,14 +394,17 @@ class AXTreeOverlay {
     this.treeContainer.style.left = `${rightX}px`;
     this.treeContainer.style.top = `${window.y}px`;
     // Set height to match window height exactly
-    this.treeContainer.style.height = `${Math.min(window.h, 800)}px`;
+    this.treeContainer.style.height = `${window.h}px`;
 
     // Create scrollable content wrapper
     const contentWrapper = document.createElement("div");
     contentWrapper.className = "tree-content";
 
     // Create tree content and add it to the wrapper
+    console.log(`🏗️ Starting tree element creation...`);
+    this.renderedNodeCount = 0; // Reset counter
     const treeContent = this.createTreeElement(tree);
+    console.log(`🎯 Rendered ${this.renderedNodeCount} DOM elements`);
     contentWrapper.appendChild(treeContent);
 
     // Add wrapper to container
@@ -433,224 +421,230 @@ class AXTreeOverlay {
   }
 
   private createTreeElement(node: UITreeNode, nodeId?: string): HTMLElement {
-    // Generate unique ID for this node
-    if (!nodeId) {
-      nodeId = `${node.role}-${node.depth}-${Math.random()
-        .toString(36)
-        .substr(2, 9)}`;
-    }
+    try {
+      // Generate unique ID for this node
+      if (!nodeId) {
+        nodeId = `${node.role}-${node.depth}-${Math.random()
+          .toString(36)
+          .substr(2, 9)}`;
+      }
 
-    const nodeElement = document.createElement("div");
-    nodeElement.className = "tree-node";
-    // Reduced indentation - smaller increments, lower max
-    const indent = Math.min(node.depth * 4, 16); // Max 16px indent (was 24px)
-    nodeElement.style.marginLeft = `${indent}px`;
+      const nodeElement = document.createElement("div");
+      nodeElement.className = "tree-node";
+      // Reduced indentation - smaller increments, lower max
+      const indent = Math.min(node.depth * 4, 16); // Max 16px indent (was 24px)
+      nodeElement.style.marginLeft = `${indent}px`;
 
-    // Create node content
-    const nodeContent = document.createElement("div");
-    nodeContent.className = "tree-node-content";
+      // Create node content
+      const nodeContent = document.createElement("div");
+      nodeContent.className = "tree-node-content";
 
-    // Expand/collapse indicator
-    const expander = document.createElement("span");
-    expander.className = "tree-expander";
-    const hasChildren = node.children && node.children.length > 0;
+      // Expand/collapse indicator
+      const expander = document.createElement("span");
+      expander.className = "tree-expander";
+      const hasChildren = node.children && node.children.length > 0;
 
-    if (hasChildren) {
-      expander.classList.add("expandable");
-      // Expand by default, only collapse if manually set
-      const isExpanded = !this.expandedNodes.has(`collapsed:${nodeId}`);
-      expander.textContent = isExpanded ? "−" : "+";
+      if (hasChildren) {
+        expander.classList.add("expandable");
+        // Expand by default, only collapse if manually set
+        const isExpanded = !this.expandedNodes.has(`collapsed:${nodeId}`);
+        expander.textContent = isExpanded ? "−" : "+";
 
-      // Click handler for expand/collapse
-      expander.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this.toggleNodeExpansion(nodeId!, nodeElement, expander);
-      });
-    } else {
-      expander.textContent = "•"; // Bullet for leaf nodes
-    }
-
-    nodeContent.appendChild(expander);
-
-    // Node info container
-    const nodeInfo = document.createElement("span");
-    nodeInfo.style.flex = "1";
-
-    // Role (always present)
-    const roleSpan = document.createElement("span");
-    roleSpan.className = "tree-role";
-    roleSpan.textContent = node.role;
-    nodeInfo.appendChild(roleSpan);
-
-    // Subrole (if present and different from role)
-    if (node.subrole && node.subrole !== node.role) {
-      const subroleSpan = document.createElement("span");
-      subroleSpan.className = "tree-subrole";
-      subroleSpan.textContent = `:${node.subrole}`;
-      nodeInfo.appendChild(subroleSpan);
-    }
-
-    // Title (if present)
-    if (node.title) {
-      const titleSpan = document.createElement("span");
-      titleSpan.className = "tree-title";
-      titleSpan.textContent = ` "${node.title}"`;
-      nodeInfo.appendChild(titleSpan);
-    }
-
-    // Value (if present) - enhanced for text fields
-    if (node.value) {
-      const valueSpan = document.createElement("span");
-      valueSpan.className = "tree-value";
-
-      // Parse and format value based on role
-      const formattedValue = this.formatValueForRole(node.value, node.role);
-
-      // For text fields, show more detailed value information
-      if (node.role === "AXTextField" || node.role === "AXTextArea") {
-        let valueText = ` = "${formattedValue}"`;
-        if (node.character_count !== undefined) {
-          valueText += ` (${node.character_count} chars)`;
-        }
-        valueSpan.textContent = valueText;
+        // Click handler for expand/collapse
+        expander.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.toggleNodeExpansion(nodeId!, nodeElement, expander);
+        });
       } else {
-        valueSpan.textContent = ` = ${formattedValue}`;
-      }
-      nodeInfo.appendChild(valueSpan);
-    }
-
-    // Placeholder (if present)
-    if (node.placeholder) {
-      const placeholderSpan = document.createElement("span");
-      placeholderSpan.className = "tree-placeholder";
-      placeholderSpan.textContent = ` placeholder:"${node.placeholder}"`;
-      nodeInfo.appendChild(placeholderSpan);
-    }
-
-    // Selected text (if present)
-    if (node.selected_text) {
-      const selectedSpan = document.createElement("span");
-      selectedSpan.className = "tree-selected";
-      selectedSpan.textContent = ` selected:"${node.selected_text}"`;
-      nodeInfo.appendChild(selectedSpan);
-    }
-
-    // Description (if present)
-    if (node.description) {
-      const descSpan = document.createElement("span");
-      descSpan.className = "tree-description";
-      descSpan.textContent = ` desc:"${node.description}"`;
-      nodeInfo.appendChild(descSpan);
-    }
-
-    // State indicators
-    const stateIndicators = [];
-    if (node.focused) stateIndicators.push("focused");
-    if (node.selected) stateIndicators.push("selected");
-    if (!node.enabled) stateIndicators.push("disabled");
-
-    if (stateIndicators.length > 0) {
-      const stateSpan = document.createElement("span");
-      stateSpan.className = "tree-state";
-      stateSpan.textContent = ` [${stateIndicators.join(", ")}]`;
-      nodeInfo.appendChild(stateSpan);
-    }
-
-    // Children count for nodes with children
-    if (hasChildren) {
-      const childCountSpan = document.createElement("span");
-      childCountSpan.className = "tree-count";
-      childCountSpan.textContent = ` (${node.children.length})`;
-      nodeInfo.appendChild(childCountSpan);
-    }
-
-    nodeContent.appendChild(nodeInfo);
-
-    // Add live text input for writable elements
-    if (
-      node.element_id &&
-      (node.role === "AXTextField" ||
-        node.role === "AXTextArea" ||
-        node.role === "AXComboBox" ||
-        node.role === "AXSecureTextField")
-    ) {
-      // Create container for input elements
-      const inputContainer = document.createElement("div");
-      inputContainer.className = "tree-input-container";
-
-      const textInput = document.createElement("input");
-      textInput.type = "text";
-      textInput.className = "tree-text-input";
-
-      // Parse CFString format for the input value
-      const cleanValue = this.parseCFStringValue(node.value || "");
-      textInput.value = cleanValue;
-      textInput.placeholder = "Type to update...";
-      textInput.title = `Live edit ${node.role}`;
-
-      // Update on every keystroke
-      textInput.addEventListener("input", (e) => {
-        e.stopPropagation();
-        const inputValue = (e.target as HTMLInputElement).value;
-        this.writeToElement(node.element_id!, inputValue);
-      });
-
-      // Prevent clicks from affecting tree expansion
-      textInput.addEventListener("click", (e) => {
-        e.stopPropagation();
-      });
-
-      // Add regex find & replace button
-      const regexButton = document.createElement("button");
-      regexButton.className = "tree-regex-button";
-      regexButton.textContent = ".*";
-      regexButton.title = "Open regex find & replace";
-
-      regexButton.addEventListener("click", (e) => {
-        e.stopPropagation();
-
-        // Use raw parsed value for regex operations (not role-formatted)
-        this.openRegexPanel(
-          node.element_id!,
-          cleanValue,
-          node.position,
-          node.size
-        );
-      });
-
-      // Add elements to container
-      inputContainer.appendChild(textInput);
-      inputContainer.appendChild(regexButton);
-
-      // Prevent container clicks from affecting tree expansion
-      inputContainer.addEventListener("click", (e) => {
-        e.stopPropagation();
-      });
-
-      nodeContent.appendChild(inputContainer);
-    }
-
-    nodeElement.appendChild(nodeContent);
-
-    // Add children container
-    if (hasChildren) {
-      const childrenContainer = document.createElement("div");
-      childrenContainer.className = "tree-children";
-
-      // Expand by default, only collapse if manually set
-      const isExpanded = !this.expandedNodes.has(`collapsed:${nodeId}`);
-      if (!isExpanded) {
-        childrenContainer.classList.add("collapsed");
+        expander.textContent = "•"; // Bullet for leaf nodes
       }
 
-      for (const child of node.children) {
-        childrenContainer.appendChild(this.createTreeElement(child));
+      nodeContent.appendChild(expander);
+
+      // Node info container
+      const nodeInfo = document.createElement("span");
+      nodeInfo.style.flex = "1";
+
+      // Role (always present)
+      const roleSpan = document.createElement("span");
+      roleSpan.className = "tree-role";
+      roleSpan.textContent = node.role;
+      nodeInfo.appendChild(roleSpan);
+
+      // Subrole (if present and different from role)
+      if (node.subrole && node.subrole !== node.role) {
+        const subroleSpan = document.createElement("span");
+        subroleSpan.className = "tree-subrole";
+        subroleSpan.textContent = `:${node.subrole}`;
+        nodeInfo.appendChild(subroleSpan);
       }
 
-      nodeElement.appendChild(childrenContainer);
-    }
+      // Title (if present)
+      if (node.title) {
+        const titleSpan = document.createElement("span");
+        titleSpan.className = "tree-title";
+        titleSpan.textContent = ` "${node.title}"`;
+        nodeInfo.appendChild(titleSpan);
+      }
 
-    return nodeElement;
+      // Value (if present) - enhanced for text fields
+      if (node.value) {
+        const valueSpan = document.createElement("span");
+        valueSpan.className = "tree-value";
+
+        // Parse and format value based on role
+        const formattedValue = this.formatValueForRole(node.value, node.role);
+
+        // For text fields, show more detailed value information
+        if (node.role === "AXTextField" || node.role === "AXTextArea") {
+          let valueText = ` = "${formattedValue}"`;
+          if (node.character_count !== undefined) {
+            valueText += ` (${node.character_count} chars)`;
+          }
+          valueSpan.textContent = valueText;
+        } else {
+          valueSpan.textContent = ` = ${formattedValue}`;
+        }
+        nodeInfo.appendChild(valueSpan);
+      }
+
+      // Placeholder (if present)
+      if (node.placeholder) {
+        const placeholderSpan = document.createElement("span");
+        placeholderSpan.className = "tree-placeholder";
+        placeholderSpan.textContent = ` placeholder:"${node.placeholder}"`;
+        nodeInfo.appendChild(placeholderSpan);
+      }
+
+      // Selected text (if present)
+      if (node.selected_text) {
+        const selectedSpan = document.createElement("span");
+        selectedSpan.className = "tree-selected";
+        selectedSpan.textContent = ` selected:"${node.selected_text}"`;
+        nodeInfo.appendChild(selectedSpan);
+      }
+
+      // Description (if present)
+      if (node.description) {
+        const descSpan = document.createElement("span");
+        descSpan.className = "tree-description";
+        descSpan.textContent = ` desc:"${node.description}"`;
+        nodeInfo.appendChild(descSpan);
+      }
+
+      // State indicators
+      const stateIndicators = [];
+      if (node.focused) stateIndicators.push("focused");
+      if (node.selected) stateIndicators.push("selected");
+      if (!node.enabled) stateIndicators.push("disabled");
+
+      if (stateIndicators.length > 0) {
+        const stateSpan = document.createElement("span");
+        stateSpan.className = "tree-state";
+        stateSpan.textContent = ` [${stateIndicators.join(", ")}]`;
+        nodeInfo.appendChild(stateSpan);
+      }
+
+      // Children count for nodes with children
+      if (hasChildren) {
+        const childCountSpan = document.createElement("span");
+        childCountSpan.className = "tree-count";
+        childCountSpan.textContent = ` (${node.children.length})`;
+        nodeInfo.appendChild(childCountSpan);
+      }
+
+      nodeContent.appendChild(nodeInfo);
+
+      // Add live text input for writable elements
+      if (
+        node.element_id &&
+        (node.role === "AXTextField" ||
+          node.role === "AXTextArea" ||
+          node.role === "AXComboBox" ||
+          node.role === "AXSecureTextField")
+      ) {
+        // Create container for input elements
+        const inputContainer = document.createElement("div");
+        inputContainer.className = "tree-input-container";
+
+        const textInput = document.createElement("input");
+        textInput.type = "text";
+        textInput.className = "tree-text-input";
+
+        // Parse CFString format for the input value
+        const cleanValue = this.parseCFStringValue(node.value || "");
+        textInput.value = cleanValue;
+        textInput.placeholder = "Type to update...";
+        textInput.title = `Live edit ${node.role}`;
+
+        // Update on every keystroke
+        textInput.addEventListener("input", (e) => {
+          e.stopPropagation();
+          const inputValue = (e.target as HTMLInputElement).value;
+          this.writeToElement(node.element_id!, inputValue);
+        });
+
+        // Prevent clicks from affecting tree expansion
+        textInput.addEventListener("click", (e) => {
+          e.stopPropagation();
+        });
+
+        // Add regex find & replace button
+        const regexButton = document.createElement("button");
+        regexButton.className = "tree-regex-button";
+        regexButton.textContent = ".*";
+        regexButton.title = "Open regex find & replace";
+
+        regexButton.addEventListener("click", (e) => {
+          e.stopPropagation();
+
+          // Use raw parsed value for regex operations (not role-formatted)
+          this.openRegexPanel(
+            node.element_id!,
+            cleanValue,
+            node.position,
+            node.size
+          );
+        });
+
+        // Add elements to container
+        inputContainer.appendChild(textInput);
+        inputContainer.appendChild(regexButton);
+
+        // Prevent container clicks from affecting tree expansion
+        inputContainer.addEventListener("click", (e) => {
+          e.stopPropagation();
+        });
+
+        nodeContent.appendChild(inputContainer);
+      }
+
+      nodeElement.appendChild(nodeContent);
+
+      // Add children container
+      if (hasChildren) {
+        const childrenContainer = document.createElement("div");
+        childrenContainer.className = "tree-children";
+
+        // Expand by default, only collapse if manually set
+        const isExpanded = !this.expandedNodes.has(`collapsed:${nodeId}`);
+        if (!isExpanded) {
+          childrenContainer.classList.add("collapsed");
+        }
+
+        for (const child of node.children) {
+          childrenContainer.appendChild(this.createTreeElement(child));
+        }
+
+        nodeElement.appendChild(childrenContainer);
+      }
+
+      this.renderedNodeCount++; // Increment counter for each node rendered
+      return nodeElement;
+    } catch (error) {
+      console.error("Error creating tree element:", error);
+      return document.createElement("div"); // Return a placeholder to avoid breaking rendering
+    }
   }
 
   private toggleNodeExpansion(
@@ -688,10 +682,7 @@ class AXTreeOverlay {
         this.treeContainer.style.left = `${rightX}px`;
         this.treeContainer.style.top = `${referenceWindow.y}px`;
         // Set height to match window height exactly
-        this.treeContainer.style.height = `${Math.min(
-          referenceWindow.h,
-          800
-        )}px`;
+        this.treeContainer.style.height = `${referenceWindow.h}px`;
       } else {
         console.warn("⚠️ No reference window available for positioning tree");
       }
@@ -1212,7 +1203,6 @@ class AXTreeOverlay {
 
     // Use function-based replacement for transformations
     return text.replace(regex, (...args) => {
-      const match = args[0]; // Full match
       const captures = args.slice(1, -2); // Captured groups (exclude offset and input string)
 
       let result = replacement;
