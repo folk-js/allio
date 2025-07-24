@@ -40,6 +40,9 @@ interface UITreeNode {
   selected_text?: string;
   character_count?: number;
   element_id?: string;
+  // Position and size for UI element positioning
+  position?: [number, number]; // [x, y] screen coordinates
+  size?: [number, number];     // [width, height] dimensions
 }
 
 class AXTreeOverlay {
@@ -596,8 +599,13 @@ class AXTreeOverlay {
 
       regexButton.addEventListener("click", (e) => {
         e.stopPropagation();
-        // Use clean value for regex operations
-        this.openRegexPanel(node.element_id!, cleanValue);
+        // Use clean value for regex operations and pass element position/size
+        this.openRegexPanel(
+          node.element_id!,
+          cleanValue,
+          node.position,
+          node.size
+        );
       });
 
       regexButton.addEventListener("mouseenter", () => {
@@ -730,7 +738,12 @@ class AXTreeOverlay {
     }
   }
 
-  private openRegexPanel(elementId: string, currentValue: string) {
+  private openRegexPanel(
+    elementId: string,
+    currentValue: string,
+    elementPosition?: [number, number],
+    elementSize?: [number, number]
+  ) {
     // Close existing panel if open
     this.closeRegexPanel();
 
@@ -742,11 +755,10 @@ class AXTreeOverlay {
     // Create regex panel
     this.regexPanel = document.createElement("div");
     this.regexPanel.className = "regex-panel";
-    this.regexPanel.style.cssText = `
+
+    // Calculate position - prefer positioning below the element if position is available
+    let panelStyle = `
       position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
       background: rgba(0, 0, 0, 0.95);
       color: white;
       padding: 20px;
@@ -761,6 +773,47 @@ class AXTreeOverlay {
         sans-serif;
       pointer-events: auto;
     `;
+
+    if (elementPosition && elementSize) {
+      // Position the panel below the element, centered horizontally
+      const [x, y] = elementPosition;
+      const [width, height] = elementSize;
+
+      // Calculate position below the element
+      const panelX = Math.max(10, x + width / 2 - 200); // Center panel (400px wide / 2 = 200px offset)
+      const panelY = y + height + 10; // 10px below the element
+
+      // Ensure panel doesn't go off-screen
+      const maxX = window.screen.width - 420; // Panel width + some margin
+      const maxY = window.screen.height - 400; // Estimated panel height + margin
+
+      const finalX = Math.min(panelX, maxX);
+      const finalY = Math.min(panelY, maxY);
+
+      panelStyle += `
+        left: ${finalX}px;
+        top: ${finalY}px;
+        transform: none;
+      `;
+
+      // Add class for element-relative positioning animation
+      this.regexPanel.classList.add("positioned-relative");
+
+      console.log(
+        `🎯 Positioning regex panel relative to element at (${x}, ${y}) size (${width}x${height}) → panel at (${finalX}, ${finalY})`
+      );
+    } else {
+      // Fallback to center positioning
+      panelStyle += `
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+      `;
+
+      console.log(`📍 No element position available, centering regex panel`);
+    }
+
+    this.regexPanel.style.cssText = panelStyle;
 
     // Panel header
     const header = document.createElement("div");

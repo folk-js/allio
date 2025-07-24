@@ -243,9 +243,6 @@
       /* Regex panel styles */
       .regex-panel {
         position: fixed !important;
-        top: 50% !important;
-        left: 50% !important;
-        transform: translate(-50%, -50%) !important;
         background: rgba(0, 0, 0, 0.95) !important;
         color: white !important;
         padding: 20px !important;
@@ -260,16 +257,34 @@
           sans-serif !important;
         pointer-events: auto !important;
         animation: fadeInScale 0.3s ease-out !important;
+        /* Allow dynamic positioning via JavaScript */
+        transform-origin: top left !important;
       }
 
       @keyframes fadeInScale {
         from {
           opacity: 0;
-          transform: translate(-50%, -50%) scale(0.9);
+          transform: scale(0.9);
         }
         to {
           opacity: 1;
-          transform: translate(-50%, -50%) scale(1);
+          transform: scale(1);
+        }
+      }
+
+      /* Alternative animation for element-positioned panels */
+      .regex-panel.positioned-relative {
+        animation: fadeInSlideUp 0.3s ease-out !important;
+      }
+
+      @keyframes fadeInSlideUp {
+        from {
+          opacity: 0;
+          transform: translateY(20px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
         }
       }
 

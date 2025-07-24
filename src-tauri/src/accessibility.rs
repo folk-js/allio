@@ -1,4 +1,5 @@
 use accessibility::*;
+use accessibility_sys::*;
 use core_foundation::base::TCFType;
 use core_foundation::string::CFString;
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,9 @@ pub struct UITreeNode {
     pub character_count: Option<usize>,
     // Add element ID for write operations
     pub element_id: Option<String>,
+    // Position and size for UI element positioning
+    pub position: Option<(f64, f64)>, // (x, y) screen coordinates
+    pub size: Option<(f64, f64)>,     // (width, height) dimensions
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -142,6 +146,8 @@ fn walk_element_tree(
             selected_text: None,
             character_count: None,
             element_id: None,
+            position: None,
+            size: None,
         });
     }
 
@@ -247,6 +253,88 @@ fn walk_element_tree(
         .ok()
         .and_then(|f| f.try_into().ok());
 
+    // Extract position and size using accessibility-sys constants
+    let position = {
+        use core_foundation::string::CFString;
+        use accessibility_sys::kAXPositionAttribute;
+        
+        // Create CFString from the string constant
+        let position_attr = CFString::new(kAXPositionAttribute);
+        let ax_position_attr = AXAttribute::new(&position_attr);
+        
+        element.attribute(&ax_position_attr)
+            .ok()
+            .and_then(|pos_value| {
+                // The position is typically a CGPoint structure
+                // Try to extract x,y coordinates from the value
+                let value_str = format!("{:?}", pos_value);
+                
+                // Look for coordinate patterns in the debug output
+                if let Some(x_start) = value_str.find("x:") {
+                    if let Some(y_start) = value_str.find("y:") {
+                        let x_part = &value_str[x_start + 2..];
+                        let y_part = &value_str[y_start + 2..];
+                        
+                        let x_end = x_part.find(|c: char| !c.is_ascii_digit() && c != '.' && c != '-')
+                            .unwrap_or(x_part.len());
+                        let y_end = y_part.find(|c: char| !c.is_ascii_digit() && c != '.' && c != '-')
+                            .unwrap_or(y_part.len());
+                        
+                        let x = x_part[..x_end].trim().parse::<f64>().ok()?;
+                        let y = y_part[..y_end].trim().parse::<f64>().ok()?;
+                        
+                        Some((x, y))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+    };
+
+    let size = {
+        use core_foundation::string::CFString;
+        use accessibility_sys::kAXSizeAttribute;
+        
+        // Create CFString from the string constant
+        let size_attr = CFString::new(kAXSizeAttribute);
+        let ax_size_attr = AXAttribute::new(&size_attr);
+        
+        element.attribute(&ax_size_attr)
+            .ok()
+            .and_then(|size_value| {
+                // The size is typically a CGSize structure
+                // Try to extract width,height from the value
+                let value_str = format!("{:?}", size_value);
+                
+                // Look for dimension patterns in the debug output
+                if let Some(w_start) = value_str.find("width:").or_else(|| value_str.find("w:")) {
+                    if let Some(h_start) = value_str.find("height:").or_else(|| value_str.find("h:")) {
+                        let w_offset = if value_str[w_start..].starts_with("width:") { 6 } else { 2 };
+                        let h_offset = if value_str[h_start..].starts_with("height:") { 7 } else { 2 };
+                        
+                        let w_part = &value_str[w_start + w_offset..];
+                        let h_part = &value_str[h_start + h_offset..];
+                        
+                        let w_end = w_part.find(|c: char| !c.is_ascii_digit() && c != '.' && c != '-')
+                            .unwrap_or(w_part.len());
+                        let h_end = h_part.find(|c: char| !c.is_ascii_digit() && c != '.' && c != '-')
+                            .unwrap_or(h_part.len());
+                        
+                        let width = w_part[..w_end].trim().parse::<f64>().ok()?;
+                        let height = h_part[..h_end].trim().parse::<f64>().ok()?;
+                        
+                        Some((width, height))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+    };
+
     // Note: Some attributes may not be available in all versions of the accessibility crate
     let selected = None; // AXAttribute::selected() not available
     let selected_text = None; // AXAttribute::selected_text() not available
@@ -301,5 +389,7 @@ fn walk_element_tree(
         selected_text,
         character_count,
         element_id,
+        position,
+        size,
     })
 }
