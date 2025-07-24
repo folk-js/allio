@@ -53,6 +53,11 @@ class AXTreeOverlay {
   private expandedNodes: Set<string> = new Set(); // Track which nodes are collapsed (prefixed with 'collapsed:')
   private refreshTimer: number | null = null;
   private readonly REFRESH_INTERVAL = 2000; // 2 seconds
+  private regexPanel: HTMLElement | null = null;
+  private currentTargetElement: {
+    elementId: string;
+    currentValue: string;
+  } | null = null;
 
   constructor() {
     this.windowContainer = document.getElementById("windowContainer")!;
@@ -63,6 +68,29 @@ class AXTreeOverlay {
     window.addEventListener("beforeunload", () => {
       this.stopRefreshTimer();
     });
+  }
+
+  /**
+   * Parse CFString debug output and extract the actual content
+   * Example: '<CFString 0x155fff590 [0x20c4c0998]>{contents = "hello world"}' -> 'hello world'
+   */
+  private parseCFStringValue(value: string): string {
+    if (!value) return value;
+
+    // Check if this is a CFString debug representation
+    const cfStringMatch = value.match(/\{contents = "(.*?)"\}/);
+    if (cfStringMatch && cfStringMatch[1] !== undefined) {
+      return cfStringMatch[1];
+    }
+
+    // Handle other potential CFString formats
+    const simpleCFMatch = value.match(/CFString.*?"(.*?)"/);
+    if (simpleCFMatch && simpleCFMatch[1] !== undefined) {
+      return simpleCFMatch[1];
+    }
+
+    // If it's not a CFString format, return as-is
+    return value;
   }
 
   private async setupWebSocketListener() {
@@ -429,15 +457,19 @@ class AXTreeOverlay {
     if (node.value) {
       const valueSpan = document.createElement("span");
       valueSpan.className = "tree-value";
+
+      // Parse CFString format and get clean value
+      const cleanValue = this.parseCFStringValue(node.value);
+
       // For text fields, show more detailed value information
       if (node.role === "AXTextField" || node.role === "AXTextArea") {
-        let valueText = ` = "${node.value}"`;
+        let valueText = ` = "${cleanValue}"`;
         if (node.character_count !== undefined) {
           valueText += ` (${node.character_count} chars)`;
         }
         valueSpan.textContent = valueText;
       } else {
-        valueSpan.textContent = ` = ${node.value}`;
+        valueSpan.textContent = ` = ${cleanValue}`;
       }
       nodeInfo.appendChild(valueSpan);
     }
@@ -500,7 +532,10 @@ class AXTreeOverlay {
       const textInput = document.createElement("input");
       textInput.type = "text";
       textInput.className = "tree-text-input";
-      textInput.value = node.value || "";
+
+      // Parse CFString format for the input value
+      const cleanValue = this.parseCFStringValue(node.value || "");
+      textInput.value = cleanValue;
       textInput.placeholder = "Type to update...";
       textInput.title = `Live edit ${node.role}`;
       textInput.style.cssText = `
@@ -539,6 +574,41 @@ class AXTreeOverlay {
       });
 
       nodeContent.appendChild(textInput);
+
+      // Add regex find & replace button
+      const regexButton = document.createElement("button");
+      regexButton.className = "tree-regex-button";
+      regexButton.textContent = ".*";
+      regexButton.title = "Open regex find & replace";
+      regexButton.style.cssText = `
+        margin-left: 4px;
+        padding: 2px 6px;
+        font-size: 10px;
+        background: #ff9800;
+        color: white;
+        border: none;
+        border-radius: 3px;
+        cursor: pointer;
+        font-family: monospace;
+        outline: none;
+        transition: background-color 0.2s;
+      `;
+
+      regexButton.addEventListener("click", (e) => {
+        e.stopPropagation();
+        // Use clean value for regex operations
+        this.openRegexPanel(node.element_id!, cleanValue);
+      });
+
+      regexButton.addEventListener("mouseenter", () => {
+        regexButton.style.backgroundColor = "#ffb74d";
+      });
+
+      regexButton.addEventListener("mouseleave", () => {
+        regexButton.style.backgroundColor = "#ff9800";
+      });
+
+      nodeContent.appendChild(regexButton);
     }
 
     nodeElement.appendChild(nodeContent);
@@ -658,6 +728,437 @@ class AXTreeOverlay {
       this.windowContainer.appendChild(errorContainer);
       this.treeContainer = errorContainer;
     }
+  }
+
+  private openRegexPanel(elementId: string, currentValue: string) {
+    // Close existing panel if open
+    this.closeRegexPanel();
+
+    // Parse CFString format for the current value
+    const cleanCurrentValue = this.parseCFStringValue(currentValue);
+
+    this.currentTargetElement = { elementId, currentValue: cleanCurrentValue };
+
+    // Create regex panel
+    this.regexPanel = document.createElement("div");
+    this.regexPanel.className = "regex-panel";
+    this.regexPanel.style.cssText = `
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0, 0, 0, 0.95);
+      color: white;
+      padding: 20px;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      min-width: 400px;
+      max-width: 600px;
+      z-index: 2000;
+      backdrop-filter: blur(15px);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        sans-serif;
+      pointer-events: auto;
+    `;
+
+    // Panel header
+    const header = document.createElement("div");
+    header.style.cssText = `
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 15px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+      padding-bottom: 10px;
+    `;
+
+    const title = document.createElement("h3");
+    title.textContent = "Regex Find & Replace";
+    title.style.cssText = `
+      margin: 0;
+      color: #4fc3f7;
+      font-size: 16px;
+    `;
+
+    const closeButton = document.createElement("button");
+    closeButton.textContent = "×";
+    closeButton.style.cssText = `
+      background: none;
+      border: none;
+      color: #fff;
+      font-size: 20px;
+      cursor: pointer;
+      padding: 0;
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    `;
+    closeButton.addEventListener("click", () => this.closeRegexPanel());
+
+    header.appendChild(title);
+    header.appendChild(closeButton);
+    this.regexPanel.appendChild(header);
+
+    // Current value display
+    const currentValueSection = document.createElement("div");
+    currentValueSection.style.marginBottom = "15px";
+
+    const currentValueLabel = document.createElement("label");
+    currentValueLabel.textContent = "Current Value:";
+    currentValueLabel.style.cssText = `
+      display: block;
+      margin-bottom: 5px;
+      font-size: 12px;
+      color: #aaa;
+    `;
+
+    const currentValueDisplay = document.createElement("div");
+    // Show the clean value, not the CFString format
+    currentValueDisplay.textContent = cleanCurrentValue || "(empty)";
+    currentValueDisplay.style.cssText = `
+      background: #1a1a1a;
+      padding: 8px;
+      border-radius: 4px;
+      border: 1px solid #333;
+      font-family: "Monaco", "Menlo", "Consolas", monospace;
+      font-size: 11px;
+      max-height: 60px;
+      overflow-y: auto;
+      word-break: break-all;
+    `;
+
+    // Add a small note if the original value was a CFString
+    if (currentValue !== cleanCurrentValue) {
+      const cfStringNote = document.createElement("div");
+      cfStringNote.textContent = `(Parsed from CFString format)`;
+      cfStringNote.style.cssText = `
+        font-size: 10px;
+        color: #666;
+        font-style: italic;
+        margin-top: 4px;
+      `;
+      currentValueSection.appendChild(currentValueLabel);
+      currentValueSection.appendChild(currentValueDisplay);
+      currentValueSection.appendChild(cfStringNote);
+    } else {
+      currentValueSection.appendChild(currentValueLabel);
+      currentValueSection.appendChild(currentValueDisplay);
+    }
+
+    this.regexPanel.appendChild(currentValueSection);
+
+    // Find input
+    const findSection = document.createElement("div");
+    findSection.style.marginBottom = "10px";
+
+    const findLabel = document.createElement("label");
+    findLabel.textContent = "Find (Regex Pattern):";
+    findLabel.style.cssText = `
+      display: block;
+      margin-bottom: 5px;
+      font-size: 12px;
+      color: #aaa;
+    `;
+
+    const findInput = document.createElement("input");
+    findInput.type = "text";
+    findInput.placeholder = "Enter regex pattern...";
+    findInput.style.cssText = `
+      width: 100%;
+      padding: 8px;
+      background: #2a2a2a;
+      color: white;
+      border: 1px solid #4fc3f7;
+      border-radius: 4px;
+      font-family: "Monaco", "Menlo", "Consolas", monospace;
+      font-size: 12px;
+      outline: none;
+      box-sizing: border-box;
+    `;
+
+    findSection.appendChild(findLabel);
+    findSection.appendChild(findInput);
+    this.regexPanel.appendChild(findSection);
+
+    // Replace input
+    const replaceSection = document.createElement("div");
+    replaceSection.style.marginBottom = "10px";
+
+    const replaceLabel = document.createElement("label");
+    replaceLabel.textContent = "Replace With:";
+    replaceLabel.style.cssText = `
+      display: block;
+      margin-bottom: 5px;
+      font-size: 12px;
+      color: #aaa;
+    `;
+
+    const replaceInput = document.createElement("input");
+    replaceInput.type = "text";
+    replaceInput.placeholder = "Enter replacement text...";
+    replaceInput.style.cssText = `
+      width: 100%;
+      padding: 8px;
+      background: #2a2a2a;
+      color: white;
+      border: 1px solid #4fc3f7;
+      border-radius: 4px;
+      font-family: "Monaco", "Menlo", "Consolas", monospace;
+      font-size: 12px;
+      outline: none;
+      box-sizing: border-box;
+    `;
+
+    replaceSection.appendChild(replaceLabel);
+    replaceSection.appendChild(replaceInput);
+    this.regexPanel.appendChild(replaceSection);
+
+    // Flags section
+    const flagsSection = document.createElement("div");
+    flagsSection.style.cssText = `
+      margin-bottom: 15px;
+      display: flex;
+      gap: 15px;
+      align-items: center;
+    `;
+
+    const flagsLabel = document.createElement("span");
+    flagsLabel.textContent = "Flags:";
+    flagsLabel.style.cssText = `
+      font-size: 12px;
+      color: #aaa;
+    `;
+
+    // Global flag
+    const globalFlag = document.createElement("label");
+    globalFlag.style.cssText = `
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      cursor: pointer;
+    `;
+    const globalCheckbox = document.createElement("input");
+    globalCheckbox.type = "checkbox";
+    globalCheckbox.checked = true; // Default to global
+    globalFlag.appendChild(globalCheckbox);
+    globalFlag.appendChild(document.createTextNode("Global (g)"));
+
+    // Case insensitive flag
+    const caseFlag = document.createElement("label");
+    caseFlag.style.cssText = `
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      cursor: pointer;
+    `;
+    const caseCheckbox = document.createElement("input");
+    caseCheckbox.type = "checkbox";
+    caseFlag.appendChild(caseCheckbox);
+    caseFlag.appendChild(document.createTextNode("Ignore Case (i)"));
+
+    // Multiline flag
+    const multilineFlag = document.createElement("label");
+    multilineFlag.style.cssText = `
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      cursor: pointer;
+    `;
+    const multilineCheckbox = document.createElement("input");
+    multilineCheckbox.type = "checkbox";
+    multilineFlag.appendChild(multilineCheckbox);
+    multilineFlag.appendChild(document.createTextNode("Multiline (m)"));
+
+    flagsSection.appendChild(flagsLabel);
+    flagsSection.appendChild(globalFlag);
+    flagsSection.appendChild(caseFlag);
+    flagsSection.appendChild(multilineFlag);
+    this.regexPanel.appendChild(flagsSection);
+
+    // Preview section
+    const previewSection = document.createElement("div");
+    previewSection.style.marginBottom = "15px";
+
+    const previewLabel = document.createElement("label");
+    previewLabel.textContent = "Preview:";
+    previewLabel.style.cssText = `
+      display: block;
+      margin-bottom: 5px;
+      font-size: 12px;
+      color: #aaa;
+    `;
+
+    const previewDisplay = document.createElement("div");
+    previewDisplay.style.cssText = `
+      background: #1a1a1a;
+      padding: 8px;
+      border-radius: 4px;
+      border: 1px solid #333;
+      font-family: "Monaco", "Menlo", "Consolas", monospace;
+      font-size: 11px;
+      max-height: 80px;
+      overflow-y: auto;
+      word-break: break-all;
+      color: #a5d6a7;
+    `;
+    previewDisplay.textContent = "(Enter pattern to see preview)";
+
+    previewSection.appendChild(previewLabel);
+    previewSection.appendChild(previewDisplay);
+    this.regexPanel.appendChild(previewSection);
+
+    // Update preview on input changes
+    const updatePreview = () => {
+      const pattern = findInput.value;
+      const replacement = replaceInput.value;
+
+      if (!pattern) {
+        previewDisplay.textContent = "(Enter pattern to see preview)";
+        previewDisplay.style.color = "#aaa";
+        return;
+      }
+
+      try {
+        const flags =
+          (globalCheckbox.checked ? "g" : "") +
+          (caseCheckbox.checked ? "i" : "") +
+          (multilineCheckbox.checked ? "m" : "");
+
+        const regex = new RegExp(pattern, flags);
+        // Use the clean current value for preview
+        const result = cleanCurrentValue.replace(regex, replacement);
+
+        if (result === cleanCurrentValue) {
+          previewDisplay.textContent = "(No matches found)";
+          previewDisplay.style.color = "#ffb74d";
+        } else {
+          previewDisplay.textContent = result;
+          previewDisplay.style.color = "#a5d6a7";
+        }
+      } catch (error) {
+        previewDisplay.textContent = `Error: ${(error as Error).message}`;
+        previewDisplay.style.color = "#f44336";
+      }
+    };
+
+    findInput.addEventListener("input", updatePreview);
+    replaceInput.addEventListener("input", updatePreview);
+    globalCheckbox.addEventListener("change", updatePreview);
+    caseCheckbox.addEventListener("change", updatePreview);
+    multilineCheckbox.addEventListener("change", updatePreview);
+
+    // Action buttons
+    const buttonSection = document.createElement("div");
+    buttonSection.style.cssText = `
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+    `;
+
+    const cancelButton = document.createElement("button");
+    cancelButton.textContent = "Cancel";
+    cancelButton.style.cssText = `
+      padding: 8px 16px;
+      background: #666;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+    `;
+    cancelButton.addEventListener("click", () => this.closeRegexPanel());
+
+    const applyButton = document.createElement("button");
+    applyButton.textContent = "Apply Replace";
+    applyButton.style.cssText = `
+      padding: 8px 16px;
+      background: #4caf50;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+    `;
+
+    applyButton.addEventListener("click", () => {
+      this.applyRegexReplace(
+        findInput.value,
+        replaceInput.value,
+        globalCheckbox.checked,
+        caseCheckbox.checked,
+        multilineCheckbox.checked
+      );
+    });
+
+    buttonSection.appendChild(cancelButton);
+    buttonSection.appendChild(applyButton);
+    this.regexPanel.appendChild(buttonSection);
+
+    // Add to document
+    document.body.appendChild(this.regexPanel);
+
+    // Focus the find input
+    findInput.focus();
+
+    // Close on Escape key
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        this.closeRegexPanel();
+        document.removeEventListener("keydown", handleKeyDown);
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+  }
+
+  private applyRegexReplace(
+    pattern: string,
+    replacement: string,
+    global: boolean,
+    ignoreCase: boolean,
+    multiline: boolean
+  ) {
+    if (!this.currentTargetElement || !pattern) {
+      return;
+    }
+
+    try {
+      const flags =
+        (global ? "g" : "") + (ignoreCase ? "i" : "") + (multiline ? "m" : "");
+
+      const regex = new RegExp(pattern, flags);
+      const result = this.currentTargetElement.currentValue.replace(
+        regex,
+        replacement
+      );
+
+      // Apply the result
+      this.writeToElement(this.currentTargetElement.elementId, result);
+
+      // Show success feedback
+      this.showWriteFeedback(
+        true,
+        `Regex replace applied: ${pattern} → ${replacement}`
+      );
+
+      // Close panel
+      this.closeRegexPanel();
+    } catch (error) {
+      this.showWriteFeedback(false, `Regex error: ${(error as Error).message}`);
+    }
+  }
+
+  private closeRegexPanel() {
+    if (this.regexPanel) {
+      this.regexPanel.remove();
+      this.regexPanel = null;
+    }
+    this.currentTargetElement = null;
   }
 }
 

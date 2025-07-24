@@ -214,6 +214,145 @@
         }
       }
 
+      /* Regex button styles */
+      .tree-regex-button {
+        margin-left: 4px !important;
+        padding: 2px 6px !important;
+        font-size: 10px !important;
+        background: #ff9800 !important;
+        color: white !important;
+        border: none !important;
+        border-radius: 3px !important;
+        cursor: pointer !important;
+        font-family: monospace !important;
+        outline: none !important;
+        transition: background-color 0.2s !important;
+        flex-shrink: 0 !important;
+      }
+
+      .tree-regex-button:hover {
+        background: #ffb74d !important;
+        transform: scale(1.05) !important;
+      }
+
+      .tree-regex-button:active {
+        background: #f57c00 !important;
+        transform: scale(0.95) !important;
+      }
+
+      /* Regex panel styles */
+      .regex-panel {
+        position: fixed !important;
+        top: 50% !important;
+        left: 50% !important;
+        transform: translate(-50%, -50%) !important;
+        background: rgba(0, 0, 0, 0.95) !important;
+        color: white !important;
+        padding: 20px !important;
+        border-radius: 8px !important;
+        border: 1px solid rgba(255, 255, 255, 0.3) !important;
+        min-width: 400px !important;
+        max-width: 600px !important;
+        z-index: 2000 !important;
+        backdrop-filter: blur(15px) !important;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5) !important;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          sans-serif !important;
+        pointer-events: auto !important;
+        animation: fadeInScale 0.3s ease-out !important;
+      }
+
+      @keyframes fadeInScale {
+        from {
+          opacity: 0;
+          transform: translate(-50%, -50%) scale(0.9);
+        }
+        to {
+          opacity: 1;
+          transform: translate(-50%, -50%) scale(1);
+        }
+      }
+
+      .regex-panel input[type="text"] {
+        width: 100% !important;
+        padding: 8px !important;
+        background: #2a2a2a !important;
+        color: white !important;
+        border: 1px solid #4fc3f7 !important;
+        border-radius: 4px !important;
+        font-family: "Monaco", "Menlo", "Consolas", monospace !important;
+        font-size: 12px !important;
+        outline: none !important;
+        box-sizing: border-box !important;
+        transition: border-color 0.2s, box-shadow 0.2s !important;
+      }
+
+      .regex-panel input[type="text"]:focus {
+        border-color: #81d4fa !important;
+        box-shadow: 0 0 6px rgba(129, 212, 250, 0.3) !important;
+      }
+
+      .regex-panel input[type="checkbox"] {
+        accent-color: #4fc3f7 !important;
+        margin-right: 5px !important;
+      }
+
+      .regex-panel button {
+        padding: 8px 16px !important;
+        border: none !important;
+        border-radius: 4px !important;
+        cursor: pointer !important;
+        font-size: 12px !important;
+        transition: background-color 0.2s, transform 0.1s !important;
+        outline: none !important;
+      }
+
+      .regex-panel button:hover {
+        transform: translateY(-1px) !important;
+      }
+
+      .regex-panel button:active {
+        transform: translateY(0) !important;
+      }
+
+      /* Close button specific styles */
+      .regex-panel button[title]:not([title=""]) {
+        background: none !important;
+        color: #fff !important;
+        font-size: 20px !important;
+        width: 24px !important;
+        height: 24px !important;
+        padding: 0 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        border-radius: 50% !important;
+      }
+
+      .regex-panel button[title]:hover {
+        background: rgba(255, 255, 255, 0.1) !important;
+      }
+
+      /* Apply button styles */
+      .regex-panel button:last-child {
+        background: #4caf50 !important;
+        color: white !important;
+      }
+
+      .regex-panel button:last-child:hover {
+        background: #66bb6a !important;
+      }
+
+      /* Cancel button styles */
+      .regex-panel button:nth-last-child(2) {
+        background: #666 !important;
+        color: white !important;
+      }
+
+      .regex-panel button:nth-last-child(2):hover {
+        background: #777 !important;
+      }
+
       .accessibility-error {
         position: absolute;
         background: rgba(244, 67, 54, 0.9);
