@@ -42,7 +42,7 @@ interface UITreeNode {
   element_id?: string;
   // Position and size for UI element positioning
   position?: [number, number]; // [x, y] screen coordinates
-  size?: [number, number];     // [width, height] dimensions
+  size?: [number, number]; // [width, height] dimensions
 }
 
 class AXTreeOverlay {
