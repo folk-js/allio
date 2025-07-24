@@ -954,7 +954,8 @@ class AXTreeOverlay {
 
     const patternInput = document.createElement("input");
     patternInput.type = "text";
-    patternInput.placeholder = "/find/gi or just: find";
+    patternInput.placeholder =
+      "/find/gi or just: find or \\b(\\w) for word starts";
     patternInput.style.cssText = `
       width: 100%;
       padding: 6px 8px;
@@ -980,7 +981,7 @@ class AXTreeOverlay {
 
     const replaceInput = document.createElement("input");
     replaceInput.type = "text";
-    replaceInput.placeholder = "replacement text";
+    replaceInput.placeholder = "replacement or $1:upper, $1:lower, $1:title";
     replaceInput.style.cssText = `
       width: 100%;
       padding: 6px 8px;
@@ -1093,7 +1094,9 @@ class AXTreeOverlay {
           regex = new RegExp(pattern, "g");
         }
 
-        const result = this.currentTargetElement!.currentValue.replace(
+        // Enhanced replacement with transformation support
+        const result = this.applyRegexWithTransforms(
+          this.currentTargetElement!.currentValue,
           regex,
           replacement
         );
@@ -1127,7 +1130,9 @@ class AXTreeOverlay {
           regex = new RegExp(pattern, "g");
         }
 
-        const result = this.currentTargetElement!.currentValue.replace(
+        // Enhanced replacement with transformation support
+        const result = this.applyRegexWithTransforms(
+          this.currentTargetElement!.currentValue,
           regex,
           replacement
         );
@@ -1188,6 +1193,69 @@ class AXTreeOverlay {
       this.regexPanel = null;
     }
     this.currentTargetElement = null;
+  }
+
+  private applyRegexWithTransforms(
+    text: string,
+    regex: RegExp,
+    replacement: string
+  ): string {
+    // Check if replacement contains transformation syntax like $1:upper, $1:lower, $1:title
+    const hasTransforms = /\$\d+:(upper|lower|title|capitalize)/i.test(
+      replacement
+    );
+
+    if (!hasTransforms) {
+      // Simple replacement without transforms
+      return text.replace(regex, replacement);
+    }
+
+    // Use function-based replacement for transformations
+    return text.replace(regex, (...args) => {
+      const match = args[0]; // Full match
+      const captures = args.slice(1, -2); // Captured groups (exclude offset and input string)
+
+      let result = replacement;
+
+      // Replace each transformation
+      result = result.replace(
+        /\$(\d+):(upper|lower|title|capitalize)/gi,
+        (transformMatch, groupNum, transform) => {
+          const groupIndex = parseInt(groupNum) - 1; // Convert to 0-based index
+
+          if (groupIndex >= 0 && groupIndex < captures.length) {
+            const capturedText = captures[groupIndex];
+
+            switch (transform.toLowerCase()) {
+              case "upper":
+                return capturedText.toUpperCase();
+              case "lower":
+                return capturedText.toLowerCase();
+              case "title":
+              case "capitalize":
+                return (
+                  capturedText.charAt(0).toUpperCase() +
+                  capturedText.slice(1).toLowerCase()
+                );
+              default:
+                return capturedText;
+            }
+          }
+
+          return transformMatch; // Return original if group not found
+        }
+      );
+
+      // Replace standard group references like $1, $2, etc.
+      result = result.replace(/\$(\d+)/g, (groupMatch, groupNum) => {
+        const groupIndex = parseInt(groupNum) - 1;
+        return groupIndex >= 0 && groupIndex < captures.length
+          ? captures[groupIndex]
+          : groupMatch;
+      });
+
+      return result;
+    });
   }
 }
 
