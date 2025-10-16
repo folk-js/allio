@@ -36,6 +36,21 @@
         flex-direction: column;
       }
 
+      .tree-legend {
+        padding: 6px 12px;
+        font-size: 9px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        background: rgba(0, 0, 0, 0.2);
+      }
+
+      .legend-item {
+        display: inline-flex;
+        align-items: center;
+      }
+
       .tree-content {
         flex: 1;
         overflow-y: auto;
@@ -65,7 +80,7 @@
         background-color: rgba(255, 255, 255, 0.08);
       }
 
-      .tree-expander {
+      .tree-indicator {
         display: inline-block;
         width: 12px;
         height: 12px;
@@ -77,25 +92,8 @@
         flex-shrink: 0;
       }
 
-      .tree-expander.expandable {
-        color: #007aff;
-        cursor: pointer;
-      }
-
-      .tree-expander:hover.expandable {
-        color: #409cff;
-      }
-
       .tree-children {
-        transition: max-height 0.15s ease-out, opacity 0.15s ease-out;
-        overflow: hidden;
-        opacity: 1;
-        max-height: 10000px;
-      }
-
-      .tree-children.collapsed {
-        max-height: 0;
-        opacity: 0;
+        padding-left: 16px;
       }
 
       .accessibility-tree > .tree-node:last-child {
@@ -117,9 +115,21 @@
         font-style: italic;
       }
 
-      .tree-value {
+      .tree-value-string {
         color: #ff9f0a;
         font-size: 10px;
+      }
+
+      .tree-value-number {
+        color: #ffd60a;
+        font-size: 10px;
+        font-weight: 500;
+      }
+
+      .tree-value-boolean {
+        color: #ff375f;
+        font-size: 10px;
+        font-weight: 500;
       }
 
       .tree-placeholder {
@@ -141,14 +151,16 @@
         font-size: 10px;
       }
 
-      .tree-state {
-        color: #ff375f;
+      .tree-state-focused {
+        color: #34c759;
         font-size: 9px;
-        font-weight: 500;
-        background: rgba(255, 55, 95, 0.15);
-        padding: 1px 4px;
-        border-radius: 3px;
-        margin-left: 4px;
+        font-weight: 600;
+      }
+
+      .tree-state-disabled {
+        color: #8e8e93;
+        font-size: 9px;
+        opacity: 0.6;
       }
 
       .tree-count {

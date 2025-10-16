@@ -7,7 +7,18 @@ use core_foundation::base::{CFType, CFTypeRef, TCFType};
 use core_foundation::boolean::CFBoolean;
 use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
+use serde::{Deserialize, Serialize};
 use std::os::raw::c_void;
+
+/// Represents a properly typed accessibility value
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", content = "value")]
+pub enum AXValue {
+    String(String),
+    Integer(i64),
+    Float(f64),
+    Boolean(bool),
+}
 
 // CGPoint and CGSize structs matching macOS CoreGraphics definitions
 #[repr(C)]
@@ -97,15 +108,11 @@ pub fn extract_size(cf_value: &impl TCFType) -> Option<(f64, f64)> {
     }
 }
 
-/// Properly extract a string value from a CFType
-/// Handles CFString, CFNumber, CFBoolean, and other types
+/// Properly extract a typed value from a CFType
+/// Handles CFString, CFNumber, CFBoolean, and returns the appropriate typed value
 ///
-/// TODO(AXIO): This currently converts all values to strings for backward compatibility
-/// with the existing frontend code. In the AXIO redesign, we should:
-/// - Return typed values (string, number, boolean) instead of converting everything to strings
-/// - Use a proper enum or tagged union to represent different value types
-/// - Let the frontend handle type-specific formatting and display
-pub fn extract_value_as_string(cf_value: &impl TCFType) -> Option<String> {
+/// For certain roles (toggles, checkboxes, radio buttons), 0/1 integers are converted to booleans
+pub fn extract_value(cf_value: &impl TCFType, role: Option<&str>) -> Option<AXValue> {
     unsafe {
         let type_ref = cf_value.as_CFTypeRef();
         let cf_type = CFType::wrap_under_get_rule(type_ref);
@@ -116,32 +123,46 @@ pub fn extract_value_as_string(cf_value: &impl TCFType) -> Option<String> {
             let cf_string = CFString::wrap_under_get_rule(type_ref as *const _);
             let s = cf_string.to_string();
             // Filter out empty strings
-            return if s.is_empty() { None } else { Some(s) };
+            return if s.is_empty() {
+                None
+            } else {
+                Some(AXValue::String(s))
+            };
         }
 
         // Try CFNumber
-        // TODO(AXIO): Should return actual number type, not string
         if type_id == CFNumber::type_id() {
             let cf_number = CFNumber::wrap_under_get_rule(type_ref as *const _);
+
+            // For toggle-like elements, convert 0/1 integers to booleans
+            if let Some(r) = role {
+                if r == "AXToggle"
+                    || r == "AXCheckBox"
+                    || r == "AXRadioButton"
+                    || r.contains("Toggle")
+                    || r.contains("CheckBox")
+                    || r.contains("RadioButton")
+                {
+                    if let Some(int_val) = cf_number.to_i64() {
+                        return Some(AXValue::Boolean(int_val != 0));
+                    }
+                }
+            }
+
             // Try to get as i64 first, then f64 if that fails
             if let Some(int_val) = cf_number.to_i64() {
-                return Some(int_val.to_string());
+                return Some(AXValue::Integer(int_val));
             } else if let Some(float_val) = cf_number.to_f64() {
-                return Some(float_val.to_string());
+                return Some(AXValue::Float(float_val));
             }
         }
 
         // Try CFBoolean
-        // TODO(AXIO): Should return actual boolean type, not "1"/"0" strings
         if type_id == CFBoolean::type_id() {
             let cf_bool = CFBoolean::wrap_under_get_rule(type_ref as *const _);
             // CFBoolean can be converted to bool via Into trait
             let bool_val: bool = cf_bool.into();
-            return Some(if bool_val {
-                "1".to_string()
-            } else {
-                "0".to_string()
-            });
+            return Some(AXValue::Boolean(bool_val));
         }
 
         // For other types, we can't reliably extract them

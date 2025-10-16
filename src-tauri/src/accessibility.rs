@@ -4,13 +4,13 @@ use core_foundation::base::TCFType;
 use core_foundation::string::CFString;
 use serde::{Deserialize, Serialize};
 
-use crate::ax_value::{extract_position, extract_size, extract_value_as_string};
+use crate::ax_value::{extract_position, extract_size, extract_value, AXValue};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UITreeNode {
     pub role: String,
     pub title: Option<String>,
-    pub value: Option<String>,
+    pub value: Option<AXValue>,
     pub enabled: bool,
     pub children: Vec<UITreeNode>,
     pub depth: usize,
@@ -36,7 +36,7 @@ pub struct AccessibilityEvent {
     pub event_type: String,
     pub element_role: String,
     pub element_title: Option<String>,
-    pub element_value: Option<String>,
+    pub element_value: Option<AXValue>,
     pub timestamp: u64,
 }
 
@@ -177,7 +177,7 @@ fn walk_element_tree(
     let value = element
         .attribute(&AXAttribute::value())
         .ok()
-        .and_then(|v| extract_value_as_string(&v));
+        .and_then(|v| extract_value(&v, Some(&role)));
 
     let enabled = element
         .attribute(&AXAttribute::enabled())

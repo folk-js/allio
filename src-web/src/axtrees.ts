@@ -22,10 +22,17 @@ interface ServerMessage {
   message?: string;
 }
 
+// Typed value matching the Rust AXValue enum
+type AXValue =
+  | { type: "String"; value: string }
+  | { type: "Integer"; value: number }
+  | { type: "Float"; value: number }
+  | { type: "Boolean"; value: boolean };
+
 interface UITreeNode {
   role: string;
   title?: string;
-  value?: string;
+  value?: AXValue;
   enabled: boolean;
   children: UITreeNode[];
   depth: number;
@@ -52,7 +59,6 @@ class AXTreeOverlay {
   private treeContainer: HTMLElement | null = null;
   private overlayProcessId: number | null = null;
   private lastNonOverlayWindow: WindowInfo | null = null;
-  private expandedNodes: Set<string> = new Set(); // Track which nodes are collapsed (prefixed with 'collapsed:')
   private refreshTimer: number | null = null;
   private readonly REFRESH_INTERVAL = 2000; // 2 seconds
   private regexPanel: HTMLElement | null = null;
@@ -80,69 +86,47 @@ class AXTreeOverlay {
   }
 
   /**
-   * Parse CFString and CFNumber debug output and extract the actual content
-   * Example: '<CFString 0x155fff590 [0x20c4c0998]>{contents = "hello world"}' -> 'hello world'
-   * Example: '<CFNumber 0x9c12b19d15f2a744 [0x20c4c0998]>{value = +1, type = kCFNumberSInt32Type}' -> '1'
-   *
-   * TODO(AXIO): This should no longer be necessary since the backend now properly extracts
-   * values using the Core Foundation APIs instead of debug string formatting. This is kept
-   * for backward compatibility during the transition. Should be removed once we verify
-   * all values are being extracted correctly.
+   * Convert a typed AXValue to a string for display purposes
    */
-  private parseCFStringValue(value: string): string {
-    if (!value) return value;
-
-    // Check if this is a CFString debug representation
-    const cfStringMatch = value.match(/\{contents = "(.*?)"\}/);
-    if (cfStringMatch && cfStringMatch[1] !== undefined) {
-      return cfStringMatch[1];
+  private axValueToString(value: AXValue): string {
+    switch (value.type) {
+      case "String":
+        return value.value;
+      case "Integer":
+      case "Float":
+        return value.value.toString();
+      case "Boolean":
+        return value.value ? "1" : "0";
     }
-
-    // Check if this is a CFNumber debug representation
-    const cfNumberMatch = value.match(/\{value = \+?(-?\d+(?:\.\d+)?)/);
-    if (cfNumberMatch && cfNumberMatch[1] !== undefined) {
-      return cfNumberMatch[1];
-    }
-
-    // Handle other potential CFString formats
-    const simpleCFMatch = value.match(/CFString.*?"(.*?)"/);
-    if (simpleCFMatch && simpleCFMatch[1] !== undefined) {
-      return simpleCFMatch[1];
-    }
-
-    // If it's not a CF format, return as-is
-    return value;
   }
 
   /**
    * Format values with special handling for different UI element types
    */
-  private formatValueForRole(value: string, role: string): string {
-    const cleanValue = this.parseCFStringValue(value);
-
+  private formatValueForRole(value: AXValue, role: string): string {
     // Special formatting for radio buttons and checkboxes
     if (role === "AXRadioButton" || role.includes("RadioButton")) {
-      if (cleanValue === "1") {
-        return "selected";
-      } else if (cleanValue === "0") {
-        return "unselected";
+      if (value.type === "Boolean" || value.type === "Integer") {
+        const boolVal =
+          value.type === "Boolean" ? value.value : value.value === 1;
+        return boolVal ? "selected" : "unselected";
       }
     }
 
     if (role === "AXCheckBox" || role.includes("CheckBox")) {
-      if (cleanValue === "1") {
-        return "checked";
-      } else if (cleanValue === "0") {
-        return "unchecked";
+      if (value.type === "Boolean" || value.type === "Integer") {
+        const boolVal =
+          value.type === "Boolean" ? value.value : value.value === 1;
+        return boolVal ? "checked" : "unchecked";
       }
     }
 
     // For sliders and progress indicators, keep numeric values
     if (role === "AXSlider" || role === "AXProgressIndicator") {
-      return cleanValue;
+      return this.axValueToString(value);
     }
 
-    return cleanValue;
+    return this.axValueToString(value);
   }
 
   private async setupWebSocketListener() {
@@ -392,7 +376,6 @@ class AXTreeOverlay {
   private displayAccessibilityTree(tree: UITreeNode, window: WindowInfo) {
     // Clear existing tree and reset state
     this.clearAccessibilityTree();
-    this.expandedNodes.clear(); // Reset expansion state for new tree
 
     // Create tree container positioned to the right of the focused window
     this.treeContainer = document.createElement("div");
@@ -404,6 +387,20 @@ class AXTreeOverlay {
     this.treeContainer.style.top = `${window.y}px`;
     // Set height to match window height exactly
     this.treeContainer.style.height = `${window.h}px`;
+
+    // Add color key legend
+    const legend = document.createElement("div");
+    legend.className = "tree-legend";
+    legend.innerHTML = `
+      <span class="legend-item"><span class="tree-role">role</span></span>
+      <span class="legend-item"><span class="tree-subrole">subrole</span></span>
+      <span class="legend-item"><span class="tree-title">title</span></span>
+      <span class="legend-item"><span class="tree-value-string">string</span></span>
+      <span class="legend-item"><span class="tree-value-number">number</span></span>
+      <span class="legend-item"><span class="tree-value-boolean">bool</span></span>
+      <span class="legend-item"><span class="tree-description">desc</span></span>
+    `;
+    this.treeContainer.appendChild(legend);
 
     // Create scrollable content wrapper
     const contentWrapper = document.createElement("div");
@@ -453,27 +450,12 @@ class AXTreeOverlay {
       const nodeContent = document.createElement("div");
       nodeContent.className = "tree-node-content";
 
-      // Expand/collapse indicator
-      const expander = document.createElement("span");
-      expander.className = "tree-expander";
+      // Indicator for leaf vs parent nodes
       const hasChildren = node.children && node.children.length > 0;
-
-      if (hasChildren) {
-        expander.classList.add("expandable");
-        // Expand by default, only collapse if manually set
-        const isExpanded = !this.expandedNodes.has(`collapsed:${nodeId}`);
-        expander.textContent = isExpanded ? "−" : "+";
-
-        // Click handler for expand/collapse
-        expander.addEventListener("click", (e) => {
-          e.stopPropagation();
-          this.toggleNodeExpansion(nodeId!, nodeElement, expander);
-        });
-      } else {
-        expander.textContent = "•"; // Bullet for leaf nodes
-      }
-
-      nodeContent.appendChild(expander);
+      const indicator = document.createElement("span");
+      indicator.className = "tree-indicator";
+      indicator.textContent = hasChildren ? "▸" : "•";
+      nodeContent.appendChild(indicator);
 
       // Node info container
       const nodeInfo = document.createElement("span");
@@ -501,24 +483,35 @@ class AXTreeOverlay {
         nodeInfo.appendChild(titleSpan);
       }
 
-      // Value (if present) - enhanced for text fields
+      // Value (if present) - with type-specific colors
       if (node.value) {
         const valueSpan = document.createElement("span");
-        valueSpan.className = "tree-value";
 
-        // Parse and format value based on role
-        const formattedValue = this.formatValueForRole(node.value, node.role);
-
-        // For text fields, show more detailed value information
-        if (node.role === "AXTextField" || node.role === "AXTextArea") {
-          let valueText = ` = "${formattedValue}"`;
-          if (node.character_count !== undefined) {
-            valueText += ` (${node.character_count} chars)`;
-          }
-          valueSpan.textContent = valueText;
-        } else {
-          valueSpan.textContent = ` = ${formattedValue}`;
+        // Set color based on type
+        switch (node.value.type) {
+          case "String":
+            valueSpan.className = "tree-value-string";
+            const formattedValue = this.formatValueForRole(
+              node.value,
+              node.role
+            );
+            valueSpan.textContent = ` = "${formattedValue}"`;
+            break;
+          case "Integer":
+          case "Float":
+            valueSpan.className = "tree-value-number";
+            valueSpan.textContent = ` = ${node.value.value}`;
+            break;
+          case "Boolean":
+            valueSpan.className = "tree-value-boolean";
+            const boolFormatted = this.formatValueForRole(
+              node.value,
+              node.role
+            );
+            valueSpan.textContent = ` = ${boolFormatted}`;
+            break;
         }
+
         nodeInfo.appendChild(valueSpan);
       }
 
@@ -546,16 +539,17 @@ class AXTreeOverlay {
         nodeInfo.appendChild(descSpan);
       }
 
-      // State indicators
-      const stateIndicators = [];
-      if (node.focused) stateIndicators.push("focused");
-      if (node.selected) stateIndicators.push("selected");
-      if (!node.enabled) stateIndicators.push("disabled");
-
-      if (stateIndicators.length > 0) {
+      // State indicators - simplified
+      if (node.focused) {
         const stateSpan = document.createElement("span");
-        stateSpan.className = "tree-state";
-        stateSpan.textContent = ` [${stateIndicators.join(", ")}]`;
+        stateSpan.className = "tree-state-focused";
+        stateSpan.textContent = " [focused]";
+        nodeInfo.appendChild(stateSpan);
+      }
+      if (!node.enabled) {
+        const stateSpan = document.createElement("span");
+        stateSpan.className = "tree-state-disabled";
+        stateSpan.textContent = " [disabled]";
         nodeInfo.appendChild(stateSpan);
       }
 
@@ -599,8 +593,8 @@ class AXTreeOverlay {
         textInput.className = "tree-text-input";
         textInput.type = "text";
 
-        // Use raw parsed value for editing (not role-formatted)
-        const cleanValue = this.parseCFStringValue(node.value || "");
+        // Use the raw value for editing (not role-formatted)
+        const cleanValue = node.value ? this.axValueToString(node.value) : "";
         textInput.value = cleanValue;
         textInput.placeholder = "Enter text...";
 
@@ -662,12 +656,6 @@ class AXTreeOverlay {
         const childrenContainer = document.createElement("div");
         childrenContainer.className = "tree-children";
 
-        // Expand by default, only collapse if manually set
-        const isExpanded = !this.expandedNodes.has(`collapsed:${nodeId}`);
-        if (!isExpanded) {
-          childrenContainer.classList.add("collapsed");
-        }
-
         for (const child of node.children) {
           // Filter each child and only add non-null filtered nodes
           const filteredChild = this.filterEmptyGroups(child);
@@ -686,32 +674,6 @@ class AXTreeOverlay {
     } catch (error) {
       console.error("Error creating tree element:", error);
       return document.createElement("div"); // Return a placeholder to avoid breaking rendering
-    }
-  }
-
-  private toggleNodeExpansion(
-    nodeId: string,
-    nodeElement: HTMLElement,
-    expander: HTMLElement
-  ) {
-    const childrenContainer = nodeElement.querySelector(
-      ".tree-children"
-    ) as HTMLElement;
-    if (!childrenContainer) return;
-
-    const isCurrentlyExpanded =
-      !childrenContainer.classList.contains("collapsed");
-
-    if (isCurrentlyExpanded) {
-      // Collapse
-      childrenContainer.classList.add("collapsed");
-      expander.textContent = "+";
-      this.expandedNodes.add(`collapsed:${nodeId}`);
-    } else {
-      // Expand
-      childrenContainer.classList.remove("collapsed");
-      expander.textContent = "−";
-      this.expandedNodes.delete(`collapsed:${nodeId}`);
     }
   }
 
@@ -898,10 +860,7 @@ class AXTreeOverlay {
     // Close existing panel if open
     this.closeRegexPanel();
 
-    // Parse CFString format for the current value
-    const cleanCurrentValue = this.parseCFStringValue(currentValue);
-
-    this.currentTargetElement = { elementId, currentValue: cleanCurrentValue };
+    this.currentTargetElement = { elementId, currentValue };
 
     // Create regex panel
     this.regexPanel = document.createElement("div");
@@ -1087,7 +1046,7 @@ class AXTreeOverlay {
       overflow-y: auto;
       word-break: break-all;
     `;
-    previewDiv.textContent = cleanCurrentValue || "(empty)";
+    previewDiv.textContent = currentValue || "(empty)";
 
     // Buttons
     const buttonContainer = document.createElement("div");
@@ -1144,7 +1103,7 @@ class AXTreeOverlay {
       const replacement = replaceInput.value;
 
       if (!pattern) {
-        previewDiv.textContent = cleanCurrentValue || "(empty)";
+        previewDiv.textContent = currentValue || "(empty)";
         return;
       }
 
@@ -1338,7 +1297,7 @@ class AXTreeOverlay {
     if (node.role === "AXGroup") {
       // Filter out AXGroup if it has no meaningful content
       const hasTitle = node.title && node.title.trim() !== "";
-      const hasValue = node.value && node.value.trim() !== "";
+      const hasValue = node.value !== undefined;
       const hasDescription = node.description && node.description.trim() !== "";
       const hasPlaceholder = node.placeholder && node.placeholder.trim() !== "";
       const hasChildren = filteredChildren.length > 0;
