@@ -2128,6 +2128,7 @@ dependencies = [
  "tauri-plugin-shell",
  "tokio",
  "tower-http 0.5.2",
+ "uuid",
  "x-win",
 ]
 

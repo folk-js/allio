@@ -1,0 +1,307 @@
+/**
+ * macOS Platform Implementation
+ *
+ * Converts macOS Accessibility API elements directly to AXIO format.
+ * All macOS-specific knowledge is encapsulated here.
+ */
+use accessibility::*;
+use accessibility_sys::{kAXPositionAttribute, kAXSizeAttribute};
+use core_foundation::base::TCFType;
+use core_foundation::string::CFString;
+
+use crate::ax_value::{extract_position, extract_size, extract_value};
+use crate::axio::{AXNode, AXRole, Bounds, Position, Size};
+
+/// Convert macOS AXUIElement to AXIO AXNode
+///
+/// This is the main conversion function that maps macOS accessibility
+/// elements to our platform-agnostic AXIO format.
+pub fn element_to_axnode(
+    element: &AXUIElement,
+    depth: usize,
+    max_depth: usize,
+    max_children_per_level: usize,
+) -> Option<AXNode> {
+    // Stop traversal at max depth
+    if depth >= max_depth {
+        return None;
+    }
+
+    // Get role and convert to AXIO format
+    let platform_role = element
+        .attribute(&AXAttribute::role())
+        .ok()
+        .map(|r| r.to_string())
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    let role = map_platform_role(&platform_role);
+
+    // Get subrole (platform-specific subtype)
+    let subrole = element
+        .attribute(&AXAttribute::subrole())
+        .ok()
+        .map(|sr| sr.to_string())
+        .filter(|s| !s.is_empty());
+
+    // Get title
+    let title = element.attribute(&AXAttribute::title()).ok().and_then(|t| {
+        let s = t.to_string();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    });
+
+    // Get value (with role context for proper type conversion)
+    let value = element
+        .attribute(&AXAttribute::value())
+        .ok()
+        .and_then(|v| extract_value(&v, Some(&platform_role)));
+
+    // Get enabled state
+    let enabled = element
+        .attribute(&AXAttribute::enabled())
+        .ok()
+        .and_then(|e| e.try_into().ok())
+        .unwrap_or(false);
+
+    // Get description
+    let description = element
+        .attribute(&AXAttribute::description())
+        .ok()
+        .and_then(|d| {
+            let s = d.to_string();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        });
+
+    // Get placeholder text
+    let placeholder = element
+        .attribute(&AXAttribute::placeholder_value())
+        .ok()
+        .and_then(|p| {
+            let s = p.to_string();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        });
+
+    // Get focused state
+    let focused = element
+        .attribute(&AXAttribute::focused())
+        .ok()
+        .and_then(|f| f.try_into().ok())
+        .unwrap_or(false);
+
+    // Get selected state (not available in all versions of accessibility crate)
+    let selected = None;
+
+    // Get geometry (position and size)
+    let bounds = get_element_bounds(element);
+
+    // Generate unique ID for this element
+    // Note: In the future we might use proper accessibility identifiers if available
+    // For now, using depth and a random ID
+    let id = format!("depth{}-{}", depth, uuid::Uuid::new_v4().simple());
+
+    // Get children
+    let children = get_element_children(element, depth, max_depth, max_children_per_level);
+
+    Some(AXNode {
+        id,
+        role,
+        subrole,
+        title,
+        value,
+        description,
+        placeholder,
+        focused,
+        enabled,
+        selected,
+        bounds,
+        children,
+    })
+}
+
+/// Map macOS AX* roles to ARIA-based AXIO roles
+fn map_platform_role(platform_role: &str) -> AXRole {
+    // Remove "AX" prefix if present
+    let role = platform_role
+        .strip_prefix("AX")
+        .unwrap_or(platform_role)
+        .to_lowercase();
+
+    match role.as_str() {
+        // Document structure
+        "application" => AXRole::Application,
+        "window" | "standardwindow" => AXRole::Window,
+        "group" | "scrollarea" => AXRole::Group,
+
+        // Interactive elements
+        "button" | "defaultbutton" => AXRole::Button,
+        "checkbox" => AXRole::Checkbox,
+        "radiobutton" => AXRole::Radio,
+        "toggle" => AXRole::Toggle,
+        "textfield" | "textarea" | "textbox" | "securetextfield" | "combobox" => AXRole::Textbox,
+        "searchfield" => AXRole::Searchbox,
+        "slider" => AXRole::Slider,
+        "menu" => AXRole::Menu,
+        "menuitem" => AXRole::Menuitem,
+        "menubar" => AXRole::Menubar,
+        "link" => AXRole::Link,
+        "tab" => AXRole::Tab,
+        "tabgroup" => AXRole::Tablist,
+
+        // Static content
+        "statictext" | "text" => AXRole::Text,
+        "heading" => AXRole::Heading,
+        "image" => AXRole::Image,
+        "list" => AXRole::List,
+        "listitem" | "row" => AXRole::Listitem,
+        "table" => AXRole::Table,
+        "cell" => AXRole::Cell,
+
+        // Other
+        "progressindicator" => AXRole::Progressbar,
+        "scrollbar" => AXRole::Scrollbar,
+
+        _ => AXRole::Unknown,
+    }
+}
+
+/// Extract geometry (position and size) from element
+fn get_element_bounds(element: &AXUIElement) -> Option<Bounds> {
+    // Get position
+    let position_attr = CFString::new(kAXPositionAttribute);
+    let ax_position_attr = AXAttribute::new(&position_attr);
+
+    let position = element
+        .attribute(&ax_position_attr)
+        .ok()
+        .and_then(|p| extract_position(&p))?;
+
+    // Get size
+    let size_attr = CFString::new(kAXSizeAttribute);
+    let ax_size_attr = AXAttribute::new(&size_attr);
+
+    let size = element
+        .attribute(&ax_size_attr)
+        .ok()
+        .and_then(|s| extract_size(&s))?;
+
+    Some(Bounds {
+        position: Position {
+            x: position.0,
+            y: position.1,
+        },
+        size: Size {
+            width: size.0,
+            height: size.1,
+        },
+    })
+}
+
+/// Get children of an element, recursively converting to AXNode
+fn get_element_children(
+    element: &AXUIElement,
+    depth: usize,
+    max_depth: usize,
+    max_children_per_level: usize,
+) -> Vec<AXNode> {
+    let children_array = match element.attribute(&AXAttribute::children()) {
+        Ok(children) => children,
+        Err(_) => return Vec::new(),
+    };
+
+    let child_count = children_array.len();
+    let mut result = Vec::new();
+
+    for i in 0..child_count.min(max_children_per_level as isize) {
+        if let Some(child_ref) = children_array.get(i) {
+            if let Some(child_node) =
+                element_to_axnode(&(*child_ref), depth + 1, max_depth, max_children_per_level)
+            {
+                result.push(child_node);
+            }
+        }
+    }
+
+    result
+}
+
+/// Get accessibility tree for an application by PID
+///
+/// This is the main entry point for getting an accessibility tree
+/// in AXIO format from a macOS application.
+pub fn get_ax_tree_by_pid(
+    pid: u32,
+    max_depth: usize,
+    max_children_per_level: usize,
+) -> Result<AXNode, String> {
+    let app_element = AXUIElement::application(pid as i32);
+
+    element_to_axnode(&app_element, 0, max_depth, max_children_per_level)
+        .ok_or_else(|| format!("Failed to get accessibility tree for PID {}", pid))
+}
+
+/// Write text to a specific element (identified by path through the tree)
+///
+/// Path is a sequence of child indices from root to target element.
+pub fn write_to_element(pid: u32, element_path: &[usize], text: &str) -> Result<(), String> {
+    let app_element = AXUIElement::application(pid as i32);
+
+    // Navigate to target element
+    let target_element = navigate_to_element(&app_element, element_path)
+        .ok_or_else(|| "Could not find target element".to_string())?;
+
+    // Check if element is writable
+    let role = target_element
+        .attribute(&AXAttribute::role())
+        .ok()
+        .map(|r| r.to_string())
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    if !is_writable_role(&role) {
+        return Err(format!("Element with role '{}' is not writable", role));
+    }
+
+    // Set the value
+    let cf_string = CFString::new(text);
+    target_element
+        .set_value(cf_string.as_CFType())
+        .map_err(|e| format!("Failed to set value: {:?}", e))?;
+
+    Ok(())
+}
+
+/// Navigate to an element using a path of child indices
+fn navigate_to_element(root: &AXUIElement, path: &[usize]) -> Option<AXUIElement> {
+    let mut current = root.clone();
+
+    for &index in path {
+        let children = current.attribute(&AXAttribute::children()).ok()?;
+
+        if index >= children.len() as usize {
+            return None;
+        }
+
+        let child_ref = children.get(index as isize)?;
+        current = (*child_ref).clone();
+    }
+
+    Some(current)
+}
+
+/// Check if a role represents a writable element
+fn is_writable_role(role: &str) -> bool {
+    matches!(
+        role,
+        "AXTextField" | "AXTextArea" | "AXComboBox" | "AXSecureTextField" | "AXSearchField"
+    )
+}

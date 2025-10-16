@@ -13,7 +13,8 @@ use std::{collections::HashSet, sync::Arc};
 use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::accessibility::{walk_app_tree_by_pid_with_limits, write_to_element_by_pid_and_path, UITreeNode};
+use crate::platform::{get_ax_tree_by_pid, write_to_element};
+use crate::axio::AXNode;
 use crate::windows::{WindowInfo, WindowUpdatePayload};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -66,7 +67,7 @@ struct AccessibilityTreeResponse {
     msg_type: String,
     pid: u32,
     success: bool,
-    tree: Option<UITreeNode>,
+    tree: Option<AXNode>,
     error: Option<String>,
 }
 
@@ -310,7 +311,7 @@ async fn handle_client_message(
             // Reduced logging for live updates to avoid spam
 
             // Attempt to write to the element
-            let (success, message, error) = match write_to_element_by_pid_and_path(
+            let (success, message, error) = match write_to_element(
                 write_request.pid,
                 &write_request.element_path,
                 &write_request.text,
@@ -347,12 +348,12 @@ async fn handle_client_message(
             );
 
             // Get the accessibility tree with configurable limits
-            let (success, tree, error) = match walk_app_tree_by_pid_with_limits(
+            let (success, tree, error) = match get_ax_tree_by_pid(
                 ax_request.pid,
                 ax_request.max_depth,
                 ax_request.max_children_per_level,
             ) {
-                Ok(tree) => (true, Some(tree), None),
+                Ok(ax_tree) => (true, Some(ax_tree), None),
                 Err(e) => (false, None, Some(e)),
             };
 

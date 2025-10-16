@@ -1,4 +1,5 @@
 import { InterlayClient } from "./interlay-client.ts";
+import { AXNode, AXValue, axValueToString } from "./axio.ts";
 
 interface WindowInfo {
   id: string;
@@ -16,40 +17,10 @@ interface ServerMessage {
   type?: string;
   pid?: number;
   success?: boolean;
-  tree?: UITreeNode;
+  tree?: AXNode;
   error?: string;
   overlay_pid?: number;
   message?: string;
-}
-
-// Typed value matching the Rust AXValue enum
-type AXValue =
-  | { type: "String"; value: string }
-  | { type: "Integer"; value: number }
-  | { type: "Float"; value: number }
-  | { type: "Boolean"; value: boolean };
-
-interface UITreeNode {
-  role: string;
-  title?: string;
-  value?: AXValue;
-  enabled: boolean;
-  children: UITreeNode[];
-  depth: number;
-  // Additional attributes for richer information
-  description?: string;
-  help?: string;
-  placeholder?: string;
-  role_description?: string;
-  subrole?: string;
-  focused?: boolean;
-  selected?: boolean;
-  selected_text?: string;
-  character_count?: number;
-  element_id?: string;
-  // Position and size for UI element positioning
-  position?: [number, number]; // [x, y] screen coordinates
-  size?: [number, number]; // [width, height] dimensions
 }
 
 class AXTreeOverlay {
@@ -66,7 +37,7 @@ class AXTreeOverlay {
     elementId: string;
     currentValue: string;
   } | null = null;
-  private currentTreeData: UITreeNode | null = null; // Store the current tree data for position lookups
+  private currentTreeData: AXNode | null = null; // Store the current tree data for position lookups
   private renderedNodeCount: number = 0; // Track rendered DOM elements
   private hoverOutline: HTMLElement | null = null; // Visual outline for hovered elements
 
@@ -87,17 +58,28 @@ class AXTreeOverlay {
 
   /**
    * Convert a typed AXValue to a string for display purposes
+   * (delegates to axio.ts helper)
    */
   private axValueToString(value: AXValue): string {
-    switch (value.type) {
-      case "String":
-        return value.value;
-      case "Integer":
-      case "Float":
-        return value.value.toString();
-      case "Boolean":
-        return value.value ? "1" : "0";
-    }
+    return axValueToString(value);
+  }
+
+  /**
+   * Extract position tuple from AXNode bounds
+   */
+  private getPosition(node: AXNode): [number, number] | undefined {
+    return node.bounds
+      ? [node.bounds.position.x, node.bounds.position.y]
+      : undefined;
+  }
+
+  /**
+   * Extract size tuple from AXNode bounds
+   */
+  private getSize(node: AXNode): [number, number] | undefined {
+    return node.bounds
+      ? [node.bounds.size.width, node.bounds.size.height]
+      : undefined;
   }
 
   /**
@@ -306,7 +288,7 @@ class AXTreeOverlay {
     }
   }
 
-  private countTreeNodes(node: UITreeNode): number {
+  private countTreeNodes(node: AXNode): number {
     let count = 1; // Count this node
     for (const child of node.children) {
       count += this.countTreeNodes(child);
@@ -350,7 +332,7 @@ class AXTreeOverlay {
     this.wsClient.send(writeRequest);
   }
 
-  private refreshTreeContent(tree: UITreeNode, window: WindowInfo) {
+  private refreshTreeContent(tree: AXNode, window: WindowInfo) {
     if (!this.treeContainer) return;
 
     // Store the updated tree data
@@ -373,7 +355,7 @@ class AXTreeOverlay {
     }
   }
 
-  private displayAccessibilityTree(tree: UITreeNode, window: WindowInfo) {
+  private displayAccessibilityTree(tree: AXNode, window: WindowInfo) {
     // Clear existing tree and reset state
     this.clearAccessibilityTree();
 
@@ -431,20 +413,17 @@ class AXTreeOverlay {
     this.startRefreshTimer();
   }
 
-  private createTreeElement(node: UITreeNode, nodeId?: string): HTMLElement {
+  private createTreeElement(node: AXNode, nodeId?: string): HTMLElement {
     try {
-      // Generate unique ID for this node
+      // Use node's ID or generate one
       if (!nodeId) {
-        nodeId = `${node.role}-${node.depth}-${Math.random()
-          .toString(36)
-          .substr(2, 9)}`;
+        nodeId =
+          node.id || `${node.role}-${Math.random().toString(36).substr(2, 9)}`;
       }
 
       const nodeElement = document.createElement("div");
       nodeElement.className = "tree-node";
-      // Reduced indentation - smaller increments, lower max
-      const indent = Math.min(node.depth * 4, 16); // Max 16px indent (was 24px)
-      nodeElement.style.marginLeft = `${indent}px`;
+      // Note: AXNode doesn't have depth; indentation is handled by CSS tree-children padding
 
       // Create node content
       const nodeContent = document.createElement("div");
@@ -523,14 +502,6 @@ class AXTreeOverlay {
         nodeInfo.appendChild(placeholderSpan);
       }
 
-      // Selected text (if present)
-      if (node.selected_text) {
-        const selectedSpan = document.createElement("span");
-        selectedSpan.className = "tree-selected";
-        selectedSpan.textContent = ` selected:"${node.selected_text}"`;
-        nodeInfo.appendChild(selectedSpan);
-      }
-
       // Description (if present)
       if (node.description) {
         const descSpan = document.createElement("span");
@@ -564,11 +535,13 @@ class AXTreeOverlay {
       nodeContent.appendChild(nodeInfo);
 
       // Add hover outline for elements with position/size data
-      if (node.position && node.size) {
+      const position = this.getPosition(node);
+      const size = this.getSize(node);
+      if (position && size) {
         nodeContent.style.cursor = "pointer";
 
         nodeContent.addEventListener("mouseenter", () => {
-          this.showHoverOutline(node.position!, node.size!);
+          this.showHoverOutline(position, size);
         });
 
         nodeContent.addEventListener("mouseleave", () => {
@@ -578,11 +551,10 @@ class AXTreeOverlay {
 
       // Add live text input for writable elements
       if (
-        node.element_id &&
-        (node.role === "AXTextField" ||
-          node.role === "AXTextArea" ||
-          node.role === "AXComboBox" ||
-          node.role === "AXSecureTextField")
+        node.id &&
+        (node.role === "textbox" ||
+          node.role === "searchbox" ||
+          node.role === "unknown") // temporary: accept unknown for unmapped roles
       ) {
         // Container for input and regex button
         const inputContainer = document.createElement("div");
@@ -606,7 +578,7 @@ class AXTreeOverlay {
 
             if (this.focusedWindow) {
               this.writeToElement(
-                node.element_id!,
+                node.id,
                 textInput.value,
                 this.focusedWindow.process_id
               );
@@ -629,12 +601,7 @@ class AXTreeOverlay {
           e.stopPropagation();
 
           // Use raw parsed value for regex operations (not role-formatted)
-          this.openRegexPanel(
-            node.element_id!,
-            cleanValue,
-            node.position,
-            node.size
-          );
+          this.openRegexPanel(node.id, cleanValue, position, size);
         });
 
         // Add elements to container
@@ -756,10 +723,13 @@ class AXTreeOverlay {
     }
 
     // Return position and size if available
-    if (currentNode.position && currentNode.size) {
+    if (currentNode.bounds) {
       return {
-        position: [currentNode.position[0], currentNode.position[1]],
-        size: [currentNode.size[0], currentNode.size[1]],
+        position: [
+          currentNode.bounds.position.x,
+          currentNode.bounds.position.y,
+        ],
+        size: [currentNode.bounds.size.width, currentNode.bounds.size.height],
       };
     }
 
@@ -1287,15 +1257,15 @@ class AXTreeOverlay {
     });
   }
 
-  private filterEmptyGroups(node: UITreeNode): UITreeNode | null {
+  private filterEmptyGroups(node: AXNode): AXNode | null {
     // First, recursively filter children
     const filteredChildren = node.children
       .map((child) => this.filterEmptyGroups(child))
-      .filter((child): child is UITreeNode => child !== null);
+      .filter((child): child is AXNode => child !== null);
 
     // Check if this is an empty group that should be filtered out
-    if (node.role === "AXGroup") {
-      // Filter out AXGroup if it has no meaningful content
+    if (node.role === "group") {
+      // Filter out group if it has no meaningful content
       const hasTitle = node.title && node.title.trim() !== "";
       const hasValue = node.value !== undefined;
       const hasDescription = node.description && node.description.trim() !== "";

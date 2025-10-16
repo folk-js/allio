@@ -16,6 +16,8 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 
 mod accessibility;
 mod ax_value;
+mod axio;
+mod platform;
 mod websocket;
 mod windows;
 
