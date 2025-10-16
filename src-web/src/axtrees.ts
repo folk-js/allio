@@ -62,6 +62,7 @@ class AXTreeOverlay {
   } | null = null;
   private currentTreeData: UITreeNode | null = null; // Store the current tree data for position lookups
   private renderedNodeCount: number = 0; // Track rendered DOM elements
+  private hoverOutline: HTMLElement | null = null; // Visual outline for hovered elements
 
   // Configurable traversal limits
   private readonly MAX_DEPTH = 100;
@@ -82,6 +83,11 @@ class AXTreeOverlay {
    * Parse CFString and CFNumber debug output and extract the actual content
    * Example: '<CFString 0x155fff590 [0x20c4c0998]>{contents = "hello world"}' -> 'hello world'
    * Example: '<CFNumber 0x9c12b19d15f2a744 [0x20c4c0998]>{value = +1, type = kCFNumberSInt32Type}' -> '1'
+   *
+   * TODO(AXIO): This should no longer be necessary since the backend now properly extracts
+   * values using the Core Foundation APIs instead of debug string formatting. This is kept
+   * for backward compatibility during the transition. Should be removed once we verify
+   * all values are being extracted correctly.
    */
   private parseCFStringValue(value: string): string {
     if (!value) return value;
@@ -563,6 +569,19 @@ class AXTreeOverlay {
 
       nodeContent.appendChild(nodeInfo);
 
+      // Add hover outline for elements with position/size data
+      if (node.position && node.size) {
+        nodeContent.style.cursor = "pointer";
+
+        nodeContent.addEventListener("mouseenter", () => {
+          this.showHoverOutline(node.position!, node.size!);
+        });
+
+        nodeContent.addEventListener("mouseleave", () => {
+          this.hideHoverOutline();
+        });
+      }
+
       // Add live text input for writable elements
       if (
         node.element_id &&
@@ -792,6 +811,40 @@ class AXTreeOverlay {
     }
     // Stop refresh timer when clearing tree
     this.stopRefreshTimer();
+    // Clear hover outline
+    this.hideHoverOutline();
+  }
+
+  private showHoverOutline(position: [number, number], size: [number, number]) {
+    // Create outline element if it doesn't exist
+    if (!this.hoverOutline) {
+      this.hoverOutline = document.createElement("div");
+      this.hoverOutline.style.cssText = `
+        position: absolute;
+        pointer-events: none;
+        border: 2px solid #007aff;
+        background: rgba(0, 122, 255, 0.1);
+        z-index: 999;
+        transition: all 0.1s ease-out;
+      `;
+      this.windowContainer.appendChild(this.hoverOutline);
+    }
+
+    // Update position and size
+    const [x, y] = position;
+    const [width, height] = size;
+
+    this.hoverOutline.style.left = `${x}px`;
+    this.hoverOutline.style.top = `${y}px`;
+    this.hoverOutline.style.width = `${width}px`;
+    this.hoverOutline.style.height = `${height}px`;
+    this.hoverOutline.style.display = "block";
+  }
+
+  private hideHoverOutline() {
+    if (this.hoverOutline) {
+      this.hoverOutline.style.display = "none";
+    }
   }
 
   private startRefreshTimer() {
