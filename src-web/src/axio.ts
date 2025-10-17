@@ -98,18 +98,19 @@ export type AXRole =
 /**
  * Core accessibility node
  *
- * Represents a single element in the accessibility tree with:
- * - Identity (id, role)
- * - Content (title, value, description)
- * - State (focused, enabled)
- * - Geometry (position, size)
- * - Tree structure (children)
+ * Nodes know their location (pid + path) so they can perform operations on themselves.
+ * Forms a tree structure via the children field.
+ * Operations use path-based navigation (re-navigate from root each time).
  */
 export interface AXNode {
+  // Location (for operations - nodes know where they are)
+  readonly pid: number;
+  readonly path: number[]; // Child indices from root to this node
+
   // Identity
   readonly id: string;
   readonly role: AXRole;
-  readonly subrole?: string; // Platform-specific subtype
+  readonly subrole?: string; // Platform-specific subtype (or native name for unknown roles)
 
   // Content
   readonly title?: string;
@@ -127,15 +128,9 @@ export interface AXNode {
 
   // Tree structure
   readonly children: ReadonlyArray<AXNode>;
-}
 
-/**
- * Root of an accessibility tree (represents an application window)
- */
-export interface AXRoot extends AXNode {
-  readonly role: "window" | "application";
-  readonly processId: number;
-  readonly windowId?: number;
+  // Operations (set by AXIO when creating nodes)
+  setValue?(text: string): Promise<void>;
 }
 
 // ============================================================================
@@ -157,7 +152,7 @@ export class AXIO {
   private reconnectTimer: number | null = null;
   private readonly reconnectDelay = 1000;
 
-  constructor(private readonly wsUrl: string = "ws://localhost:3030") {}
+  constructor(private readonly wsUrl: string = "ws://localhost:3030/ws") {}
 
   /**
    * Connect to the AXIO backend
@@ -210,34 +205,162 @@ export class AXIO {
   }
 
   /**
-   * Subscribe to events from the backend
+   * Register callback for window updates
    */
-  on(event: string, callback: (data: any) => void): void {
-    if (!this.listeners.has(event)) {
-      this.listeners.set(event, new Set());
+  onWindowUpdate(callback: (windows: any[]) => void): void {
+    if (!this.listeners.has("window_update")) {
+      this.listeners.set("window_update", new Set());
     }
-    this.listeners.get(event)!.add(callback);
+    this.listeners.get("window_update")!.add((data: any) => {
+      if (data.windows) {
+        callback(data.windows);
+      }
+    });
   }
 
   /**
-   * Unsubscribe from events
+   * Register callback for overlay PID (sent once on connect)
    */
-  off(event: string, callback: (data: any) => void): void {
-    const listeners = this.listeners.get(event);
-    if (listeners) {
-      listeners.delete(callback);
+  onOverlayPid(callback: (pid: number) => void): void {
+    if (!this.listeners.has("overlay_pid")) {
+      this.listeners.set("overlay_pid", new Set());
     }
+    this.listeners.get("overlay_pid")!.add((data: any) => {
+      if (data.overlay_pid !== undefined) {
+        callback(data.overlay_pid);
+      }
+    });
+  }
+
+  // ============================================================================
+  // AXIO Protocol Methods
+  // ============================================================================
+
+  /**
+   * Get accessibility tree for a process
+   * Returns hierarchical tree structure with children
+   * All nodes have setValue() method attached for easy operations
+   */
+  async getTree(
+    pid: number,
+    maxDepth: number = 50,
+    maxChildrenPerLevel: number = 2000
+  ): Promise<AXNode> {
+    return new Promise((resolve, reject) => {
+      const handler = (data: any) => {
+        // Remove this specific handler
+        const listeners = this.listeners.get("accessibility_tree_response");
+        if (listeners) {
+          listeners.delete(handler);
+        }
+
+        if (data.success && data.tree) {
+          // Attach methods to all nodes in the tree
+          const tree = this.attachNodeMethods(data.tree);
+          resolve(tree);
+        } else {
+          reject(new Error(data.error || "Failed to get tree"));
+        }
+      };
+
+      // Add temporary handler
+      if (!this.listeners.has("accessibility_tree_response")) {
+        this.listeners.set("accessibility_tree_response", new Set());
+      }
+      this.listeners.get("accessibility_tree_response")!.add(handler);
+
+      // Send request
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(
+          JSON.stringify({
+            type: "get_accessibility_tree",
+            pid,
+            max_depth: maxDepth,
+            max_children_per_level: maxChildrenPerLevel,
+          })
+        );
+      } else {
+        reject(new Error("WebSocket not connected"));
+      }
+
+      // Timeout after 10s
+      setTimeout(() => {
+        const listeners = this.listeners.get("accessibility_tree_response");
+        if (listeners) {
+          listeners.delete(handler);
+        }
+        reject(new Error("Timeout waiting for tree response"));
+      }, 10000);
+    });
   }
 
   /**
-   * Send a message to the backend
+   * Attach operation methods to a node and its children recursively
    */
-  send(message: any): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(message));
-    } else {
-      console.warn("[AXIO] Cannot send message: not connected");
+  private attachNodeMethods(node: AXNode): AXNode {
+    // Attach setValue method
+    (node as any).setValue = async (text: string) => {
+      return this.write(node.pid, node.path, text);
+    };
+
+    // Recursively attach to children
+    if (node.children && node.children.length > 0) {
+      (node as any).children = node.children.map((child) =>
+        this.attachNodeMethods(child)
+      );
     }
+
+    return node;
+  }
+
+  /**
+   * Write text to an element using pid and path
+   */
+  async write(pid: number, path: number[], text: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const handler = (data: any) => {
+        // Remove this specific handler
+        const listeners = this.listeners.get("accessibility_write_response");
+        if (listeners) {
+          listeners.delete(handler);
+        }
+
+        if (data.success) {
+          resolve();
+        } else {
+          reject(new Error(data.error || "Failed to write"));
+        }
+      };
+
+      // Add temporary handler
+      if (!this.listeners.has("accessibility_write_response")) {
+        this.listeners.set("accessibility_write_response", new Set());
+      }
+      this.listeners.get("accessibility_write_response")!.add(handler);
+
+      // Send request
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(
+          JSON.stringify({
+            type: "write_to_element",
+            pid,
+            element_path: path,
+            text,
+          })
+        );
+      } else {
+        reject(new Error("WebSocket not connected"));
+      }
+
+      // Timeout after 5s
+      setTimeout(() => {
+        const listeners = this.listeners.get("accessibility_write_response");
+        if (listeners) {
+          listeners.delete(handler);
+        }
+        reject(new Error("Timeout waiting for write response"));
+      }, 5000);
+    });
   }
 
   // ============================================================================
@@ -247,7 +370,19 @@ export class AXIO {
   private handleMessage(data: string): void {
     try {
       const message = JSON.parse(data);
-      const event = message.event || message.type;
+
+      // Determine event type
+      let event = message.event || message.type;
+
+      // Special case: window updates (has 'windows' array but no explicit type)
+      if (!event && message.windows) {
+        event = "window_update";
+      }
+
+      // Special case: overlay_pid (has 'overlay_pid' field but no explicit type)
+      if (!event && message.overlay_pid !== undefined) {
+        event = "overlay_pid";
+      }
 
       if (event) {
         const listeners = this.listeners.get(event);
@@ -270,24 +405,5 @@ export class AXIO {
         });
       }, this.reconnectDelay);
     }
-  }
-}
-
-// ============================================================================
-// Utility Functions
-// ============================================================================
-
-/**
- * Convert AXValue to string for display
- */
-export function axValueToString(value: AXValue): string {
-  switch (value.type) {
-    case "String":
-      return value.value;
-    case "Integer":
-    case "Float":
-      return value.value.toString();
-    case "Boolean":
-      return value.value ? "true" : "false";
   }
 }

@@ -91,14 +91,19 @@ pub enum AXRole {
 
 /// Core accessibility node
 ///
-/// Represents a single element in the accessibility tree with:
-/// - Identity (id, role)
-/// - Content (title, value, description)
-/// - State (focused, enabled)
-/// - Geometry (position, size)
-/// - Tree structure (children)
+/// Represents a single element in the accessibility tree.
+/// Nodes know their location (pid + path) so they can perform operations on themselves.
+/// Forms a tree structure via the children field.
+///
+/// TODO(future): Investigate element reference caching for performance
+/// TODO(future): Add staleness detection (path navigation fails)
+/// TODO(future): Consider stable identity beyond paths (research AXUIElement lifecycle)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AXNode {
+    // Location (for operations - nodes know where they are)
+    pub pid: u32,
+    pub path: Vec<usize>, // Child indices from root to this node
+
     // Identity
     pub id: String,
     pub role: AXRole,
@@ -127,78 +132,4 @@ pub struct AXNode {
 
     // Tree structure
     pub children: Vec<AXNode>,
-}
-
-/// Root of an accessibility tree (represents an application window)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AXRoot {
-    #[serde(flatten)]
-    pub node: AXNode,
-    pub process_id: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub window_id: Option<u64>,
-}
-
-impl AXNode {
-    /// Create a new node with required fields
-    pub fn new(id: String, role: AXRole) -> Self {
-        Self {
-            id,
-            role,
-            subrole: None,
-            title: None,
-            value: None,
-            description: None,
-            placeholder: None,
-            focused: false,
-            enabled: true,
-            selected: None,
-            bounds: None,
-            children: Vec::new(),
-        }
-    }
-
-    /// Builder pattern for setting bounds
-    pub fn with_bounds(mut self, position: (f64, f64), size: (f64, f64)) -> Self {
-        self.bounds = Some(Bounds {
-            position: Position {
-                x: position.0,
-                y: position.1,
-            },
-            size: Size {
-                width: size.0,
-                height: size.1,
-            },
-        });
-        self
-    }
-
-    /// Builder pattern for setting title
-    pub fn with_title(mut self, title: String) -> Self {
-        self.title = Some(title);
-        self
-    }
-
-    /// Builder pattern for setting value
-    pub fn with_value(mut self, value: AXValue) -> Self {
-        self.value = Some(value);
-        self
-    }
-
-    /// Builder pattern for adding children
-    pub fn with_children(mut self, children: Vec<AXNode>) -> Self {
-        self.children = children;
-        self
-    }
-}
-
-impl AXRoot {
-    /// Create a new root node
-    pub fn new(id: String, role: AXRole, process_id: u32) -> Self {
-        Self {
-            node: AXNode::new(id, role),
-            process_id,
-            window_id: None,
-        }
-    }
 }

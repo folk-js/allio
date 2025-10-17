@@ -1,4 +1,4 @@
-import { InterlayClient, type ServerMessage } from "./interlay-client.js";
+import { AXIO } from "./axio.js";
 import {
   collisionFragmentShader,
   collisionVertexShader,
@@ -152,15 +152,15 @@ export class FolkSand extends HTMLElement {
   #shapeIndexBuffer!: WebGLBuffer;
   #shapeIndexCount = 0;
 
-  // Add WebSocket client for receiving window updates
-  #wsClient: InterlayClient;
+  // Add AXIO client for receiving window updates
+  #axio: AXIO;
   #currentWindows: WindowInfo[] = [];
 
   onMaterialChange?: (type: number) => void;
 
   constructor() {
     super();
-    this.#wsClient = new InterlayClient();
+    this.#axio = new AXIO();
   }
 
   connectedCallback(): void {
@@ -185,7 +185,7 @@ export class FolkSand extends HTMLElement {
 
   disconnectedCallback() {
     this.#detachEventListeners();
-    this.#wsClient.disconnect();
+    this.#axio.disconnect();
   }
 
   #initializeWebGL() {
@@ -909,35 +909,18 @@ export class FolkSand extends HTMLElement {
   // Add method to setup WebSocket connection
   async #setupWebSocketConnection() {
     try {
-      // Set up message handlers
-      this.#wsClient.onMessage = (data) => {
-        this.#handleWebSocketMessage(data);
-      };
+      // Set up window update handler
+      this.#axio.onWindowUpdate((windows: any) => {
+        console.log("Sand overlay received window update:", windows);
+        this.#currentWindows = windows;
+        this.#handleShapeTransform();
+        console.log(`Sand overlay updated with ${windows.length} windows`);
+      });
 
-      this.#wsClient.onError = (error) => {
-        console.error("WebSocket error in sand overlay:", error);
-      };
-
-      await this.#wsClient.connect();
-      console.log(
-        "WebSocket connection established for folk-sand - listening for window updates"
-      );
+      await this.#axio.connect();
+      console.log("AXIO connected for folk-sand");
     } catch (error) {
-      console.error(
-        "Failed to setup WebSocket connection in folk-sand:",
-        error
-      );
-    }
-  }
-
-  #handleWebSocketMessage(data: ServerMessage) {
-    console.log("Sand overlay received WebSocket message:", data);
-
-    if (data.windows) {
-      // Handle window updates (any message with windows array)
-      this.#currentWindows = data.windows;
-      this.#handleShapeTransform();
-      console.log(`Sand overlay updated with ${data.windows.length} windows`);
+      console.error("Failed to connect AXIO in folk-sand:", error);
     }
   }
 

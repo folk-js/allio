@@ -18,6 +18,8 @@ use crate::axio::{AXNode, AXRole, Bounds, Position, Size};
 /// elements to our platform-agnostic AXIO format.
 pub fn element_to_axnode(
     element: &AXUIElement,
+    pid: u32,
+    path: Vec<usize>,
     depth: usize,
     max_depth: usize,
     max_children_per_level: usize,
@@ -37,11 +39,16 @@ pub fn element_to_axnode(
     let role = map_platform_role(&platform_role);
 
     // Get subrole (platform-specific subtype)
-    let subrole = element
-        .attribute(&AXAttribute::subrole())
-        .ok()
-        .map(|sr| sr.to_string())
-        .filter(|s| !s.is_empty());
+    // For unknown roles, use the platform role as the subrole for debugging
+    let subrole = if matches!(role, AXRole::Unknown) {
+        Some(platform_role.clone())
+    } else {
+        element
+            .attribute(&AXAttribute::subrole())
+            .ok()
+            .map(|sr| sr.to_string())
+            .filter(|s| !s.is_empty())
+    };
 
     // Get title
     let title = element.attribute(&AXAttribute::title()).ok().and_then(|t| {
@@ -110,10 +117,19 @@ pub fn element_to_axnode(
     // For now, using depth and a random ID
     let id = format!("depth{}-{}", depth, uuid::Uuid::new_v4().simple());
 
-    // Get children
-    let children = get_element_children(element, depth, max_depth, max_children_per_level);
+    // Get children (with updated paths)
+    let children = get_element_children(
+        element,
+        pid,
+        path.clone(),
+        depth,
+        max_depth,
+        max_children_per_level,
+    );
 
     Some(AXNode {
+        pid,
+        path,
         id,
         role,
         subrole,
@@ -210,6 +226,8 @@ fn get_element_bounds(element: &AXUIElement) -> Option<Bounds> {
 /// Get children of an element, recursively converting to AXNode
 fn get_element_children(
     element: &AXUIElement,
+    pid: u32,
+    parent_path: Vec<usize>,
     depth: usize,
     max_depth: usize,
     max_children_per_level: usize,
@@ -224,9 +242,18 @@ fn get_element_children(
 
     for i in 0..child_count.min(max_children_per_level as isize) {
         if let Some(child_ref) = children_array.get(i) {
-            if let Some(child_node) =
-                element_to_axnode(&(*child_ref), depth + 1, max_depth, max_children_per_level)
-            {
+            // Build path for this child
+            let mut child_path = parent_path.clone();
+            child_path.push(i as usize);
+
+            if let Some(child_node) = element_to_axnode(
+                &(*child_ref),
+                pid,
+                child_path,
+                depth + 1,
+                max_depth,
+                max_children_per_level,
+            ) {
                 result.push(child_node);
             }
         }
@@ -246,8 +273,15 @@ pub fn get_ax_tree_by_pid(
 ) -> Result<AXNode, String> {
     let app_element = AXUIElement::application(pid as i32);
 
-    element_to_axnode(&app_element, 0, max_depth, max_children_per_level)
-        .ok_or_else(|| format!("Failed to get accessibility tree for PID {}", pid))
+    element_to_axnode(
+        &app_element,
+        pid,
+        vec![],
+        0,
+        max_depth,
+        max_children_per_level,
+    )
+    .ok_or_else(|| format!("Failed to get accessibility tree for PID {}", pid))
 }
 
 /// Write text to a specific element (identified by path through the tree)

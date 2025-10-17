@@ -81,13 +81,6 @@ struct AccessibilityWriteResponse {
     error: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct OverlayInfoResponse {
-    #[serde(rename = "type")]
-    msg_type: String,
-    overlay_pid: u32,
-}
-
 // WebSocket state for broadcasting to clients
 #[derive(Clone)]
 pub struct WebSocketState {
@@ -198,16 +191,13 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
 
     println!("🔗 Client session started");
 
-    // Send overlay PID immediately when client connects
-    let overlay_info = OverlayInfoResponse {
-        msg_type: "overlay_info".to_string(),
-        overlay_pid: std::process::id(),
-    };
-
-    if let Ok(overlay_json) = serde_json::to_string(&overlay_info) {
-        if socket.send(Message::Text(overlay_json)).await.is_ok() {
-            println!("📡 Sent overlay PID {} to client", std::process::id());
-        }
+    // Send overlay PID to frontend so it can filter itself out
+    let overlay_pid_msg = serde_json::json!({
+        "overlay_pid": std::process::id()
+    });
+    if let Ok(msg_json) = serde_json::to_string(&overlay_pid_msg) {
+        let _ = socket.send(Message::Text(msg_json)).await;
+        println!("📡 Sent overlay PID {} to client", std::process::id());
     }
 
     let mut current_window_id: Option<String> = None;

@@ -1,5 +1,4 @@
-import { InterlayClient } from "./interlay-client.ts";
-import { AXNode, AXValue, axValueToString } from "./axio.ts";
+import { AXIO, AXNode } from "./axio.ts";
 
 interface WindowInfo {
   id: string;
@@ -12,20 +11,9 @@ interface WindowInfo {
   process_id: number;
 }
 
-interface ServerMessage {
-  windows?: WindowInfo[];
-  type?: string;
-  pid?: number;
-  success?: boolean;
-  tree?: AXNode;
-  error?: string;
-  overlay_pid?: number;
-  message?: string;
-}
-
 class AXTreeOverlay {
   private windowContainer: HTMLElement;
-  private wsClient: InterlayClient;
+  private axio: AXIO;
   private focusedWindow: WindowInfo | null = null;
   private treeContainer: HTMLElement | null = null;
   private overlayProcessId: number | null = null;
@@ -34,7 +22,7 @@ class AXTreeOverlay {
   private readonly REFRESH_INTERVAL = 2000; // 2 seconds
   private regexPanel: HTMLElement | null = null;
   private currentTargetElement: {
-    elementId: string;
+    node: AXNode;
     currentValue: string;
   } | null = null;
   private currentTreeData: AXNode | null = null; // Store the current tree data for position lookups
@@ -47,21 +35,13 @@ class AXTreeOverlay {
 
   constructor() {
     this.windowContainer = document.getElementById("windowContainer")!;
-    this.wsClient = new InterlayClient();
+    this.axio = new AXIO();
     this.setupWebSocketListener();
 
     // Clean up timer when page unloads
     window.addEventListener("beforeunload", () => {
       this.stopRefreshTimer();
     });
-  }
-
-  /**
-   * Convert a typed AXValue to a string for display purposes
-   * (delegates to axio.ts helper)
-   */
-  private axValueToString(value: AXValue): string {
-    return axValueToString(value);
   }
 
   /**
@@ -82,62 +62,25 @@ class AXTreeOverlay {
       : undefined;
   }
 
-  /**
-   * Format values with special handling for different UI element types
-   */
-  private formatValueForRole(value: AXValue, role: string): string {
-    // Special formatting for radio buttons and checkboxes
-    if (role === "AXRadioButton" || role.includes("RadioButton")) {
-      if (value.type === "Boolean" || value.type === "Integer") {
-        const boolVal =
-          value.type === "Boolean" ? value.value : value.value === 1;
-        return boolVal ? "selected" : "unselected";
-      }
-    }
-
-    if (role === "AXCheckBox" || role.includes("CheckBox")) {
-      if (value.type === "Boolean" || value.type === "Integer") {
-        const boolVal =
-          value.type === "Boolean" ? value.value : value.value === 1;
-        return boolVal ? "checked" : "unchecked";
-      }
-    }
-
-    // For sliders and progress indicators, keep numeric values
-    if (role === "AXSlider" || role === "AXProgressIndicator") {
-      return this.axValueToString(value);
-    }
-
-    return this.axValueToString(value);
-  }
-
   private async setupWebSocketListener() {
     try {
-      // Set up message handler for window updates and accessibility responses
-      this.wsClient.onMessage = (data) => {
-        if (data.windows) {
-          this.updateWindows(data.windows);
-        } else if (data.type === "accessibility_tree_response") {
-          this.handleAccessibilityTreeResponse(data);
-        } else if (data.type === "accessibility_write_response") {
-          this.handleAccessibilityWriteResponse(data);
-        } else if (data.type === "overlay_info" && data.overlay_pid) {
-          this.overlayProcessId = data.overlay_pid;
-          console.log(
-            `🎯 Received overlay PID from server: ${this.overlayProcessId}`
-          );
-        } else {
-          // Log any unexpected messages
-          console.log(`📨 Other message:`, data);
-        }
-      };
+      // Set up window update handler
+      this.axio.onWindowUpdate((windows) => {
+        this.updateWindows(windows);
+      });
+
+      // Set up overlay PID handler
+      this.axio.onOverlayPid((pid) => {
+        this.overlayProcessId = pid;
+        console.log(`🎯 Received overlay PID: ${pid}`);
+      });
 
       // Connect to websocket
-      await this.wsClient.connect();
+      await this.axio.connect();
 
-      console.log("📡 WebSocket accessibility tree listener established");
+      console.log("📡 AXIO connected");
     } catch (error) {
-      console.error("❌ Failed to setup websocket listener:", error);
+      console.error("❌ Failed to connect AXIO:", error);
     }
   }
 
@@ -247,44 +190,32 @@ class AXTreeOverlay {
     }
   }
 
-  private requestAccessibilityTree(pid: number) {
-    if (
-      this.wsClient.send({
-        type: "get_accessibility_tree",
-        pid: pid,
-        max_depth: this.MAX_DEPTH,
-        max_children_per_level: this.MAX_CHILDREN_PER_LEVEL,
-      })
-    ) {
-      console.log(
-        `🌳 Requesting accessibility tree for PID: ${pid} (max_depth: ${this.MAX_DEPTH}, max_children: ${this.MAX_CHILDREN_PER_LEVEL})`
+  private async requestAccessibilityTree(pid: number) {
+    console.log(
+      `🌳 Requesting accessibility tree for PID: ${pid} (max_depth: ${this.MAX_DEPTH}, max_children: ${this.MAX_CHILDREN_PER_LEVEL})`
+    );
+    try {
+      const tree = await this.axio.getTree(
+        pid,
+        this.MAX_DEPTH,
+        this.MAX_CHILDREN_PER_LEVEL
       );
-    } else {
-      console.warn("❌ Failed to send accessibility tree request");
-    }
-  }
 
-  private handleAccessibilityTreeResponse(data: ServerMessage) {
-    if (data.success && data.tree && this.focusedWindow) {
-      // Count nodes for debugging
-      const nodeCount = this.countTreeNodes(data.tree);
-      console.log(`🌳 Received tree with ${nodeCount} total nodes`);
+      // Handle the tree response directly
+      if (this.focusedWindow) {
+        const nodeCount = this.countTreeNodes(tree);
+        console.log(`🌳 Received tree with ${nodeCount} total nodes`);
 
-      // Check if this is a refresh (tree already exists) or a new tree
-      const isRefresh = this.treeContainer !== null;
-
-      if (isRefresh) {
-        // For refresh, preserve expanded state and update content
-        this.refreshTreeContent(data.tree, this.focusedWindow);
-      } else {
-        // For new tree, display normally
-        this.displayAccessibilityTree(data.tree, this.focusedWindow);
+        const isRefresh = this.treeContainer !== null;
+        if (isRefresh) {
+          this.refreshTreeContent(tree, this.focusedWindow);
+        } else {
+          this.displayAccessibilityTree(tree, this.focusedWindow);
+        }
       }
-    } else if (data.error) {
-      console.warn(
-        `❌ Accessibility tree error for PID ${data.pid}: ${data.error}`
-      );
-      this.showError(data.error);
+    } catch (error) {
+      console.warn(`❌ Failed to get accessibility tree:`, error);
+      this.showError(String(error));
     }
   }
 
@@ -294,42 +225,6 @@ class AXTreeOverlay {
       count += this.countTreeNodes(child);
     }
     return count;
-  }
-
-  private handleAccessibilityWriteResponse(data: ServerMessage) {
-    if (data.success) {
-      console.log(`✅ Write successful: ${data.message}`);
-      // Don't auto-refresh tree to avoid losing focus on live text inputs
-      // The user can manually refresh if needed
-    } else {
-      console.error(`❌ Write failed: ${data.error}`);
-    }
-  }
-
-  private writeToElement(elementPath: string, text: string, pid: number) {
-    // Use the last non-overlay window since overlay steals focus when clicked
-    const targetWindow = this.lastNonOverlayWindow || this.focusedWindow;
-
-    if (!targetWindow) {
-      console.error("No target window to write to");
-      return;
-    }
-
-    // Parse element path
-    const pathArray = elementPath
-      .split("-")
-      .map((s) => parseInt(s, 10))
-      .filter((n) => !isNaN(n));
-
-    // Send write request using target window PID
-    const writeRequest = {
-      type: "write_to_element",
-      pid: pid,
-      element_path: pathArray,
-      text: text,
-    };
-
-    this.wsClient.send(writeRequest);
   }
 
   private refreshTreeContent(tree: AXNode, window: WindowInfo) {
@@ -470,11 +365,7 @@ class AXTreeOverlay {
         switch (node.value.type) {
           case "String":
             valueSpan.className = "tree-value-string";
-            const formattedValue = this.formatValueForRole(
-              node.value,
-              node.role
-            );
-            valueSpan.textContent = ` = "${formattedValue}"`;
+            valueSpan.textContent = ` = "${String(node.value.value)}"`;
             break;
           case "Integer":
           case "Float":
@@ -483,11 +374,7 @@ class AXTreeOverlay {
             break;
           case "Boolean":
             valueSpan.className = "tree-value-boolean";
-            const boolFormatted = this.formatValueForRole(
-              node.value,
-              node.role
-            );
-            valueSpan.textContent = ` = ${boolFormatted}`;
+            valueSpan.textContent = ` = ${String(node.value.value)}`;
             break;
         }
 
@@ -565,23 +452,25 @@ class AXTreeOverlay {
         textInput.className = "tree-text-input";
         textInput.type = "text";
 
-        // Use the raw value for editing (not role-formatted)
-        const cleanValue = node.value ? this.axValueToString(node.value) : "";
+        // Use the raw value for editing
+        const cleanValue = node.value ? String(node.value.value) : "";
         textInput.value = cleanValue;
         textInput.placeholder = "Enter text...";
 
         // Add write functionality on Enter key
-        textInput.addEventListener("keydown", (e) => {
+        textInput.addEventListener("keydown", async (e) => {
           if (e.key === "Enter") {
             e.preventDefault();
             e.stopPropagation();
 
-            if (this.focusedWindow) {
-              this.writeToElement(
-                node.id,
-                textInput.value,
-                this.focusedWindow.process_id
-              );
+            // Use node's setValue method
+            if (node.setValue) {
+              try {
+                await node.setValue(textInput.value);
+                console.log(`✅ Wrote "${textInput.value}" to node`);
+              } catch (error) {
+                console.error("❌ Failed to write:", error);
+              }
             }
           }
         });
@@ -601,7 +490,7 @@ class AXTreeOverlay {
           e.stopPropagation();
 
           // Use raw parsed value for regex operations (not role-formatted)
-          this.openRegexPanel(node.id, cleanValue, position, size);
+          this.openRegexPanel(node, cleanValue, position, size);
         });
 
         // Add elements to container
@@ -674,9 +563,7 @@ class AXTreeOverlay {
         // Get the target element's position and size from when the panel was opened
         if (this.currentTargetElement) {
           // Find the element in the current tree to get updated position
-          const elementPath = this.currentTargetElement.elementId
-            .split("-")
-            .map((s) => parseInt(s, 10));
+          const elementPath = this.currentTargetElement.node.path;
 
           const elementPosition = this.getElementPositionFromTree(elementPath);
 
@@ -822,7 +709,7 @@ class AXTreeOverlay {
   }
 
   private openRegexPanel(
-    elementId: string,
+    node: AXNode,
     currentValue: string,
     elementPosition?: [number, number],
     elementSize?: [number, number]
@@ -830,7 +717,7 @@ class AXTreeOverlay {
     // Close existing panel if open
     this.closeRegexPanel();
 
-    this.currentTargetElement = { elementId, currentValue };
+    this.currentTargetElement = { node, currentValue };
 
     // Create regex panel
     this.regexPanel = document.createElement("div");
@@ -1107,7 +994,7 @@ class AXTreeOverlay {
     };
 
     // Apply regex function
-    const applyRegex = () => {
+    const applyRegex = async () => {
       const pattern = patternInput.value.trim();
       const replacement = replaceInput.value;
 
@@ -1133,12 +1020,11 @@ class AXTreeOverlay {
           replacement
         );
 
-        // Apply the change
-        this.writeToElement(
-          this.currentTargetElement!.elementId,
-          result,
-          this.focusedWindow!.process_id
-        );
+        // Apply the change using node's setValue method
+        if (this.currentTargetElement!.node.setValue) {
+          await this.currentTargetElement!.node.setValue(result);
+          console.log(`✅ Applied regex to node`);
+        }
 
         // Update stored current value
         this.currentTargetElement!.currentValue = result;

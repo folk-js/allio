@@ -1,4 +1,4 @@
-import { InterlayClient } from "./interlay-client.ts";
+import { AXIO } from "./axio.ts";
 
 interface WindowInfo {
   id: string;
@@ -25,14 +25,14 @@ interface Point {
 
 class WindowOverlay {
   private windowContainer: HTMLElement;
-  private wsClient: InterlayClient;
+  private axio: AXIO;
   private windowElements: Map<string, HTMLElement> = new Map();
   private svgElement!: SVGSVGElement;
   private borderGroups: Map<string, SVGPathElement> = new Map();
 
   constructor() {
     this.windowContainer = document.getElementById("windowContainer")!;
-    this.wsClient = new InterlayClient();
+    this.axio = new AXIO();
     this.setupSVG();
     this.setupWebSocketListener();
   }
@@ -56,19 +56,17 @@ class WindowOverlay {
 
   private async setupWebSocketListener() {
     try {
-      // Set up message handler for window updates
-      this.wsClient.onMessage = (data) => {
-        if (data.windows) {
-          this.updateWindowRectangles(data.windows);
-        }
-      };
+      // Set up window update handler
+      this.axio.onWindowUpdate((windows) => {
+        this.updateWindowRectangles(windows);
+      });
 
       // Connect to websocket
-      await this.wsClient.connect();
+      await this.axio.connect();
 
-      console.log("📡 WebSocket window update listener established");
+      console.log("📡 AXIO connected");
     } catch (error) {
-      console.error("❌ Failed to setup websocket listener:", error);
+      console.error("❌ Failed to connect AXIO:", error);
     }
   }
 
