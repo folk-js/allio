@@ -17,6 +17,34 @@ use crate::axio::AXNode;
 use crate::platform::{get_ax_tree_by_pid, write_to_element};
 use crate::windows::{WindowInfo, WindowUpdatePayload};
 
+// ============================================================================
+// Server Event Types (Push notifications from backend)
+// ============================================================================
+
+/// Sent when a window gains focus (should trigger frontend to fetch tree if needed)
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WindowFocusedEvent {
+    pub event_type: String, // "window_focused"
+    pub window: WindowInfo,
+}
+
+/// Sent when the accessibility tree structure changes for the focused window
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TreeChangedEvent {
+    pub event_type: String, // "tree_changed"
+    pub pid: u32,
+    pub tree: AXNode,
+}
+
+/// Sent when a specific value changes in the tree (future: for fine-grained updates)
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ValueChangedEvent {
+    pub event_type: String, // "value_changed"
+    pub pid: u32,
+    pub path: Vec<usize>,
+    pub new_value: String, // TODO: Use AXValue when we add incremental updates
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct ClientIdentification {
     bottom_left_x: i32,
@@ -26,7 +54,6 @@ struct ClientIdentification {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AccessibilityTreeRequest {
-    #[serde(rename = "type")]
     msg_type: String,
     pid: u32,
     #[serde(default = "default_max_depth")]
@@ -45,7 +72,6 @@ fn default_max_children_per_level() -> usize {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AccessibilityWriteRequest {
-    #[serde(rename = "type")]
     msg_type: String,
     pid: u32,
     element_path: Vec<usize>,
@@ -54,7 +80,6 @@ struct AccessibilityWriteRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ServerResponse {
-    #[serde(rename = "type")]
     msg_type: String,
     window_id: Option<String>,
     success: bool,
@@ -63,7 +88,6 @@ struct ServerResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AccessibilityTreeResponse {
-    #[serde(rename = "type")]
     msg_type: String,
     pid: u32,
     success: bool,
@@ -73,7 +97,6 @@ struct AccessibilityTreeResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AccessibilityWriteResponse {
-    #[serde(rename = "type")]
     msg_type: String,
     pid: u32,
     success: bool,
@@ -96,6 +119,30 @@ impl WebSocketState {
             sender: Arc::new(sender),
             connected_windows: Arc::new(RwLock::new(HashSet::new())),
             current_windows: Arc::new(RwLock::new(Vec::new())),
+        }
+    }
+
+    /// Automatically push accessibility tree for a window when it gains focus
+    pub fn push_tree_for_window(&self, pid: u32) {
+        // Get tree with default limits
+        let tree_result = get_ax_tree_by_pid(pid, 100, 5000);
+
+        match tree_result {
+            Ok(tree) => {
+                let event = TreeChangedEvent {
+                    event_type: "tree_changed".to_string(),
+                    pid,
+                    tree,
+                };
+
+                if let Ok(json) = serde_json::to_string(&event) {
+                    let _ = self.sender.send(json);
+                    println!("📤 Pushed tree for PID {}", pid);
+                }
+            }
+            Err(e) => {
+                println!("❌ Failed to get tree for PID {}: {}", pid, e);
+            }
         }
     }
 
@@ -198,6 +245,23 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
     if let Ok(msg_json) = serde_json::to_string(&overlay_pid_msg) {
         let _ = socket.send(Message::Text(msg_json)).await;
         println!("📡 Sent overlay PID {} to client", std::process::id());
+    }
+
+    // Send initial window state immediately
+    {
+        let current_windows = ws_state.current_windows.read().await;
+        // Convert WindowInfo to AXNode
+        let window_nodes: Vec<AXNode> = current_windows.iter().map(|w| w.to_ax_node()).collect();
+        let window_update = WindowUpdatePayload {
+            windows: window_nodes,
+        };
+        if let Ok(msg_json) = serde_json::to_string(&window_update) {
+            let _ = socket.send(Message::Text(msg_json)).await;
+            println!(
+                "📡 Sent initial window state ({} windows) to client",
+                current_windows.len()
+            );
+        }
     }
 
     let mut current_window_id: Option<String> = None;

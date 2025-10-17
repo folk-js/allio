@@ -1,25 +1,12 @@
 import { AXIO, AXNode } from "./axio.ts";
 
-interface WindowInfo {
-  id: string;
-  name: string;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  focused: boolean;
-  process_id: number;
-}
-
 class AXTreeOverlay {
   private windowContainer: HTMLElement;
   private axio: AXIO;
-  private focusedWindow: WindowInfo | null = null;
+  private focusedWindow: AXNode | null = null;
   private treeContainer: HTMLElement | null = null;
   private overlayProcessId: number | null = null;
-  private lastNonOverlayWindow: WindowInfo | null = null;
-  private refreshTimer: number | null = null;
-  private readonly REFRESH_INTERVAL = 2000; // 2 seconds
+  private lastNonOverlayWindow: AXNode | null = null;
   private regexPanel: HTMLElement | null = null;
   private currentTargetElement: {
     node: AXNode;
@@ -29,19 +16,10 @@ class AXTreeOverlay {
   private renderedNodeCount: number = 0; // Track rendered DOM elements
   private hoverOutline: HTMLElement | null = null; // Visual outline for hovered elements
 
-  // Configurable traversal limits
-  private readonly MAX_DEPTH = 100;
-  private readonly MAX_CHILDREN_PER_LEVEL = 5000;
-
   constructor() {
     this.windowContainer = document.getElementById("windowContainer")!;
     this.axio = new AXIO();
     this.setupWebSocketListener();
-
-    // Clean up timer when page unloads
-    window.addEventListener("beforeunload", () => {
-      this.stopRefreshTimer();
-    });
   }
 
   /**
@@ -75,6 +53,24 @@ class AXTreeOverlay {
         console.log(`🎯 Received overlay PID: ${pid}`);
       });
 
+      // Set up tree changed handler (reactive push from backend)
+      this.axio.onTreeChanged((pid, tree) => {
+        console.log(`🌳 Received pushed tree for PID: ${pid}`);
+
+        // Only handle if this is the currently focused window
+        if (this.focusedWindow && this.focusedWindow.pid === pid) {
+          const nodeCount = this.countTreeNodes(tree);
+          console.log(`🌳 Tree has ${nodeCount} total nodes`);
+
+          const isRefresh = this.treeContainer !== null;
+          if (isRefresh) {
+            this.refreshTreeContent(tree, this.focusedWindow);
+          } else {
+            this.displayAccessibilityTree(tree, this.focusedWindow);
+          }
+        }
+      });
+
       // Connect to websocket
       await this.axio.connect();
 
@@ -84,7 +80,7 @@ class AXTreeOverlay {
     }
   }
 
-  private updateWindows(windows: WindowInfo[]) {
+  private updateWindows(windows: AXNode[]) {
     const newFocusedWindow = windows.find((w) => w.focused);
 
     // Overlay is filtered out of windows list by backend, so this is expected
@@ -100,7 +96,7 @@ class AXTreeOverlay {
       isOverlayFocused = true;
       console.log(`🖱️ No focused window found - assuming overlay is focused`);
     } else if (newFocusedWindow && this.overlayProcessId) {
-      isOverlayFocused = newFocusedWindow.process_id === this.overlayProcessId;
+      isOverlayFocused = newFocusedWindow.pid === this.overlayProcessId;
 
       // Only log on actual focus changes
       if (
@@ -108,8 +104,8 @@ class AXTreeOverlay {
         this.focusedWindow.id !== newFocusedWindow.id
       ) {
         console.log(
-          `🔍 Focus change: "${newFocusedWindow.name || "(empty)"}" (PID: ${
-            newFocusedWindow.process_id
+          `🔍 Focus change: "${newFocusedWindow.title || "(empty)"}" (PID: ${
+            newFocusedWindow.pid
           }) - Is overlay: ${isOverlayFocused} (overlay PID: ${
             this.overlayProcessId
           })`
@@ -118,17 +114,14 @@ class AXTreeOverlay {
     } else if (newFocusedWindow && !this.overlayProcessId) {
       console.log(
         `🔍 Focus change but no overlay PID yet: "${
-          newFocusedWindow.name || "(empty)"
-        }" (PID: ${newFocusedWindow.process_id})`
+          newFocusedWindow.title || "(empty)"
+        }" (PID: ${newFocusedWindow.pid})`
       );
     }
 
     if (isOverlayFocused) {
       // Overlay is focused - keep the existing tree visible for interaction
       console.log("🖱️ Overlay focused - preserving existing tree");
-
-      // Stop refresh timer while overlay is focused (to avoid interfering with interaction)
-      this.stopRefreshTimer();
 
       if (this.treeContainer && this.lastNonOverlayWindow) {
         this.updateTreePosition();
@@ -137,11 +130,6 @@ class AXTreeOverlay {
         console.log("ℹ️ No tree to interact with");
       }
       return; // Early return to prevent tree changes
-    } else {
-      // Resume refresh timer when overlay is not focused
-      if (this.focusedWindow) {
-        this.startRefreshTimer();
-      }
     }
 
     // Store non-overlay focused windows for later reference
@@ -154,7 +142,7 @@ class AXTreeOverlay {
         this.lastNonOverlayWindow = newFocusedWindow;
         console.log(
           `📌 Stored non-overlay window: "${
-            newFocusedWindow.name || "(empty)"
+            newFocusedWindow.title || "(empty)"
           }"`
         );
       } else {
@@ -162,18 +150,20 @@ class AXTreeOverlay {
       }
     }
 
-    // If focused window changed, request new accessibility tree
+    // Update focused window state (tree will be pushed by backend when focus changes)
     if (
       newFocusedWindow &&
       (!this.focusedWindow || newFocusedWindow.id !== this.focusedWindow.id)
     ) {
       this.focusedWindow = newFocusedWindow;
-      this.requestAccessibilityTree(newFocusedWindow.process_id);
-      // Timer will be started when tree is displayed
+      console.log(
+        `⏳ Waiting for backend to push tree for ${newFocusedWindow.title}`
+      );
+      // Backend will auto-push tree via tree_changed event
     } else if (!newFocusedWindow) {
       // No focused window, clear the tree
       this.focusedWindow = null;
-      this.clearAccessibilityTree(); // This will stop the timer
+      this.clearAccessibilityTree();
     } else if (
       newFocusedWindow &&
       this.focusedWindow &&
@@ -186,36 +176,6 @@ class AXTreeOverlay {
         this.lastNonOverlayWindow = newFocusedWindow;
       }
       this.updateTreePosition();
-      // Keep timer running for same window
-    }
-  }
-
-  private async requestAccessibilityTree(pid: number) {
-    console.log(
-      `🌳 Requesting accessibility tree for PID: ${pid} (max_depth: ${this.MAX_DEPTH}, max_children: ${this.MAX_CHILDREN_PER_LEVEL})`
-    );
-    try {
-      const tree = await this.axio.getTree(
-        pid,
-        this.MAX_DEPTH,
-        this.MAX_CHILDREN_PER_LEVEL
-      );
-
-      // Handle the tree response directly
-      if (this.focusedWindow) {
-        const nodeCount = this.countTreeNodes(tree);
-        console.log(`🌳 Received tree with ${nodeCount} total nodes`);
-
-        const isRefresh = this.treeContainer !== null;
-        if (isRefresh) {
-          this.refreshTreeContent(tree, this.focusedWindow);
-        } else {
-          this.displayAccessibilityTree(tree, this.focusedWindow);
-        }
-      }
-    } catch (error) {
-      console.warn(`❌ Failed to get accessibility tree:`, error);
-      this.showError(String(error));
     }
   }
 
@@ -227,7 +187,7 @@ class AXTreeOverlay {
     return count;
   }
 
-  private refreshTreeContent(tree: AXNode, window: WindowInfo) {
+  private refreshTreeContent(tree: AXNode, window: AXNode) {
     if (!this.treeContainer) return;
 
     // Store the updated tree data
@@ -246,11 +206,11 @@ class AXTreeOverlay {
         contentWrapper.appendChild(treeContent);
       }
 
-      console.log(`🔄 Refreshed tree content for ${window.name}`);
+      console.log(`🔄 Refreshed tree content for ${window.title}`);
     }
   }
 
-  private displayAccessibilityTree(tree: AXNode, window: WindowInfo) {
+  private displayAccessibilityTree(tree: AXNode, window: AXNode) {
     // Clear existing tree and reset state
     this.clearAccessibilityTree();
 
@@ -258,12 +218,14 @@ class AXTreeOverlay {
     this.treeContainer = document.createElement("div");
     this.treeContainer.className = "accessibility-tree";
 
-    // Position to the right of the window
-    const rightX = window.x + window.w + 10; // 10px margin
-    this.treeContainer.style.left = `${rightX}px`;
-    this.treeContainer.style.top = `${window.y}px`;
-    // Set height to match window height exactly
-    this.treeContainer.style.height = `${window.h}px`;
+    // Position to the right of the window (skip if no bounds)
+    if (window.bounds) {
+      const rightX = window.bounds.position.x + window.bounds.size.width + 10; // 10px margin
+      this.treeContainer.style.left = `${rightX}px`;
+      this.treeContainer.style.top = `${window.bounds.position.y}px`;
+      // Set height to match window height exactly
+      this.treeContainer.style.height = `${window.bounds.size.height}px`;
+    }
 
     // Add color key legend
     const legend = document.createElement("div");
@@ -299,13 +261,10 @@ class AXTreeOverlay {
     this.treeContainer.appendChild(contentWrapper);
 
     this.windowContainer.appendChild(this.treeContainer);
-    console.log(`✅ Displayed accessibility tree for ${window.name}`);
+    console.log(`✅ Displayed accessibility tree for ${window.title}`);
 
     // Store the current tree data for position lookups
     this.currentTreeData = tree;
-
-    // Start auto-refresh timer
-    this.startRefreshTimer();
   }
 
   private createTreeElement(node: AXNode, nodeId?: string): HTMLElement {
@@ -537,12 +496,15 @@ class AXTreeOverlay {
     if (this.treeContainer) {
       // Use the last non-overlay window if available, otherwise fall back to focused window
       const referenceWindow = this.lastNonOverlayWindow || this.focusedWindow;
-      if (referenceWindow) {
-        const rightX = referenceWindow.x + referenceWindow.w + 10;
+      if (referenceWindow && referenceWindow.bounds) {
+        const rightX =
+          referenceWindow.bounds.position.x +
+          referenceWindow.bounds.size.width +
+          10;
         this.treeContainer.style.left = `${rightX}px`;
-        this.treeContainer.style.top = `${referenceWindow.y}px`;
+        this.treeContainer.style.top = `${referenceWindow.bounds.position.y}px`;
         // Set height to match window height exactly
-        this.treeContainer.style.height = `${referenceWindow.h}px`;
+        this.treeContainer.style.height = `${referenceWindow.bounds.size.height}px`;
       } else {
         console.warn("⚠️ No reference window available for positioning tree");
       }
@@ -628,8 +590,6 @@ class AXTreeOverlay {
       this.treeContainer.remove();
       this.treeContainer = null;
     }
-    // Stop refresh timer when clearing tree
-    this.stopRefreshTimer();
     // Clear hover outline
     this.hideHoverOutline();
   }
@@ -663,48 +623,6 @@ class AXTreeOverlay {
   private hideHoverOutline() {
     if (this.hoverOutline) {
       this.hoverOutline.style.display = "none";
-    }
-  }
-
-  private startRefreshTimer() {
-    // Clear any existing timer first
-    this.stopRefreshTimer();
-
-    this.refreshTimer = window.setInterval(() => {
-      // Only refresh if we have a focused window and tree is visible
-      if (this.focusedWindow && this.treeContainer) {
-        console.log(
-          `🔄 Auto-refreshing accessibility tree for ${this.focusedWindow.name}`
-        );
-        this.requestAccessibilityTree(this.focusedWindow.process_id);
-      }
-    }, this.REFRESH_INTERVAL);
-
-    console.log(`⏰ Started auto-refresh timer (${this.REFRESH_INTERVAL}ms)`);
-  }
-
-  private stopRefreshTimer() {
-    if (this.refreshTimer !== null) {
-      window.clearInterval(this.refreshTimer);
-      this.refreshTimer = null;
-      console.log("⏰ Stopped auto-refresh timer");
-    }
-  }
-
-  private showError(error: string) {
-    this.clearAccessibilityTree();
-
-    if (this.focusedWindow) {
-      const errorContainer = document.createElement("div");
-      errorContainer.className = "accessibility-error";
-
-      const rightX = this.focusedWindow.x + this.focusedWindow.w + 10;
-      errorContainer.style.left = `${rightX}px`;
-      errorContainer.style.top = `${this.focusedWindow.y}px`;
-
-      errorContainer.textContent = `Error: ${error}`;
-      this.windowContainer.appendChild(errorContainer);
-      this.treeContainer = errorContainer;
     }
   }
 

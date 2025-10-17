@@ -10,6 +10,7 @@ use core_graphics::display::{
     CGDirectDisplayID, CGDisplayPixelsHigh, CGDisplayPixelsWide, CGMainDisplayID,
 };
 
+use crate::axio::{AXNode, AXRole, Bounds, Position, Size};
 use crate::websocket::WebSocketState;
 
 // Constants - optimized polling rate
@@ -49,12 +50,46 @@ impl WindowInfo {
         self.y -= offset_y;
         self
     }
+
+    /// Convert WindowInfo to AXNode
+    /// Windows are just root-level accessibility nodes with no children loaded
+    pub fn to_ax_node(&self) -> AXNode {
+        AXNode {
+            pid: self.process_id,
+            path: vec![], // Windows are root nodes (empty path)
+            id: self.id.clone(),
+            role: AXRole::Window,
+            subrole: None,
+            title: if !self.name.is_empty() {
+                Some(self.name.clone())
+            } else {
+                None
+            },
+            value: None,
+            description: None,
+            placeholder: None,
+            focused: self.focused,
+            enabled: true, // Windows are always enabled
+            selected: None,
+            bounds: Some(Bounds {
+                position: Position {
+                    x: self.x as f64,
+                    y: self.y as f64,
+                },
+                size: Size {
+                    width: self.w as f64,
+                    height: self.h as f64,
+                },
+            }),
+            children: vec![], // No children loaded initially
+        }
+    }
 }
 
 // Event payload structures
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WindowUpdatePayload {
-    pub windows: Vec<WindowInfo>,
+    pub windows: Vec<AXNode>,
 }
 
 #[cfg(target_os = "macos")]
@@ -102,6 +137,8 @@ pub fn get_all_windows_with_focus() -> Vec<WindowInfo> {
 // WebSocket-only polling loop
 pub fn window_polling_loop(ws_state: WebSocketState) {
     let mut last_windows: Option<Vec<WindowInfo>> = None;
+    let mut last_focused_pid: Option<u32> = None;
+    let overlay_pid = std::process::id();
 
     loop {
         let loop_start = Instant::now();
@@ -109,8 +146,45 @@ pub fn window_polling_loop(ws_state: WebSocketState) {
         // Get fresh data from system
         let current_windows = get_all_windows_with_focus();
 
-        // Only broadcast if something actually changed
+        // Find the currently focused window
+        let focused_window = current_windows.iter().find(|w| w.focused);
+        let current_focused_pid = focused_window.map(|w| w.process_id);
+
+        // Check if focused window changed FIRST (independent of window list changes)
+        if current_focused_pid != last_focused_pid {
+            if let Some(focused) = focused_window {
+                // Don't push tree for the overlay itself
+                if focused.process_id != overlay_pid {
+                    let detect_time = std::time::Instant::now();
+                    println!(
+                        "🎯 Focus changed to PID {} at {:?}, auto-pushing tree",
+                        focused.process_id, detect_time
+                    );
+                    // Spawn async task to fetch and push tree (don't block polling loop)
+                    let ws_state_clone = ws_state.clone();
+                    let pid = focused.process_id;
+                    tokio::spawn(async move {
+                        let fetch_start = std::time::Instant::now();
+                        ws_state_clone.push_tree_for_window(pid);
+                        let fetch_duration = fetch_start.elapsed();
+                        println!("⏱️ Tree fetch took {:?} for PID {}", fetch_duration, pid);
+                    });
+                } else {
+                    println!(
+                        "🎯 Focus changed to overlay itself (PID {}), skipping tree fetch",
+                        overlay_pid
+                    );
+                }
+            }
+            last_focused_pid = current_focused_pid;
+        }
+
+        // Broadcast window updates if something changed
         if last_windows.as_ref() != Some(&current_windows) {
+            // Convert windows to AXNodes
+            let window_nodes: Vec<AXNode> =
+                current_windows.iter().map(|w| w.to_ax_node()).collect();
+
             // Update WebSocket state and broadcast
             let ws_state_clone = ws_state.clone();
             let windows_clone = current_windows.clone();
@@ -120,7 +194,7 @@ pub fn window_polling_loop(ws_state: WebSocketState) {
             });
 
             ws_state.broadcast(&WindowUpdatePayload {
-                windows: current_windows.clone(),
+                windows: window_nodes,
             });
 
             last_windows = Some(current_windows);

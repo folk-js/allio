@@ -152,6 +152,11 @@ export class AXIO {
   private reconnectTimer: number | null = null;
   private readonly reconnectDelay = 1000;
 
+  // Window state (always up-to-date)
+  // Windows are just AXNodes with role="window", empty children, and bounds populated
+  public windows: readonly AXNode[] = [];
+  public focused: AXNode | null = null;
+
   constructor(private readonly wsUrl: string = "ws://localhost:3030/ws") {}
 
   /**
@@ -206,13 +211,19 @@ export class AXIO {
 
   /**
    * Register callback for window updates
+   * Also updates axio.windows and axio.focused automatically
    */
-  onWindowUpdate(callback: (windows: any[]) => void): void {
+  onWindowUpdate(callback: (windows: AXNode[]) => void): void {
     if (!this.listeners.has("window_update")) {
       this.listeners.set("window_update", new Set());
     }
     this.listeners.get("window_update")!.add((data: any) => {
       if (data.windows) {
+        // Update internal state
+        this.windows = data.windows;
+        this.focused = data.windows.find((w: AXNode) => w.focused) || null;
+
+        // Notify listeners
         callback(data.windows);
       }
     });
@@ -228,6 +239,22 @@ export class AXIO {
     this.listeners.get("overlay_pid")!.add((data: any) => {
       if (data.overlay_pid !== undefined) {
         callback(data.overlay_pid);
+      }
+    });
+  }
+
+  /**
+   * Register callback for tree changes (pushed from backend when focus changes)
+   */
+  onTreeChanged(callback: (pid: number, tree: AXNode) => void): void {
+    if (!this.listeners.has("tree_changed")) {
+      this.listeners.set("tree_changed", new Set());
+    }
+    this.listeners.get("tree_changed")!.add((data: any) => {
+      if (data.pid !== undefined && data.tree !== undefined) {
+        // Attach methods to the tree
+        const tree = this.attachNodeMethods(data.tree);
+        callback(data.pid, tree);
       }
     });
   }
@@ -273,7 +300,7 @@ export class AXIO {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.ws.send(
           JSON.stringify({
-            type: "get_accessibility_tree",
+            msg_type: "get_accessibility_tree",
             pid,
             max_depth: maxDepth,
             max_children_per_level: maxChildrenPerLevel,
@@ -342,7 +369,7 @@ export class AXIO {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.ws.send(
           JSON.stringify({
-            type: "write_to_element",
+            msg_type: "write_to_element",
             pid,
             element_path: path,
             text,
@@ -371,12 +398,15 @@ export class AXIO {
     try {
       const message = JSON.parse(data);
 
-      // Determine event type
-      let event = message.event || message.type;
+      // Determine event type from various field names
+      let event = message.event_type || message.msg_type;
 
       // Special case: window updates (has 'windows' array but no explicit type)
       if (!event && message.windows) {
         event = "window_update";
+        // Always update internal window state, even if no listeners
+        this.windows = message.windows;
+        this.focused = message.windows.find((w: AXNode) => w.focused) || null;
       }
 
       // Special case: overlay_pid (has 'overlay_pid' field but no explicit type)
@@ -389,6 +419,9 @@ export class AXIO {
         if (listeners) {
           listeners.forEach((callback) => callback(message.data || message));
         }
+      } else {
+        // Log unhandled messages for debugging
+        console.warn("[AXIO] Received message without event type:", message);
       }
     } catch (error) {
       console.error("[AXIO] Failed to parse message:", error);

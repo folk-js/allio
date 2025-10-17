@@ -9,15 +9,6 @@ import {
   visualizationShader,
 } from "./sand.glsl";
 
-interface WindowInfo {
-  id: string;
-  name: string;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
 class WebGLUtils {
   static createShader(
     gl: WebGL2RenderingContext,
@@ -152,9 +143,8 @@ export class FolkSand extends HTMLElement {
   #shapeIndexBuffer!: WebGLBuffer;
   #shapeIndexCount = 0;
 
-  // Add AXIO client for receiving window updates
+  // Add AXIO client for window state
   #axio: AXIO;
-  #currentWindows: WindowInfo[] = [];
 
   onMaterialChange?: (type: number) => void;
 
@@ -909,16 +899,21 @@ export class FolkSand extends HTMLElement {
   // Add method to setup WebSocket connection
   async #setupWebSocketConnection() {
     try {
-      // Set up window update handler
-      this.#axio.onWindowUpdate((windows: any) => {
-        console.log("Sand overlay received window update:", windows);
-        this.#currentWindows = windows;
+      // Set up window update handler to refresh collision data
+      this.#axio.onWindowUpdate(() => {
+        console.log(
+          `Sand overlay received window update: ${
+            this.#axio.windows.length
+          } windows`
+        );
         this.#handleShapeTransform();
-        console.log(`Sand overlay updated with ${windows.length} windows`);
       });
 
       await this.#axio.connect();
       console.log("AXIO connected for folk-sand");
+
+      // Initial shape transform with current windows
+      this.#handleShapeTransform();
     } catch (error) {
       console.error("Failed to connect AXIO in folk-sand:", error);
     }
@@ -929,14 +924,22 @@ export class FolkSand extends HTMLElement {
     const indices: number[] = [];
     let vertexOffset = 0;
 
-    // Use stored windows instead of invoking Rust
-    this.#currentWindows.forEach((win) => {
+    // Use AXIO windows (always up-to-date)
+    this.#axio.windows.forEach((win) => {
+      // Skip if window has no bounds
+      if (!win.bounds) return;
+
+      const x = win.bounds.position.x;
+      const y = win.bounds.position.y;
+      const w = win.bounds.size.width;
+      const h = win.bounds.size.height;
+
       // Convert window coordinates to buffer coordinates
       const bufferPoints = [
-        this.#convertToBufferCoordinates(win.x, win.y),
-        this.#convertToBufferCoordinates(win.x + win.w, win.y),
-        this.#convertToBufferCoordinates(win.x, win.y + win.h),
-        this.#convertToBufferCoordinates(win.x + win.w, win.y + win.h),
+        this.#convertToBufferCoordinates(x, y),
+        this.#convertToBufferCoordinates(x + w, y),
+        this.#convertToBufferCoordinates(x, y + h),
+        this.#convertToBufferCoordinates(x + w, y + h),
       ];
 
       // Add vertices

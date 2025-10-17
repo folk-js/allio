@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-interface WindowInfo {
+// Legacy type for debug overlay (uses old structure)
+type WindowInfo = {
   id: string;
   name: string;
   x: number;
@@ -10,7 +11,7 @@ interface WindowInfo {
   h: number;
   focused: boolean;
   process_id: number;
-}
+};
 
 interface UITreeNode {
   role: string;
