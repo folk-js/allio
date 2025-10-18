@@ -16,6 +16,8 @@ use crate::axio::{AXNode, AXRole, Bounds, Position, Size};
 ///
 /// This is the main conversion function that maps macOS accessibility
 /// elements to our platform-agnostic AXIO format.
+///
+/// If `load_children` is false, children_count is populated but children array is empty.
 pub fn element_to_axnode(
     element: &AXUIElement,
     pid: u32,
@@ -23,9 +25,11 @@ pub fn element_to_axnode(
     depth: usize,
     max_depth: usize,
     max_children_per_level: usize,
+    load_children: bool,
 ) -> Option<AXNode> {
-    // Stop traversal at max depth
-    if depth >= max_depth {
+    // Stop traversal past max depth
+    // Note: max_depth is inclusive (max_depth=1 means depths 0 and 1 are allowed)
+    if depth > max_depth {
         return None;
     }
 
@@ -117,15 +121,27 @@ pub fn element_to_axnode(
     // For now, using depth and a random ID
     let id = format!("depth{}-{}", depth, uuid::Uuid::new_v4().simple());
 
-    // Get children (with updated paths)
-    let children = get_element_children(
-        element,
-        pid,
-        path.clone(),
-        depth,
-        max_depth,
-        max_children_per_level,
-    );
+    // Get children count (always, regardless of load_children flag)
+    let children_count = element
+        .attribute(&AXAttribute::children())
+        .ok()
+        .map(|children_array| children_array.len() as usize)
+        .unwrap_or(0);
+
+    // Get children (only if load_children is true)
+    let children = if load_children {
+        get_element_children(
+            element,
+            pid,
+            path.clone(),
+            depth,
+            max_depth,
+            max_children_per_level,
+            load_children,
+        )
+    } else {
+        Vec::new()
+    };
 
     Some(AXNode {
         pid,
@@ -141,6 +157,7 @@ pub fn element_to_axnode(
         enabled,
         selected,
         bounds,
+        children_count,
         children,
     })
 }
@@ -231,6 +248,7 @@ fn get_element_children(
     depth: usize,
     max_depth: usize,
     max_children_per_level: usize,
+    load_children: bool,
 ) -> Vec<AXNode> {
     let children_array = match element.attribute(&AXAttribute::children()) {
         Ok(children) => children,
@@ -253,6 +271,7 @@ fn get_element_children(
                 depth + 1,
                 max_depth,
                 max_children_per_level,
+                load_children,
             ) {
                 result.push(child_node);
             }
@@ -266,10 +285,13 @@ fn get_element_children(
 ///
 /// This is the main entry point for getting an accessibility tree
 /// in AXIO format from a macOS application.
+///
+/// If `load_children` is false, returns only the root node with children_count populated.
 pub fn get_ax_tree_by_pid(
     pid: u32,
     max_depth: usize,
     max_children_per_level: usize,
+    load_children: bool,
 ) -> Result<AXNode, String> {
     let app_element = AXUIElement::application(pid as i32);
 
@@ -280,8 +302,40 @@ pub fn get_ax_tree_by_pid(
         0,
         max_depth,
         max_children_per_level,
+        load_children,
     )
     .ok_or_else(|| format!("Failed to get accessibility tree for PID {}", pid))
+}
+
+/// Get children of a specific node by path
+///
+/// Returns the children of the node at the given path, with their own children_count populated
+/// but not their children (unless max_depth > 1).
+pub fn get_children_by_path(
+    pid: u32,
+    path: &[usize],
+    max_depth: usize,
+    max_children_per_level: usize,
+) -> Result<Vec<AXNode>, String> {
+    let app_element = AXUIElement::application(pid as i32);
+
+    // Navigate to the target node
+    let target_element = navigate_to_element(&app_element, path)
+        .ok_or_else(|| "Could not find target element".to_string())?;
+
+    // Get children of this node
+    // Depth = 0 means we're getting immediate children with their counts, but not grandchildren
+    let children = get_element_children(
+        &target_element,
+        pid,
+        path.to_vec(),
+        0, // Start depth at 0 for children
+        max_depth,
+        max_children_per_level,
+        max_depth > 1, // Only load grandchildren if max_depth > 1
+    );
+
+    Ok(children)
 }
 
 /// Write text to a specific element (identified by path through the tree)

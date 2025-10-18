@@ -15,6 +15,10 @@ class AXTreeOverlay {
   private currentTreeData: AXNode | null = null; // Store the current tree data for position lookups
   private renderedNodeCount: number = 0; // Track rendered DOM elements
   private hoverOutline: HTMLElement | null = null; // Visual outline for hovered elements
+  private expandedNodes: Set<string> = new Set(); // Track which nodes are expanded
+  private loadingNodes: Set<string> = new Set(); // Track which nodes are currently loading
+  private nodeElements: Map<string, { element: HTMLElement; node: AXNode }> =
+    new Map(); // Track rendered nodes
 
   constructor() {
     this.windowContainer = document.getElementById("windowContainer")!;
@@ -51,24 +55,6 @@ class AXTreeOverlay {
       this.axio.onOverlayPid((pid) => {
         this.overlayProcessId = pid;
         console.log(`🎯 Received overlay PID: ${pid}`);
-      });
-
-      // Set up tree changed handler (reactive push from backend)
-      this.axio.onTreeChanged((pid, tree) => {
-        console.log(`🌳 Received pushed tree for PID: ${pid}`);
-
-        // Only handle if this is the currently focused window
-        if (this.focusedWindow && this.focusedWindow.pid === pid) {
-          const nodeCount = this.countTreeNodes(tree);
-          console.log(`🌳 Tree has ${nodeCount} total nodes`);
-
-          const isRefresh = this.treeContainer !== null;
-          if (isRefresh) {
-            this.refreshTreeContent(tree, this.focusedWindow);
-          } else {
-            this.displayAccessibilityTree(tree, this.focusedWindow);
-          }
-        }
       });
 
       // Connect to websocket
@@ -150,16 +136,17 @@ class AXTreeOverlay {
       }
     }
 
-    // Update focused window state (tree will be pushed by backend when focus changes)
+    // Update focused window state and fetch tree on demand
     if (
       newFocusedWindow &&
       (!this.focusedWindow || newFocusedWindow.id !== this.focusedWindow.id)
     ) {
       this.focusedWindow = newFocusedWindow;
       console.log(
-        `⏳ Waiting for backend to push tree for ${newFocusedWindow.title}`
+        `🎯 Focus changed to ${newFocusedWindow.title}, displaying window node`
       );
-      // Backend will auto-push tree via tree_changed event
+      // Display the window node itself (which has children_count but no children loaded)
+      this.displayAccessibilityTree(newFocusedWindow, newFocusedWindow);
     } else if (!newFocusedWindow) {
       // No focused window, clear the tree
       this.focusedWindow = null;
@@ -176,37 +163,6 @@ class AXTreeOverlay {
         this.lastNonOverlayWindow = newFocusedWindow;
       }
       this.updateTreePosition();
-    }
-  }
-
-  private countTreeNodes(node: AXNode): number {
-    let count = 1; // Count this node
-    for (const child of node.children) {
-      count += this.countTreeNodes(child);
-    }
-    return count;
-  }
-
-  private refreshTreeContent(tree: AXNode, window: AXNode) {
-    if (!this.treeContainer) return;
-
-    // Store the updated tree data
-    this.currentTreeData = tree;
-
-    // Find the content wrapper
-    const contentWrapper = this.treeContainer.querySelector(".tree-content");
-    if (contentWrapper) {
-      // Clear existing content
-      contentWrapper.innerHTML = "";
-
-      // Create new tree content with preserved expansion state and filtering
-      const filteredTree = this.filterEmptyGroups(tree);
-      if (filteredTree) {
-        const treeContent = this.createTreeElement(filteredTree);
-        contentWrapper.appendChild(treeContent);
-      }
-
-      console.log(`🔄 Refreshed tree content for ${window.title}`);
     }
   }
 
@@ -248,14 +204,9 @@ class AXTreeOverlay {
     // Create tree content and add it to the wrapper
     console.log(`🏗️ Starting tree element creation...`);
     this.renderedNodeCount = 0; // Reset counter
-    const filteredTree = this.filterEmptyGroups(tree);
-    if (filteredTree) {
-      const treeContent = this.createTreeElement(filteredTree);
-      console.log(`🎯 Rendered ${this.renderedNodeCount} DOM elements`);
-      contentWrapper.appendChild(treeContent);
-    } else {
-      console.log("🚫 Entire tree was filtered out");
-    }
+    const treeContent = this.createTreeElement(tree);
+    console.log(`🎯 Rendered ${this.renderedNodeCount} DOM elements`);
+    contentWrapper.appendChild(treeContent);
 
     // Add wrapper to container
     this.treeContainer.appendChild(contentWrapper);
@@ -283,11 +234,47 @@ class AXTreeOverlay {
       const nodeContent = document.createElement("div");
       nodeContent.className = "tree-node-content";
 
-      // Indicator for leaf vs parent nodes
-      const hasChildren = node.children && node.children.length > 0;
+      // Expand/collapse/load indicator
+      const hasLoadedChildren = node.children && node.children.length > 0;
+      const hasUnloadedChildren =
+        node.children_count > 0 && node.children.length === 0;
+      const isExpanded = this.expandedNodes.has(nodeId!);
+      const isLoading = this.loadingNodes.has(nodeId!);
+
       const indicator = document.createElement("span");
       indicator.className = "tree-indicator";
-      indicator.textContent = hasChildren ? "▸" : "•";
+
+      if (isLoading) {
+        indicator.textContent = "⋯"; // Loading indicator
+        indicator.style.cursor = "default";
+      } else if (hasUnloadedChildren) {
+        indicator.textContent = "+"; // Unloaded children
+        indicator.style.cursor = "pointer";
+        indicator.title = `Load ${node.children_count} children`;
+      } else if (hasLoadedChildren) {
+        indicator.textContent = isExpanded ? "▾" : "▸"; // Expanded/collapsed
+        indicator.style.cursor = "pointer";
+        indicator.title = isExpanded ? "Collapse" : "Expand";
+      } else {
+        indicator.textContent = "•"; // Leaf node
+        indicator.style.cursor = "default";
+      }
+
+      // Add click handler for expand/collapse/load
+      if (hasUnloadedChildren || hasLoadedChildren) {
+        indicator.addEventListener("click", async (e) => {
+          e.stopPropagation();
+
+          if (hasUnloadedChildren && !isLoading) {
+            // Load children
+            await this.loadNodeChildren(nodeId!, node, nodeElement);
+          } else if (hasLoadedChildren) {
+            // Toggle expand/collapse
+            this.toggleNodeExpansion(nodeId!, nodeElement);
+          }
+        });
+      }
+
       nodeContent.appendChild(indicator);
 
       // Node info container
@@ -370,11 +357,14 @@ class AXTreeOverlay {
         nodeInfo.appendChild(stateSpan);
       }
 
-      // Children count for nodes with children
-      if (hasChildren) {
+      // Children count for nodes with children (loaded or unloaded)
+      if (hasLoadedChildren || hasUnloadedChildren) {
         const childCountSpan = document.createElement("span");
         childCountSpan.className = "tree-count";
-        childCountSpan.textContent = ` (${node.children.length})`;
+        const count = hasLoadedChildren
+          ? node.children.length
+          : node.children_count;
+        childCountSpan.textContent = ` (${count})`;
         nodeInfo.appendChild(childCountSpan);
       }
 
@@ -467,22 +457,24 @@ class AXTreeOverlay {
       nodeElement.appendChild(nodeContent);
 
       // Add children container
-      if (hasChildren) {
+      if (hasLoadedChildren) {
         const childrenContainer = document.createElement("div");
         childrenContainer.className = "tree-children";
 
+        // Hide children if not expanded
+        if (!isExpanded) {
+          childrenContainer.style.display = "none";
+        }
+
         for (const child of node.children) {
-          // Filter each child and only add non-null filtered nodes
-          const filteredChild = this.filterEmptyGroups(child);
-          if (filteredChild) {
-            childrenContainer.appendChild(
-              this.createTreeElement(filteredChild)
-            );
-          }
+          childrenContainer.appendChild(this.createTreeElement(child));
         }
 
         nodeElement.appendChild(childrenContainer);
       }
+
+      // Store node element for later updates
+      this.nodeElements.set(nodeId!, { element: nodeElement, node });
 
       this.renderedNodeCount++; // Increment counter for each node rendered
       return nodeElement;
@@ -592,6 +584,10 @@ class AXTreeOverlay {
     }
     // Clear hover outline
     this.hideHoverOutline();
+    // Clear node tracking state
+    this.expandedNodes.clear();
+    this.loadingNodes.clear();
+    this.nodeElements.clear();
   }
 
   private showHoverOutline(position: [number, number], size: [number, number]) {
@@ -1061,6 +1057,7 @@ class AXTreeOverlay {
     });
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private filterEmptyGroups(node: AXNode): AXNode | null {
     // First, recursively filter children
     const filteredChildren = node.children
@@ -1074,15 +1071,17 @@ class AXTreeOverlay {
       const hasValue = node.value !== undefined;
       const hasDescription = node.description && node.description.trim() !== "";
       const hasPlaceholder = node.placeholder && node.placeholder.trim() !== "";
-      const hasChildren = filteredChildren.length > 0;
+      const hasLoadedChildren = filteredChildren.length > 0;
+      const hasUnloadedChildren = node.children_count > 0; // Unloaded children to lazy-load
 
-      // Keep the group only if it has some meaningful content or children
+      // Keep the group only if it has some meaningful content or children (loaded or unloaded)
       if (
         !hasTitle &&
         !hasValue &&
         !hasDescription &&
         !hasPlaceholder &&
-        !hasChildren
+        !hasLoadedChildren &&
+        !hasUnloadedChildren
       ) {
         return null; // Filter out this empty group
       }
@@ -1090,6 +1089,112 @@ class AXTreeOverlay {
 
     // Return the node with filtered children
     return { ...node, children: filteredChildren };
+  }
+
+  /**
+   * Toggle expansion of a node's children
+   */
+  private toggleNodeExpansion(nodeId: string, nodeElement: HTMLElement) {
+    const childrenContainer = nodeElement.querySelector(
+      ".tree-children"
+    ) as HTMLElement;
+    if (!childrenContainer) return;
+
+    const isExpanded = this.expandedNodes.has(nodeId);
+
+    if (isExpanded) {
+      // Collapse
+      this.expandedNodes.delete(nodeId);
+      childrenContainer.style.display = "none";
+
+      // Update indicator
+      const indicator = nodeElement.querySelector(".tree-indicator");
+      if (indicator) {
+        indicator.textContent = "▸";
+        indicator.setAttribute("title", "Expand");
+      }
+    } else {
+      // Expand
+      this.expandedNodes.add(nodeId);
+      childrenContainer.style.display = "block";
+
+      // Update indicator
+      const indicator = nodeElement.querySelector(".tree-indicator");
+      if (indicator) {
+        indicator.textContent = "▾";
+        indicator.setAttribute("title", "Collapse");
+      }
+    }
+  }
+
+  /**
+   * Load children for a node using lazy loading
+   */
+  private async loadNodeChildren(
+    nodeId: string,
+    node: AXNode,
+    nodeElement: HTMLElement
+  ) {
+    // Mark as loading
+    this.loadingNodes.add(nodeId);
+
+    // Update indicator
+    const indicator = nodeElement.querySelector(".tree-indicator");
+    if (indicator) {
+      indicator.textContent = "⋯";
+      indicator.setAttribute("title", "Loading...");
+    }
+
+    try {
+      console.log(
+        `📥 Loading children for ${node.role} (${node.children_count} children)`
+      );
+
+      // Fetch children using the node's getChildren method
+      if (!node.getChildren) {
+        throw new Error("Node does not have getChildren method");
+      }
+
+      const children = await node.getChildren();
+      console.log(`✅ Loaded ${children.length} children`);
+
+      // Update the stored node with loaded children
+      const updatedNode = { ...node, children };
+      this.nodeElements.set(nodeId, {
+        element: nodeElement,
+        node: updatedNode,
+      });
+
+      // Create and add children container
+      const childrenContainer = document.createElement("div");
+      childrenContainer.className = "tree-children";
+
+      for (const child of children) {
+        childrenContainer.appendChild(this.createTreeElement(child));
+      }
+
+      nodeElement.appendChild(childrenContainer);
+
+      // Auto-expand after loading
+      this.expandedNodes.add(nodeId);
+
+      // Update indicator
+      if (indicator && indicator instanceof HTMLElement) {
+        indicator.textContent = "▾";
+        indicator.setAttribute("title", "Collapse");
+        indicator.style.cursor = "pointer";
+      }
+    } catch (error) {
+      console.error("Failed to load children:", error);
+
+      // Update indicator to show error
+      if (indicator) {
+        indicator.textContent = "✗";
+        indicator.setAttribute("title", `Failed to load: ${error}`);
+      }
+    } finally {
+      this.loadingNodes.delete(nodeId);
+    }
   }
 }
 

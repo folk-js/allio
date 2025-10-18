@@ -127,10 +127,12 @@ export interface AXNode {
   readonly bounds?: Bounds;
 
   // Tree structure
-  readonly children: ReadonlyArray<AXNode>;
+  readonly children_count: number; // Total number of children (whether loaded or not)
+  readonly children: ReadonlyArray<AXNode>; // Loaded children (may be empty even if children_count > 0)
 
   // Operations (set by AXIO when creating nodes)
   setValue?(text: string): Promise<void>;
+  getChildren?(maxDepth?: number, maxChildren?: number): Promise<AXNode[]>;
 }
 
 // ============================================================================
@@ -219,12 +221,18 @@ export class AXIO {
     }
     this.listeners.get("window_update")!.add((data: any) => {
       if (data.windows) {
+        // Attach methods to all window nodes
+        const windowsWithMethods = data.windows.map((w: AXNode) =>
+          this.attachNodeMethods(w)
+        );
+
         // Update internal state
-        this.windows = data.windows;
-        this.focused = data.windows.find((w: AXNode) => w.focused) || null;
+        this.windows = windowsWithMethods;
+        this.focused =
+          windowsWithMethods.find((w: AXNode) => w.focused) || null;
 
         // Notify listeners
-        callback(data.windows);
+        callback(windowsWithMethods);
       }
     });
   }
@@ -330,6 +338,21 @@ export class AXIO {
       return this.write(node.pid, node.path, text);
     };
 
+    // Attach getChildren method
+    (node as any).getChildren = async (
+      maxDepth: number = 1,
+      maxChildren: number = 2000
+    ) => {
+      const children = await this.getChildren(
+        node.pid,
+        node.path,
+        maxDepth,
+        maxChildren
+      );
+      // Attach methods to the newly loaded children
+      return children.map((child) => this.attachNodeMethods(child));
+    };
+
     // Recursively attach to children
     if (node.children && node.children.length > 0) {
       (node as any).children = node.children.map((child) =>
@@ -338,6 +361,63 @@ export class AXIO {
     }
 
     return node;
+  }
+
+  /**
+   * Get children of a specific node by path
+   * Returns immediate children with their children_count populated but not loaded
+   */
+  async getChildren(
+    pid: number,
+    path: number[],
+    maxDepth: number = 1,
+    maxChildren: number = 2000
+  ): Promise<AXNode[]> {
+    return new Promise((resolve, reject) => {
+      const handler = (data: any) => {
+        // Remove this specific handler
+        const listeners = this.listeners.get("get_children_response");
+        if (listeners) {
+          listeners.delete(handler);
+        }
+
+        if (data.success && data.children) {
+          resolve(data.children);
+        } else {
+          reject(new Error(data.error || "Failed to get children"));
+        }
+      };
+
+      // Add temporary handler
+      if (!this.listeners.has("get_children_response")) {
+        this.listeners.set("get_children_response", new Set());
+      }
+      this.listeners.get("get_children_response")!.add(handler);
+
+      // Send request
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(
+          JSON.stringify({
+            msg_type: "get_children",
+            pid,
+            path,
+            max_depth: maxDepth,
+            max_children_per_level: maxChildren,
+          })
+        );
+      } else {
+        reject(new Error("WebSocket not connected"));
+      }
+
+      // Timeout after 10s
+      setTimeout(() => {
+        const listeners = this.listeners.get("get_children_response");
+        if (listeners) {
+          listeners.delete(handler);
+        }
+        reject(new Error("Timeout waiting for children response"));
+      }, 10000);
+    });
   }
 
   /**
@@ -405,8 +485,13 @@ export class AXIO {
       if (!event && message.windows) {
         event = "window_update";
         // Always update internal window state, even if no listeners
-        this.windows = message.windows;
-        this.focused = message.windows.find((w: AXNode) => w.focused) || null;
+        // Attach methods to window nodes so they can lazy-load children
+        const windowsWithMethods = message.windows.map((w: AXNode) =>
+          this.attachNodeMethods(w)
+        );
+        this.windows = windowsWithMethods;
+        this.focused =
+          windowsWithMethods.find((w: AXNode) => w.focused) || null;
       }
 
       // Special case: overlay_pid (has 'overlay_pid' field but no explicit type)

@@ -71,6 +71,17 @@ fn default_max_children_per_level() -> usize {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+struct GetChildrenRequest {
+    msg_type: String,
+    pid: u32,
+    path: Vec<usize>,
+    #[serde(default = "default_max_depth")]
+    max_depth: usize,
+    #[serde(default = "default_max_children_per_level")]
+    max_children_per_level: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 struct AccessibilityWriteRequest {
     msg_type: String,
     pid: u32,
@@ -92,6 +103,16 @@ struct AccessibilityTreeResponse {
     pid: u32,
     success: bool,
     tree: Option<AXNode>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GetChildrenResponse {
+    msg_type: String,
+    pid: u32,
+    path: Vec<usize>,
+    success: bool,
+    children: Option<Vec<AXNode>>,
     error: Option<String>,
 }
 
@@ -123,9 +144,11 @@ impl WebSocketState {
     }
 
     /// Automatically push accessibility tree for a window when it gains focus
+    /// NOTE: This is currently unused - trees are fetched on-demand by the frontend
+    #[allow(dead_code)]
     pub fn push_tree_for_window(&self, pid: u32) {
-        // Get tree with default limits
-        let tree_result = get_ax_tree_by_pid(pid, 100, 5000);
+        // Get tree with default limits, fully loaded
+        let tree_result = get_ax_tree_by_pid(pid, 100, 5000, true);
 
         match tree_result {
             Ok(tree) => {
@@ -250,8 +273,11 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
     // Send initial window state immediately
     {
         let current_windows = ws_state.current_windows.read().await;
-        // Convert WindowInfo to AXNode
-        let window_nodes: Vec<AXNode> = current_windows.iter().map(|w| w.to_ax_node()).collect();
+        // Convert WindowInfo to AXNode (filter out any that fail to convert)
+        let window_nodes: Vec<AXNode> = current_windows
+            .iter()
+            .filter_map(|w| w.to_ax_node())
+            .collect();
         let window_update = WindowUpdatePayload {
             windows: window_nodes,
         };
@@ -392,6 +418,44 @@ async fn handle_client_message(
             // Reduced logging for live updates
         }
     }
+    // Try to parse as GetChildrenRequest
+    else if let Ok(get_children_req) = serde_json::from_str::<GetChildrenRequest>(message) {
+        if get_children_req.msg_type == "get_children" {
+            println!(
+                "👶 Client requesting children for PID: {} path: {:?}",
+                get_children_req.pid, get_children_req.path
+            );
+
+            // Get children of the specified node
+            let (success, children, error) = match crate::platform::get_children_by_path(
+                get_children_req.pid,
+                &get_children_req.path,
+                get_children_req.max_depth,
+                get_children_req.max_children_per_level,
+            ) {
+                Ok(ch) => (true, Some(ch), None),
+                Err(e) => (false, None, Some(e)),
+            };
+
+            let response = GetChildrenResponse {
+                msg_type: "get_children_response".to_string(),
+                pid: get_children_req.pid,
+                path: get_children_req.path,
+                success,
+                children,
+                error,
+            };
+
+            let response_json = serde_json::to_string(&response)?;
+            socket.send(Message::Text(response_json)).await.ok();
+
+            if success {
+                println!("✅ Sent children for PID {}", get_children_req.pid);
+            } else {
+                println!("❌ Failed to get children for PID {}", get_children_req.pid);
+            }
+        }
+    }
     // Try to parse as AccessibilityTreeRequest (less specific)
     else if let Ok(ax_request) = serde_json::from_str::<AccessibilityTreeRequest>(message) {
         println!("🌳 Parsed as AccessibilityTreeRequest: {:?}", ax_request);
@@ -402,10 +466,12 @@ async fn handle_client_message(
             );
 
             // Get the accessibility tree with configurable limits
+            // load_children=true to maintain backward compatibility (full tree)
             let (success, tree, error) = match get_ax_tree_by_pid(
                 ax_request.pid,
                 ax_request.max_depth,
                 ax_request.max_children_per_level,
+                true, // Load full tree
             ) {
                 Ok(ax_tree) => (true, Some(ax_tree), None),
                 Err(e) => (false, None, Some(e)),

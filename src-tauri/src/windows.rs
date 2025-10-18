@@ -53,8 +53,21 @@ impl WindowInfo {
 
     /// Convert WindowInfo to AXNode
     /// Windows are just root-level accessibility nodes with no children loaded
-    pub fn to_ax_node(&self) -> AXNode {
-        AXNode {
+    /// Returns None if we can't get the actual children count from the accessibility API
+    pub fn to_ax_node(&self) -> Option<AXNode> {
+        use accessibility::*;
+
+        // Get the actual app element to query children count
+        let app_element = AXUIElement::application(self.process_id as i32);
+
+        // Get actual children count from accessibility API
+        let children_count = app_element
+            .attribute(&AXAttribute::children())
+            .ok()
+            .map(|children_array| children_array.len() as usize)
+            .unwrap_or(0);
+
+        Some(AXNode {
             pid: self.process_id,
             path: vec![], // Windows are root nodes (empty path)
             id: self.id.clone(),
@@ -81,8 +94,9 @@ impl WindowInfo {
                     height: self.h as f64,
                 },
             }),
+            children_count,   // Actual count from accessibility API
             children: vec![], // No children loaded initially
-        }
+        })
     }
 }
 
@@ -137,8 +151,6 @@ pub fn get_all_windows_with_focus() -> Vec<WindowInfo> {
 // WebSocket-only polling loop
 pub fn window_polling_loop(ws_state: WebSocketState) {
     let mut last_windows: Option<Vec<WindowInfo>> = None;
-    let mut last_focused_pid: Option<u32> = None;
-    let overlay_pid = std::process::id();
 
     loop {
         let loop_start = Instant::now();
@@ -146,44 +158,15 @@ pub fn window_polling_loop(ws_state: WebSocketState) {
         // Get fresh data from system
         let current_windows = get_all_windows_with_focus();
 
-        // Find the currently focused window
-        let focused_window = current_windows.iter().find(|w| w.focused);
-        let current_focused_pid = focused_window.map(|w| w.process_id);
-
-        // Check if focused window changed FIRST (independent of window list changes)
-        if current_focused_pid != last_focused_pid {
-            if let Some(focused) = focused_window {
-                // Don't push tree for the overlay itself
-                if focused.process_id != overlay_pid {
-                    let detect_time = std::time::Instant::now();
-                    println!(
-                        "🎯 Focus changed to PID {} at {:?}, auto-pushing tree",
-                        focused.process_id, detect_time
-                    );
-                    // Spawn async task to fetch and push tree (don't block polling loop)
-                    let ws_state_clone = ws_state.clone();
-                    let pid = focused.process_id;
-                    tokio::spawn(async move {
-                        let fetch_start = std::time::Instant::now();
-                        ws_state_clone.push_tree_for_window(pid);
-                        let fetch_duration = fetch_start.elapsed();
-                        println!("⏱️ Tree fetch took {:?} for PID {}", fetch_duration, pid);
-                    });
-                } else {
-                    println!(
-                        "🎯 Focus changed to overlay itself (PID {}), skipping tree fetch",
-                        overlay_pid
-                    );
-                }
-            }
-            last_focused_pid = current_focused_pid;
-        }
+        // No longer auto-push tree on focus change - let overlays request what they need
 
         // Broadcast window updates if something changed
         if last_windows.as_ref() != Some(&current_windows) {
-            // Convert windows to AXNodes
-            let window_nodes: Vec<AXNode> =
-                current_windows.iter().map(|w| w.to_ax_node()).collect();
+            // Convert windows to AXNodes (filter out any that fail to convert)
+            let window_nodes: Vec<AXNode> = current_windows
+                .iter()
+                .filter_map(|w| w.to_ax_node())
+                .collect();
 
             // Update WebSocket state and broadcast
             let ws_state_clone = ws_state.clone();

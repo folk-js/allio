@@ -131,5 +131,6 @@ pub struct AXNode {
     pub bounds: Option<Bounds>,
 
     // Tree structure
-    pub children: Vec<AXNode>,
+    pub children_count: usize, // Total number of children (whether loaded or not)
+    pub children: Vec<AXNode>, // Loaded children (may be empty even if children_count > 0)
 }
