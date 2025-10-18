@@ -17,6 +17,7 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 mod accessibility;
 mod ax_value;
 mod axio;
+mod mouse;
 mod platform;
 mod websocket;
 mod windows;
@@ -186,7 +187,7 @@ fn main() {
         .manage(AppState::default())
         .setup(|app| {
             // Initialize WebSocket state
-            let ws_state = WebSocketState::new();
+            let ws_state = WebSocketState::new(app.handle().clone());
 
             let (screen_width, screen_height) = get_main_screen_dimensions();
             if let Some(window) = app.get_webview_window("main") {
@@ -231,6 +232,9 @@ fn main() {
             if let Some(first_overlay) = overlay_files.first() {
                 let _ = switch_overlay(&app.handle(), first_overlay);
             }
+
+            // Start global mouse tracking (for automatic clickthrough)
+            mouse::start_mouse_tracking(ws_state.clone());
 
             // Start WebSocket server and window polling
             let ws_state_clone = ws_state.clone();

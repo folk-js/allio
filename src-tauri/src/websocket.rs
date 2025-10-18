@@ -10,6 +10,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::{collections::HashSet, sync::Arc};
+use tauri::Manager; // For get_webview_window
 use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 
@@ -125,21 +126,37 @@ struct AccessibilityWriteResponse {
     error: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct SetClickthroughRequest {
+    msg_type: String,
+    enabled: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SetClickthroughResponse {
+    msg_type: String,
+    success: bool,
+    enabled: bool,
+    error: Option<String>,
+}
+
 // WebSocket state for broadcasting to clients
 #[derive(Clone)]
 pub struct WebSocketState {
     pub sender: Arc<broadcast::Sender<String>>,
     pub connected_windows: Arc<RwLock<HashSet<String>>>, // Set of window IDs with connected clients
     pub current_windows: Arc<RwLock<Vec<WindowInfo>>>,
+    pub app_handle: tauri::AppHandle,
 }
 
 impl WebSocketState {
-    pub fn new() -> Self {
+    pub fn new(app_handle: tauri::AppHandle) -> Self {
         let (sender, _) = broadcast::channel(1000);
         Self {
             sender: Arc::new(sender),
             connected_windows: Arc::new(RwLock::new(HashSet::new())),
             current_windows: Arc::new(RwLock::new(Vec::new())),
+            app_handle,
         }
     }
 
@@ -501,6 +518,54 @@ async fn handle_client_message(
                 "🤔 AccessibilityTreeRequest with unexpected type: {}",
                 ax_request.msg_type
             );
+        }
+    }
+    // Try to parse as SetClickthroughRequest
+    else if let Ok(clickthrough_req) = serde_json::from_str::<SetClickthroughRequest>(message) {
+        if clickthrough_req.msg_type == "set_clickthrough" {
+            println!(
+                "🖱️ Client requesting clickthrough: {}",
+                clickthrough_req.enabled
+            );
+
+            // Set clickthrough state
+            let (success, error) = match ws_state.app_handle.get_webview_window("main") {
+                Some(window) => match window.set_ignore_cursor_events(clickthrough_req.enabled) {
+                    Ok(_) => {
+                        println!(
+                            "✅ Clickthrough {} for window",
+                            if clickthrough_req.enabled {
+                                "enabled"
+                            } else {
+                                "disabled"
+                            }
+                        );
+                        (true, None)
+                    }
+                    Err(e) => {
+                        println!("❌ Failed to set clickthrough: {}", e);
+                        (false, Some(e.to_string()))
+                    }
+                },
+                None => {
+                    println!("❌ Main window not found");
+                    (false, Some("Main window not found".to_string()))
+                }
+            };
+
+            let response = SetClickthroughResponse {
+                msg_type: "set_clickthrough_response".to_string(),
+                success,
+                enabled: if success {
+                    clickthrough_req.enabled
+                } else {
+                    false
+                },
+                error,
+            };
+
+            let response_json = serde_json::to_string(&response)?;
+            socket.send(Message::Text(response_json)).await.ok();
         }
     }
     // Catch-all for unrecognized messages

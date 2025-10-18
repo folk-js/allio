@@ -19,11 +19,56 @@ class AXTreeOverlay {
   private loadingNodes: Set<string> = new Set(); // Track which nodes are currently loading
   private nodeElements: Map<string, { element: HTMLElement; node: AXNode }> =
     new Map(); // Track rendered nodes
+  private isClickthroughEnabled: boolean = true; // Track current clickthrough state (start enabled)
 
   constructor() {
     this.windowContainer = document.getElementById("windowContainer")!;
     this.axio = new AXIO();
     this.setupWebSocketListener();
+    this.setupCursorTransparency();
+  }
+
+  /**
+   * Setup automatic cursor transparency based on whether mouse is over interactive elements
+   * Uses global mouse position from backend (works even when window is not focused)
+   */
+  private setupCursorTransparency() {
+    // Listen for global mouse position from backend
+    this.axio.onMousePosition((x, y) => {
+      // Check what element is at this position
+      const elementUnderCursor = document.elementFromPoint(x, y);
+
+      // Check if cursor is over sidebar or regex panel
+      const isOverSidebar =
+        elementUnderCursor && this.isElementInSidebar(elementUnderCursor);
+
+      // Enable clickthrough when NOT over sidebar (transparent to apps below)
+      // Disable clickthrough when over sidebar (interactive)
+      const shouldEnableClickthrough = !isOverSidebar;
+
+      // Only update if state changed (avoid spamming backend)
+      if (shouldEnableClickthrough !== this.isClickthroughEnabled) {
+        this.isClickthroughEnabled = shouldEnableClickthrough;
+        this.axio.setClickthrough(shouldEnableClickthrough).catch((err) => {
+          console.error("Failed to set clickthrough:", err);
+        });
+      }
+    });
+  }
+
+  /**
+   * Check if element is inside sidebar or regex panel
+   */
+  private isElementInSidebar(element: Element): boolean {
+    let current: Element | null = element;
+    while (current) {
+      // Check if it's the tree container or regex panel
+      if (current === this.treeContainer || current === this.regexPanel) {
+        return true;
+      }
+      current = current.parentElement;
+    }
+    return false;
   }
 
   /**

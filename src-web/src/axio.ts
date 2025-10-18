@@ -252,6 +252,21 @@ export class AXIO {
   }
 
   /**
+   * Register callback for global mouse position updates
+   * Mouse position is tracked system-wide, even when window is not focused
+   */
+  onMousePosition(callback: (x: number, y: number) => void): void {
+    if (!this.listeners.has("mouse_position")) {
+      this.listeners.set("mouse_position", new Set());
+    }
+    this.listeners.get("mouse_position")!.add((data: any) => {
+      if (data.x !== undefined && data.y !== undefined) {
+        callback(data.x, data.y);
+      }
+    });
+  }
+
+  /**
    * Register callback for tree changes (pushed from backend when focus changes)
    */
   onTreeChanged(callback: (pid: number, tree: AXNode) => void): void {
@@ -467,6 +482,54 @@ export class AXIO {
         }
         reject(new Error("Timeout waiting for write response"));
       }, 5000);
+    });
+  }
+
+  /**
+   * Set clickthrough state (window transparency to mouse events)
+   */
+  async setClickthrough(enabled: boolean): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const handler = (data: any) => {
+        // Remove this specific handler
+        const listeners = this.listeners.get("set_clickthrough_response");
+        if (listeners) {
+          listeners.delete(handler);
+        }
+
+        if (data.success) {
+          resolve();
+        } else {
+          reject(new Error(data.error || "Failed to set clickthrough"));
+        }
+      };
+
+      // Add temporary handler
+      if (!this.listeners.has("set_clickthrough_response")) {
+        this.listeners.set("set_clickthrough_response", new Set());
+      }
+      this.listeners.get("set_clickthrough_response")!.add(handler);
+
+      // Send request
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(
+          JSON.stringify({
+            msg_type: "set_clickthrough",
+            enabled,
+          })
+        );
+      } else {
+        reject(new Error("WebSocket not connected"));
+      }
+
+      // Timeout after 2s (faster timeout for UI responsiveness)
+      setTimeout(() => {
+        const listeners = this.listeners.get("set_clickthrough_response");
+        if (listeners) {
+          listeners.delete(handler);
+        }
+        reject(new Error("Timeout waiting for clickthrough response"));
+      }, 2000);
     });
   }
 
