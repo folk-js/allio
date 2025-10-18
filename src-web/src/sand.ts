@@ -485,6 +485,9 @@ export class FolkSand extends HTMLElement {
     // Scale coordinates relative to canvas size
     this.#pointer.x = (x / rect.width) * this.#canvas.width;
     this.#pointer.y = (y / rect.height) * this.#canvas.height;
+
+    // Dynamic clickthrough: transparent over windows, solid elsewhere
+    this.#updateClickthrough(event.clientX, event.clientY);
   };
 
   #handlePointerDown = (event: PointerEvent) => {
@@ -909,6 +912,11 @@ export class FolkSand extends HTMLElement {
         this.#handleShapeTransform();
       });
 
+      // Set up global mouse position handler for clickthrough (works even when unfocused)
+      this.#axio.onMousePosition((x, y) => {
+        this.#updateClickthrough(x, y);
+      });
+
       await this.#axio.connect();
       console.log("AXIO connected for folk-sand");
 
@@ -1024,6 +1032,40 @@ export class FolkSand extends HTMLElement {
     // Recollect and update all shape data when any shape changes
     this.#collectShapeData();
     this.#updateCollisionTexture();
+  }
+
+  /**
+   * Check if a screen point (clientX, clientY) is inside any window
+   */
+  #isPointInWindow(x: number, y: number): boolean {
+    for (const win of this.#axio.windows) {
+      if (!win.bounds) continue;
+
+      const { position, size } = win.bounds;
+      if (
+        x >= position.x &&
+        x <= position.x + size.width &&
+        y >= position.y &&
+        y <= position.y + size.height
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Toggle clickthrough based on mouse position:
+   * - Transparent (clickthrough enabled) if mouse is over a window
+   * - Solid (clickthrough disabled) if mouse is in empty space
+   */
+  #updateClickthrough(clientX: number, clientY: number) {
+    const overWindow = this.#isPointInWindow(clientX, clientY);
+
+    // Enable clickthrough when over a window, disable when in empty space
+    this.#axio.setClickthrough(overWindow).catch((err) => {
+      console.error("Failed to set clickthrough:", err);
+    });
   }
 }
 

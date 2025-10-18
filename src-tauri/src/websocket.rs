@@ -15,6 +15,7 @@ use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::axio::AXNode;
+use crate::node_watcher::NodeWatcher;
 use crate::platform::{get_ax_tree_by_pid, write_to_element};
 use crate::windows::{WindowInfo, WindowUpdatePayload};
 
@@ -54,6 +55,7 @@ struct ClientIdentification {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AccessibilityTreeRequest {
     msg_type: String,
     pid: u32,
@@ -72,6 +74,7 @@ fn default_max_children_per_level() -> usize {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct GetChildrenRequest {
     msg_type: String,
     pid: u32,
@@ -83,6 +86,7 @@ struct GetChildrenRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AccessibilityWriteRequest {
     msg_type: String,
     pid: u32,
@@ -127,6 +131,7 @@ struct AccessibilityWriteResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SetClickthroughRequest {
     msg_type: String,
     enabled: bool,
@@ -140,6 +145,37 @@ struct SetClickthroughResponse {
     error: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WatchNodeRequest {
+    msg_type: String,
+    pid: u32,
+    path: Vec<usize>,
+    node_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct WatchNodeResponse {
+    msg_type: String,
+    success: bool,
+    node_id: String,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UnwatchNodeRequest {
+    msg_type: String,
+    pid: u32,
+    path: Vec<usize>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct UnwatchNodeResponse {
+    msg_type: String,
+    success: bool,
+}
+
 // WebSocket state for broadcasting to clients
 #[derive(Clone)]
 pub struct WebSocketState {
@@ -147,16 +183,23 @@ pub struct WebSocketState {
     pub connected_windows: Arc<RwLock<HashSet<String>>>, // Set of window IDs with connected clients
     pub current_windows: Arc<RwLock<Vec<WindowInfo>>>,
     pub app_handle: tauri::AppHandle,
+    pub node_watcher: Arc<NodeWatcher>,
 }
 
 impl WebSocketState {
     pub fn new(app_handle: tauri::AppHandle) -> Self {
         let (sender, _) = broadcast::channel(1000);
+        let sender_arc = Arc::new(sender);
+
+        // Create node watcher with the sender
+        let node_watcher = NodeWatcher::new(sender_arc.clone());
+
         Self {
-            sender: Arc::new(sender),
+            sender: sender_arc,
             connected_windows: Arc::new(RwLock::new(HashSet::new())),
             current_windows: Arc::new(RwLock::new(Vec::new())),
             app_handle,
+            node_watcher,
         }
     }
 
@@ -341,6 +384,9 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
         }
     }
 
+    // Clear all node watches to prevent stale observers on reconnect
+    ws_state.node_watcher.clear_all();
+
     // Remove client from tracking if it was identified
     if let Some(window_id) = current_window_id {
         let mut connected_windows = ws_state.connected_windows.write().await;
@@ -358,6 +404,17 @@ async fn handle_client_message(
     socket: &mut WebSocket,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("📨 Received WebSocket message: {}", message);
+    println!("🔄 Starting handler chain...");
+
+    // Debug: Try to parse as WatchNodeRequest to see the error
+    if message.contains("watch_node") {
+        println!("🔍 Message contains 'watch_node', attempting parse...");
+        match serde_json::from_str::<WatchNodeRequest>(message) {
+            Ok(req) => println!("  ✅ Parsed successfully: {:?}", req),
+            Err(e) => println!("  ❌ Parse failed: {}", e),
+        }
+    }
+
     // Try to parse as ClientIdentification first
     if let Ok(identification) = serde_json::from_str::<ClientIdentification>(message) {
         println!(
@@ -562,6 +619,69 @@ async fn handle_client_message(
                     false
                 },
                 error,
+            };
+
+            let response_json = serde_json::to_string(&response)?;
+            socket.send(Message::Text(response_json)).await.ok();
+        }
+    }
+    // Try to parse as WatchNodeRequest
+    else if let Ok(watch_req) = serde_json::from_str::<WatchNodeRequest>(message) {
+        println!(
+            "🔍 Parsed as WatchNodeRequest: msg_type={}",
+            watch_req.msg_type
+        );
+        if watch_req.msg_type == "watch_node" {
+            println!(
+                "👁️  Client requesting to watch node: PID {} path {:?} ID {}",
+                watch_req.pid, watch_req.path, watch_req.node_id
+            );
+
+            // Start watching the node
+            let result = ws_state.node_watcher.watch_node(
+                watch_req.pid,
+                watch_req.path,
+                watch_req.node_id.clone(),
+            );
+
+            let (success, error) = match result {
+                Ok(_) => {
+                    println!("✅ Watch succeeded for node {}", watch_req.node_id);
+                    (true, None)
+                }
+                Err(e) => {
+                    println!("❌ Watch failed for node {}: {}", watch_req.node_id, e);
+                    (false, Some(e))
+                }
+            };
+
+            let response = WatchNodeResponse {
+                msg_type: "watch_node_response".to_string(),
+                success,
+                node_id: watch_req.node_id,
+                error,
+            };
+
+            let response_json = serde_json::to_string(&response)?;
+            socket.send(Message::Text(response_json)).await.ok();
+        }
+    }
+    // Try to parse as UnwatchNodeRequest
+    else if let Ok(unwatch_req) = serde_json::from_str::<UnwatchNodeRequest>(message) {
+        if unwatch_req.msg_type == "unwatch_node" {
+            println!(
+                "🚫 Client requesting to unwatch node: PID {} path {:?}",
+                unwatch_req.pid, unwatch_req.path
+            );
+
+            // Stop watching the node
+            ws_state
+                .node_watcher
+                .unwatch_node(unwatch_req.pid, unwatch_req.path);
+
+            let response = UnwatchNodeResponse {
+                msg_type: "unwatch_node_response".to_string(),
+                success: true,
             };
 
             let response_json = serde_json::to_string(&response)?;

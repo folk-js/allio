@@ -14,10 +14,10 @@ use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
-mod accessibility;
 mod ax_value;
 mod axio;
 mod mouse;
+mod node_watcher;
 mod platform;
 mod websocket;
 mod windows;

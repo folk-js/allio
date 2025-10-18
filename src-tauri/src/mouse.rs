@@ -4,12 +4,11 @@
  * Tracks mouse position system-wide, even when the window is not focused.
  * Broadcasts position updates to connected WebSocket clients.
  */
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 #[cfg(target_os = "macos")]
-use core_graphics::event::{CGEvent, CGEventType};
+use core_graphics::event::CGEvent;
 #[cfg(target_os = "macos")]
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
@@ -18,16 +17,14 @@ use crate::websocket::WebSocketState;
 /// Get current mouse position (macOS)
 #[cfg(target_os = "macos")]
 pub fn get_mouse_position() -> Option<(f64, f64)> {
-    unsafe {
-        // Create an event source
-        let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState).ok()?;
+    // Create an event source
+    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState).ok()?;
 
-        // Get mouse moved event to read current position
-        let event = CGEvent::new(source).ok()?;
-        let location = event.location();
+    // Get mouse moved event to read current position
+    let event = CGEvent::new(source).ok()?;
+    let location = event.location();
 
-        Some((location.x, location.y))
-    }
+    Some((location.x, location.y))
 }
 
 /// Get current mouse position (fallback for non-macOS)

@@ -12,6 +12,88 @@ use core_foundation::string::CFString;
 use crate::ax_value::{extract_position, extract_size, extract_value};
 use crate::axio::{AXNode, AXRole, Bounds, Position, Size};
 
+/// Generate a stable ID for an element
+/// Priority: kAXIdentifierAttribute > role:title:index composite
+fn generate_stable_element_id(element: &AXUIElement, pid: u32) -> String {
+    // Try kAXIdentifierAttribute first (native stable ID)
+    if let Ok(identifier_attr) =
+        element.attribute(&AXAttribute::new(&CFString::new("AXIdentifier")))
+    {
+        if let Some(id_str) = unsafe {
+            let cf_string =
+                CFString::wrap_under_get_rule(identifier_attr.as_CFTypeRef() as *const _);
+            let s = cf_string.to_string();
+            if !s.is_empty() {
+                Some(s)
+            } else {
+                None
+            }
+        } {
+            return format!("{}::id:{}", pid, id_str);
+        }
+    }
+
+    // Fallback: role:title:index composite
+    let role: String = element
+        .attribute(&AXAttribute::role())
+        .ok()
+        .and_then(|r| unsafe {
+            let cf_string = CFString::wrap_under_get_rule(r.as_CFTypeRef() as *const _);
+            Some(cf_string.to_string())
+        })
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    let title: String = element
+        .attribute(&AXAttribute::title())
+        .ok()
+        .and_then(|t| unsafe {
+            let cf_string = CFString::wrap_under_get_rule(t.as_CFTypeRef() as *const _);
+            let s = cf_string.to_string();
+            if !s.is_empty() {
+                Some(s)
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "".to_string());
+
+    // Get index among siblings (if we can find parent)
+    let index_str = if let Ok(parent) = element.attribute(&AXAttribute::parent()) {
+        if let Ok(children) = parent.attribute(&AXAttribute::children()) {
+            let element_ref = element.as_concrete_TypeRef();
+            let mut found_index = None;
+            for i in 0..children.len() {
+                if let Some(sibling) = children.get(i) {
+                    if std::ptr::eq(
+                        element_ref as *const _,
+                        sibling.as_concrete_TypeRef() as *const _,
+                    ) {
+                        found_index = Some(i);
+                        break;
+                    }
+                }
+            }
+            found_index.map(|i| format!(":{}", i)).unwrap_or_default()
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+
+    if title.is_empty() {
+        format!("{}::{}:{}{}", pid, role, "untitled", index_str)
+    } else {
+        // Sanitize title for use in ID
+        let safe_title = title
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+            .take(30)
+            .collect::<String>();
+        format!("{}::{}:{}{}", pid, role, safe_title, index_str)
+    }
+}
+
 /// Convert macOS AXUIElement to AXIO AXNode
 ///
 /// This is the main conversion function that maps macOS accessibility
@@ -116,10 +198,8 @@ pub fn element_to_axnode(
     // Get geometry (position and size)
     let bounds = get_element_bounds(element);
 
-    // Generate unique ID for this element
-    // Note: In the future we might use proper accessibility identifiers if available
-    // For now, using depth and a random ID
-    let id = format!("depth{}-{}", depth, uuid::Uuid::new_v4().simple());
+    // Generate stable ID for this element
+    let id = generate_stable_element_id(element, pid);
 
     // Get children count (always, regardless of load_children flag)
     let children_count = element
@@ -369,7 +449,7 @@ pub fn write_to_element(pid: u32, element_path: &[usize], text: &str) -> Result<
 }
 
 /// Navigate to an element using a path of child indices
-fn navigate_to_element(root: &AXUIElement, path: &[usize]) -> Option<AXUIElement> {
+pub fn navigate_to_element(root: &AXUIElement, path: &[usize]) -> Option<AXUIElement> {
     let mut current = root.clone();
 
     for &index in path {

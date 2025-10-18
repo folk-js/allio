@@ -533,6 +533,113 @@ export class AXIO {
     });
   }
 
+  /**
+   * Watch a node for changes (registers for AXObserver notifications)
+   * When the node changes, `onNodeUpdated` callbacks will fire
+   */
+  async watchNode(pid: number, path: number[], nodeId: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const handler = (data: any) => {
+        const listeners = this.listeners.get("watch_node_response");
+        if (listeners) {
+          listeners.delete(handler);
+        }
+
+        if (data.success) {
+          resolve();
+        } else {
+          reject(new Error(data.error || "Failed to watch node"));
+        }
+      };
+
+      if (!this.listeners.has("watch_node_response")) {
+        this.listeners.set("watch_node_response", new Set());
+      }
+      this.listeners.get("watch_node_response")!.add(handler);
+
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(
+          JSON.stringify({
+            msg_type: "watch_node",
+            pid,
+            path,
+            node_id: nodeId,
+          })
+        );
+      } else {
+        reject(new Error("WebSocket not connected"));
+      }
+
+      setTimeout(() => {
+        const listeners = this.listeners.get("watch_node_response");
+        if (listeners) {
+          listeners.delete(handler);
+        }
+        reject(new Error("Timeout waiting for watch response"));
+      }, 5000);
+    });
+  }
+
+  /**
+   * Stop watching a node for changes
+   */
+  async unwatchNode(pid: number, path: number[]): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const handler = (data: any) => {
+        const listeners = this.listeners.get("unwatch_node_response");
+        if (listeners) {
+          listeners.delete(handler);
+        }
+
+        if (data.success) {
+          resolve();
+        } else {
+          reject(new Error("Failed to unwatch node"));
+        }
+      };
+
+      if (!this.listeners.has("unwatch_node_response")) {
+        this.listeners.set("unwatch_node_response", new Set());
+      }
+      this.listeners.get("unwatch_node_response")!.add(handler);
+
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(
+          JSON.stringify({
+            msg_type: "unwatch_node",
+            pid,
+            path,
+          })
+        );
+      } else {
+        reject(new Error("WebSocket not connected"));
+      }
+
+      setTimeout(() => {
+        const listeners = this.listeners.get("unwatch_node_response");
+        if (listeners) {
+          listeners.delete(handler);
+        }
+        reject(new Error("Timeout waiting for unwatch response"));
+      }, 5000);
+    });
+  }
+
+  /**
+   * Register callback for node updates (pushed from backend via AXObserver)
+   * Called when a watched node's value, bounds, or state changes
+   */
+  onNodeUpdated(callback: (update: any) => void): void {
+    if (!this.listeners.has("node_updated")) {
+      this.listeners.set("node_updated", new Set());
+    }
+    this.listeners.get("node_updated")!.add((data: any) => {
+      if (data.update) {
+        callback(data.update);
+      }
+    });
+  }
+
   // ============================================================================
   // Private Methods
   // ============================================================================

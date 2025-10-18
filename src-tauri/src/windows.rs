@@ -1,9 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     panic::{self},
+    sync::Mutex,
     thread,
     time::{Duration, Instant},
 };
+
+// Cache for bundle ID lookups (PID -> Bundle ID)
+static BUNDLE_ID_CACHE: Mutex<Option<HashMap<u32, Option<String>>>> = Mutex::new(None);
 
 #[cfg(target_os = "macos")]
 use core_graphics::display::{
@@ -41,6 +46,27 @@ impl WindowInfo {
             focused,
             process_id: window.info.process_id,
         }
+    }
+
+    /// Check if window is fullscreen (covers entire screen with no chrome)
+    ///
+    /// NOTE: We currently filter out ALL fullscreen windows to avoid issues with
+    /// screenshot/recording UIs. This might need to change in the future if we want
+    /// to support overlays on fullscreen apps (games, videos, etc).
+    #[cfg(target_os = "macos")]
+    fn is_fullscreen(&self) -> bool {
+        let (screen_width, screen_height) = get_main_screen_dimensions();
+
+        // Check if window covers the entire screen exactly
+        self.x == 0
+            && self.y == 0
+            && (self.w as f64) == screen_width
+            && (self.h as f64) == screen_height
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn is_fullscreen(&self) -> bool {
+        false
     }
 }
 
@@ -116,6 +142,93 @@ pub fn get_main_screen_dimensions() -> (f64, f64) {
     }
 }
 
+/// List of bundle identifiers to filter out from window list
+const FILTERED_BUNDLE_IDS: &[&str] = &[
+    "com.apple.screencaptureui", // Screenshot UI
+    "com.apple.screenshot.launcher",
+    "com.apple.ScreenContinuity", // Screen recording UI
+    "com.apple.QuickTimePlayerX", // QuickTime recording (optional - user might want this)
+];
+
+/// Get bundle ID for a PID, with caching
+#[cfg(target_os = "macos")]
+fn get_bundle_id(pid: u32) -> Option<String> {
+    use std::process::Command;
+
+    // Check cache first
+    {
+        let cache = BUNDLE_ID_CACHE.lock().unwrap();
+        if let Some(ref map) = *cache {
+            if let Some(cached) = map.get(&pid) {
+                return cached.clone();
+            }
+        }
+    }
+
+    // Not in cache, query it
+    let output = Command::new("lsappinfo")
+        .args(&["info", "-only", "bundleid", &format!("{}", pid)])
+        .output();
+
+    let bundle_id = if let Ok(output) = output {
+        if let Ok(info) = String::from_utf8(output.stdout) {
+            // Output format: 'bundleid="com.apple.screencaptureui"' or '"CFBundleIdentifier"="com.apple.screencaptureui"'
+            // Find the last "=" to handle both formats
+            if let Some(eq_pos) = info.rfind('=') {
+                let after_eq = &info[eq_pos + 1..];
+                // Now extract the quoted value after the =
+                if let Some(start) = after_eq.find('"') {
+                    if let Some(end) = after_eq[start + 1..].find('"') {
+                        let id = after_eq[start + 1..start + 1 + end].to_string();
+                        println!("📋 PID {} has bundle ID: {}", pid, id);
+                        Some(id)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Store in cache
+    {
+        let mut cache = BUNDLE_ID_CACHE.lock().unwrap();
+        if cache.is_none() {
+            *cache = Some(HashMap::new());
+        }
+        cache.as_mut().unwrap().insert(pid, bundle_id.clone());
+    }
+
+    bundle_id
+}
+
+/// Check if a process should be filtered by its bundle identifier
+#[cfg(target_os = "macos")]
+fn should_filter_process(pid: u32) -> bool {
+    if let Some(bundle_id) = get_bundle_id(pid) {
+        // Check if this bundle ID is in our filter list
+        for filtered_id in FILTERED_BUNDLE_IDS {
+            if bundle_id == *filtered_id {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[cfg(not(target_os = "macos"))]
+fn should_filter_process(_pid: u32) -> bool {
+    false
+}
+
 // Combined function to get all windows with focused state in single call
 pub fn get_all_windows_with_focus() -> Vec<WindowInfo> {
     let current_pid = std::process::id();
@@ -137,14 +250,15 @@ pub fn get_all_windows_with_focus() -> Vec<WindowInfo> {
         .map(|w| (w.position.x, w.position.y))
         .unwrap_or((0, 0));
 
-    // Convert all windows, excluding our overlay, and mark focused
+    // Convert all windows, excluding our overlay, filtered apps, and fullscreen windows
     all_windows
         .iter()
-        .filter(|w| w.info.process_id != current_pid)
+        .filter(|w| w.info.process_id != current_pid && !should_filter_process(w.info.process_id))
         .map(|w| {
             let focused = active_window_id.map_or(false, |id| id == w.id);
             WindowInfo::from_x_win(w, focused).with_offset(overlay_offset.0, overlay_offset.1)
         })
+        .filter(|w| !w.is_fullscreen()) // Also filter out fullscreen windows
         .collect()
 }
 

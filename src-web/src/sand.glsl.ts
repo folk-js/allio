@@ -819,6 +819,7 @@ void main()
 	fragColorB = vec4(-1, -1, 0, 0);
 
 	// Exclude WALL and COLLISION from shadow calculations
+	// COLLISION should NOT emit light, only receive it
 	if (data.a <= LAVA && data.a != WALL && data.a != COLLISION)
 	{
 		fragColorR.xy = gl_FragCoord.xy;
@@ -1024,6 +1025,10 @@ vec3 getParticleColor(vec4 data)
 		// Add some variation based on random value
 		return fireColor * (0.8 + data.r * 0.4);
 	}
+	else if (data.a == COLLISION) {
+		// Window collision - transparent, lighting will be added separately
+		return vec3(0.0);
+	}
 	return bgColor;
 }
 
@@ -1085,8 +1090,30 @@ void main() {
 
 	// Set alpha based on particle type - make air and wall fully transparent
 	float alpha = 1.0;
-	if (data.a == AIR || data.a == WALL || data.a == COLLISION) {
+	if (data.a == AIR || data.a == WALL) {
 		alpha = 0.0;
+	}
+	
+	// Special handling for COLLISION: show only warm lighting effects as a subtle overlay
+	if (data.a == COLLISION) {
+		// sha contains the lighting color (higher = less shadow)
+		// Check if the light is warm-colored (characteristic of lava/fire)
+		float warmBias = (sha.r - sha.b);
+		
+		if (warmBias > 0.2) {
+			// This is warm light from lava/fire
+			float glowIntensity = (sha.r + sha.g) / 2.0;
+			
+			// For smooth alpha blending, we need to modulate BOTH color and alpha
+			float curve = pow(glowIntensity, 2.0);
+			
+			// Lava-like red/orange glow color
+			color = vec3(1.0, 0.35, 0.1) * curve;
+			alpha = clamp(curve * 0.25, 0.0, 0.25);
+		} else {
+			// Not warm light, stay transparent
+			alpha = 0.0;
+		}
 	}
 
 	fragColor = vec4(linearTosRGB(color), alpha);

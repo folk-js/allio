@@ -102,6 +102,12 @@ class AXTreeOverlay {
         console.log(`🎯 Received overlay PID: ${pid}`);
       });
 
+      // Set up node update handler (receives AXObserver notifications)
+      this.axio.onNodeUpdated((update) => {
+        console.log("🔄 Node updated:", update);
+        this.handleNodeUpdate(update);
+      });
+
       // Connect to websocket
       await this.axio.connect();
 
@@ -837,33 +843,6 @@ class AXTreeOverlay {
       box-sizing: border-box;
     `;
 
-    // Preview
-    const previewLabel = document.createElement("label");
-    previewLabel.textContent = "Preview:";
-    previewLabel.style.cssText = `
-      display: block;
-      margin-bottom: 4px;
-      color: #ccc;
-      font-size: 12px;
-    `;
-
-    const previewDiv = document.createElement("div");
-    previewDiv.style.cssText = `
-      padding: 6px 8px;
-      margin-bottom: 10px;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      border-radius: 4px;
-      color: #ddd;
-      font-size: 12px;
-      font-family: "SF Mono", Monaco, monospace;
-      min-height: 20px;
-      max-height: 60px;
-      overflow-y: auto;
-      word-break: break-all;
-    `;
-    previewDiv.textContent = currentValue || "(empty)";
-
     // Buttons
     const buttonContainer = document.createElement("div");
     buttonContainer.style.cssText = `
@@ -913,45 +892,6 @@ class AXTreeOverlay {
     });
     cancelButton.addEventListener("click", () => this.closeRegexPanel());
 
-    // Update preview function
-    const updatePreview = () => {
-      const pattern = patternInput.value.trim();
-      const replacement = replaceInput.value;
-
-      if (!pattern) {
-        previewDiv.textContent = currentValue || "(empty)";
-        return;
-      }
-
-      try {
-        // Parse regex pattern with flags (e.g., /pattern/gi)
-        let regex: RegExp;
-        const regexMatch = pattern.match(/^\/(.+)\/([gimuy]*)$/);
-
-        if (regexMatch) {
-          // Full regex format with flags
-          regex = new RegExp(regexMatch[1], regexMatch[2]);
-        } else {
-          // Plain pattern, default to global
-          regex = new RegExp(pattern, "g");
-        }
-
-        // Enhanced replacement with transformation support
-        const result = this.applyRegexWithTransforms(
-          this.currentTargetElement!.currentValue,
-          regex,
-          replacement
-        );
-        previewDiv.textContent = result || "(empty)";
-      } catch (e) {
-        previewDiv.textContent = "⚠️ Invalid regex pattern";
-        previewDiv.style.color = "#ff6b6b";
-        return;
-      }
-
-      previewDiv.style.color = "#ddd";
-    };
-
     // Apply regex function
     const applyRegex = async () => {
       const pattern = patternInput.value.trim();
@@ -996,8 +936,6 @@ class AXTreeOverlay {
     };
 
     // Event listeners
-    patternInput.addEventListener("input", updatePreview);
-    replaceInput.addEventListener("input", updatePreview);
     applyButton.addEventListener("click", applyRegex);
 
     // Handle Enter key
@@ -1022,8 +960,6 @@ class AXTreeOverlay {
     this.regexPanel.appendChild(patternInput);
     this.regexPanel.appendChild(replaceLabel);
     this.regexPanel.appendChild(replaceInput);
-    this.regexPanel.appendChild(previewLabel);
-    this.regexPanel.appendChild(previewDiv);
     this.regexPanel.appendChild(buttonContainer);
 
     document.body.appendChild(this.regexPanel);
@@ -1139,6 +1075,78 @@ class AXTreeOverlay {
   /**
    * Toggle expansion of a node's children
    */
+  /**
+   * Handle node update from AXObserver (backend push notification)
+   * Patches the node data and updates only the changed DOM elements (preserves tree structure)
+   */
+  private handleNodeUpdate(update: any) {
+    const nodeId = update.id;
+    const stored = this.nodeElements.get(nodeId);
+
+    if (!stored) {
+      console.warn(`Node ${nodeId} not found in rendered nodes`);
+      return;
+    }
+
+    const { element, node } = stored;
+
+    // Patch the node object in-place (keeps JS references alive)
+    if (update.value !== undefined) {
+      (node as any).value = update.value;
+      console.log(`  ✏️  Updated value for ${nodeId}:`, update.value);
+
+      // Update the value display in the DOM (without rebuilding entire node)
+      const nodeInfo = element.querySelector(
+        ".tree-node-content .tree-value-string, .tree-node-content .tree-value-number, .tree-node-content .tree-value-boolean"
+      );
+      if (nodeInfo) {
+        // Find or create the value span
+        const valueSpan = nodeInfo as HTMLElement;
+        if (update.value) {
+          switch (update.value.type) {
+            case "String":
+              valueSpan.className = "tree-value-string";
+              valueSpan.textContent = ` = "${String(update.value.value)}"`;
+              break;
+            case "Integer":
+            case "Float":
+              valueSpan.className = "tree-value-number";
+              valueSpan.textContent = ` = ${update.value.value}`;
+              break;
+            case "Boolean":
+              valueSpan.className = "tree-value-boolean";
+              valueSpan.textContent = ` = ${String(update.value.value)}`;
+              break;
+          }
+        }
+      }
+
+      // Also update input fields if present
+      const inputField = element.querySelector(
+        ".tree-value-input"
+      ) as HTMLInputElement;
+      if (inputField && update.value) {
+        inputField.value = String(update.value.value);
+      }
+    }
+
+    if (update.bounds !== undefined) {
+      (node as any).bounds = update.bounds;
+      console.log(`  📐 Updated bounds for ${nodeId}:`, update.bounds);
+      // Bounds don't need DOM update (only affects hover outline)
+    }
+
+    if (update.focused !== undefined) {
+      (node as any).focused = update.focused;
+      // TODO: Update focused indicator in DOM if needed
+    }
+
+    if (update.enabled !== undefined) {
+      (node as any).enabled = update.enabled;
+      // TODO: Update enabled/disabled indicator in DOM if needed
+    }
+  }
+
   private toggleNodeExpansion(nodeId: string, nodeElement: HTMLElement) {
     const childrenContainer = nodeElement.querySelector(
       ".tree-children"
@@ -1152,6 +1160,16 @@ class AXTreeOverlay {
       this.expandedNodes.delete(nodeId);
       childrenContainer.style.display = "none";
 
+      // Unwatch this node (stop receiving updates)
+      const stored = this.nodeElements.get(nodeId);
+      if (stored) {
+        this.axio
+          .unwatchNode(stored.node.pid, stored.node.path)
+          .catch((err) => {
+            console.error(`Failed to unwatch node ${nodeId}:`, err);
+          });
+      }
+
       // Update indicator
       const indicator = nodeElement.querySelector(".tree-indicator");
       if (indicator) {
@@ -1162,6 +1180,16 @@ class AXTreeOverlay {
       // Expand
       this.expandedNodes.add(nodeId);
       childrenContainer.style.display = "block";
+
+      // Watch this node (start receiving updates)
+      const stored = this.nodeElements.get(nodeId);
+      if (stored) {
+        this.axio
+          .watchNode(stored.node.pid, stored.node.path, nodeId)
+          .catch((err) => {
+            console.error(`Failed to watch node ${nodeId}:`, err);
+          });
+      }
 
       // Update indicator
       const indicator = nodeElement.querySelector(".tree-indicator");
@@ -1222,6 +1250,11 @@ class AXTreeOverlay {
 
       // Auto-expand after loading
       this.expandedNodes.add(nodeId);
+
+      // Watch this node for changes (now that it's expanded)
+      this.axio.watchNode(node.pid, node.path, nodeId).catch((err) => {
+        console.error(`Failed to watch node ${nodeId}:`, err);
+      });
 
       // Update indicator
       if (indicator && indicator instanceof HTMLElement) {

@@ -3,3 +3,5 @@
 - figure out why there are 'ghosts' in the frontend, like semitransparent imprints of DIVs or the edges of the sand sim particles.
 - fix panic: thread '<unnamed>' panicked at /Users/orion/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-app-kit-0.3.1/src/generated/NSRunningApplication.rs:93:5:
   messsaging isActive to nil
+
+- filter out screenshot app
