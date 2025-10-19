@@ -685,92 +685,177 @@ void main() {
 		}
 	}
 
-	// Water freezing into ice
-	if (t00.a == WATER)
+// Water freezing into ice
+if (t00.a == WATER)
 	{
-		// Check for nearby ice
-		if (t01.a == ICE || t10.a == ICE)
-		{
-			if (r.x < 0.05) { // 5% chance to freeze per frame
-				t00 = createParticle(ICE);
+			// Check for nearby ice (including below)
+			if (t01.a == ICE || t10.a == ICE)
+			{
+					if (r.x < 0.05) { // 5% chance to freeze per frame
+							t00 = createParticle(ICE);
+					}
 			}
-		}
 	}
-
+	
+	if (t01.a == WATER)
+	{
+			// Check for ice below to grow upward
+			if (t00.a == ICE || t11.a == ICE)
+			{
+					if (r.y < 0.05) {
+							t01 = createParticle(ICE);
+					}
+			}
+	}
+	
 	// Similar checks for other water positions
 	if (t10.a == WATER)
 	{
-		if (t11.a == ICE || t00.a == ICE)
-		{
-			if (r.x < 0.05) {
-				t10 = createParticle(ICE);
+			if (t11.a == ICE || t00.a == ICE)
+			{
+					if (r.x < 0.05) {
+							t10 = createParticle(ICE);
+					}
 			}
-		}
+	}
+	
+	if (t11.a == WATER)
+	{
+			// Check for ice below to grow upward
+			if (t10.a == ICE || t01.a == ICE)
+			{
+					if (r.z < 0.05) {
+							t11 = createParticle(ICE);
+					}
+			}
 	}
 
 	// Fire behavior
-	if (t00.a == FIRE)
+if (t00.a == FIRE)
 	{
-		// Count nearby fire particles
-		float nearbyFire = 0.0;
-		if (t01.a == FIRE) nearbyFire += 1.0;
-		if (t10.a == FIRE) nearbyFire += 1.0;
-		if (t11.a == FIRE) nearbyFire += 1.0;
-		
-		// More nearby fire increases smoke production
-		float smokeChance = nearbyFire * 0.1;
-		
-		// Spread fire in all directions, with upward bias
-		// Up
-		if (t01.a == AIR && r.x < t00.b * 0.4)
-		{
-			t01 = createParticle(FIRE);
-			t01.b = max(t00.b - 0.1, 0.1);
-		}
-		// Right/Left symmetric movement (like water/sand)
-		if ((t01.a == AIR && t11.a == FIRE ||
-			t01.a == FIRE && t11.a == AIR) && r.y < t00.b * 0.2)
-		{
-			swap(t01, t11);
-		}
-		if ((t00.a == FIRE && t10.a == AIR ||
-			t00.a == AIR && t10.a == FIRE) && r.z < t00.b * 0.2)
-		{
-			swap(t00, t10);
-		}
-		
-		// Fire spreads to plants and gains heat from them
-		if (t01.a == PLANT && r.x < t00.b * 0.8)
-		{
-			t01 = createParticle(FIRE);
-			t01.b = min(t00.b + 0.2, 1.0);
-		}
-		if (t10.a == PLANT && r.y < t00.b * 0.8)
-		{
-			t10 = createParticle(FIRE);
-			t10.b = min(t00.b + 0.2, 1.0);
-		}
-		if (t11.a == PLANT && r.z < t00.b * 0.8)
-		{
-			t11 = createParticle(FIRE);
-			t11.b = min(t00.b + 0.2, 1.0);
-		}
-		
-		// Fire loses heat over time, less when surrounded by fire
-		float heatLoss = 0.01 * (1.0 - nearbyFire * 0.2);
-		t00.b = max(t00.b - heatLoss, 0.0);
-		
-		// Convert to smoke based on heat and nearby fire
-		if ((t00.b < 0.1 && r.z < 0.1) || r.w < smokeChance)
-		{
-			t00 = createParticle(SMOKE);
-		}
-		
-		// Create smoke above fire, more likely with higher heat
-		if (t01.a == AIR && r.w < t00.b * 0.2)
-		{
-			t01 = createParticle(SMOKE);
-		}
+			// Count nearby fire particles
+			float nearbyFire = 0.0;
+			if (t01.a == FIRE) nearbyFire += 1.0;
+			if (t10.a == FIRE) nearbyFire += 1.0;
+			if (t11.a == FIRE) nearbyFire += 1.0;
+			
+			// More nearby fire increases smoke production
+			float smokeChance = nearbyFire * 0.1;
+			
+			// Spread fire in all directions with balanced probabilities
+			// Up (most likely)
+			if (t01.a == AIR && r.x < t00.b * 0.15)
+			{
+					t01 = createParticle(FIRE);
+					t01.b = max(t00.b - 0.1, 0.1);
+			}
+			// Down (least likely)
+			else if (t11.a == AIR && r.y < t00.b * 0.03)
+			{
+					t11 = createParticle(FIRE);
+					t11.b = max(t00.b - 0.15, 0.1);
+			}
+			
+			// Horizontal spreading (balanced for left and right)
+			if (t10.a == AIR && r.z < t00.b * 0.08)
+			{
+					t10 = createParticle(FIRE);
+					t10.b = max(t00.b - 0.12, 0.1);
+			}
+			
+			// Fire spreads to plants and gains heat from them
+			if (t01.a == PLANT && r.x < t00.b * 0.5)
+			{
+					t01 = createParticle(FIRE);
+					t01.b = min(t00.b + 0.2, 1.0);
+			}
+			if (t10.a == PLANT && r.y < t00.b * 0.5)
+			{
+					t10 = createParticle(FIRE);
+					t10.b = min(t00.b + 0.2, 1.0);
+			}
+			if (t11.a == PLANT && r.z < t00.b * 0.5)
+			{
+					t11 = createParticle(FIRE);
+					t11.b = min(t00.b + 0.2, 1.0);
+			}
+			
+			// Fire loses heat over time, less when surrounded by fire
+			float heatLoss = 0.01 * (1.0 - nearbyFire * 0.2);
+			t00.b = max(t00.b - heatLoss, 0.0);
+			
+			// Convert to smoke based on heat and nearby fire
+			if ((t00.b < 0.1 && r.z < 0.1) || r.w < smokeChance)
+			{
+					t00 = createParticle(SMOKE);
+			}
+			
+			// Create smoke above fire, more likely with higher heat
+			if (t01.a == AIR && r.w < t00.b * 0.15)
+			{
+					t01 = createParticle(SMOKE);
+			}
+	}
+	
+	// Similar fire behavior for t10
+	if (t10.a == FIRE)
+	{
+			float nearbyFire = 0.0;
+			if (t11.a == FIRE) nearbyFire += 1.0;
+			if (t00.a == FIRE) nearbyFire += 1.0;
+			if (t01.a == FIRE) nearbyFire += 1.0;
+			
+			float smokeChance = nearbyFire * 0.1;
+			
+			// Spread up
+			if (t11.a == AIR && r.x < t10.b * 0.15)
+			{
+					t11 = createParticle(FIRE);
+					t11.b = max(t10.b - 0.1, 0.1);
+			}
+			// Spread down
+			else if (t01.a == AIR && r.y < t10.b * 0.03)
+			{
+					t01 = createParticle(FIRE);
+					t01.b = max(t10.b - 0.15, 0.1);
+			}
+			
+			// Spread left
+			if (t00.a == AIR && r.z < t10.b * 0.08)
+			{
+					t00 = createParticle(FIRE);
+					t00.b = max(t10.b - 0.12, 0.1);
+			}
+			
+			// Spread to plants
+			if (t11.a == PLANT && r.x < t10.b * 0.5)
+			{
+					t11 = createParticle(FIRE);
+					t11.b = min(t10.b + 0.2, 1.0);
+			}
+			if (t00.a == PLANT && r.y < t10.b * 0.5)
+			{
+					t00 = createParticle(FIRE);
+					t00.b = min(t10.b + 0.2, 1.0);
+			}
+			if (t01.a == PLANT && r.z < t10.b * 0.5)
+			{
+					t01 = createParticle(FIRE);
+					t01.b = min(t10.b + 0.2, 1.0);
+			}
+			
+			float heatLoss = 0.01 * (1.0 - nearbyFire * 0.2);
+			t10.b = max(t10.b - heatLoss, 0.0);
+			
+			if ((t10.b < 0.1 && r.z < 0.1) || r.w < smokeChance)
+			{
+					t10 = createParticle(SMOKE);
+			}
+			
+			if (t11.a == AIR && r.w < t10.b * 0.15)
+			{
+					t11 = createParticle(SMOKE);
+			}
 	}
 
 	// Lava ignites plants and creates fire
@@ -818,19 +903,21 @@ void main()
 	fragColorG = vec4(-1, -1, 0, 0);
 	fragColorB = vec4(-1, -1, 0, 0);
 
-	// Exclude WALL and COLLISION from shadow calculations
-	// COLLISION should NOT emit light, only receive it
-	if (data.a <= LAVA && data.a != WALL && data.a != COLLISION)
+// Exclude WALL and COLLISION from shadow calculations
+// Also exclude SMOKE and STEAM - they should not cast shadows
+// COLLISION should NOT emit light, only receive it
+if (data.a <= LAVA && data.a != WALL && data.a != COLLISION && data.a != SMOKE && data.a != STEAM)
 	{
-		fragColorR.xy = gl_FragCoord.xy;
-		fragColorG.xy = gl_FragCoord.xy;
-		fragColorB.xy = gl_FragCoord.xy;
+			fragColorR.xy = gl_FragCoord.xy;
+			fragColorG.xy = gl_FragCoord.xy;
+			fragColorB.xy = gl_FragCoord.xy;
 	}
-	if (data.a == SMOKE)
+	if (data.a == SMOKE || data.a == STEAM)
 	{
-		fragColorR.w = 6.0;
-		fragColorG.w = 6.0;
-		fragColorB.w = 6.0;
+			// Smoke and steam don't contribute to shadows at all
+			fragColorR.w = 0.0;
+			fragColorG.w = 0.0;
+			fragColorB.w = 0.0;
 	} else if (data.a == WATER)
 	{
 		fragColorR.w = 9.0;
@@ -942,8 +1029,10 @@ uniform sampler2D shadowTexG;
 uniform sampler2D shadowTexB;
 uniform sampler2D u_collisionTex;
 uniform float scale;
+uniform float time;
 
 ${CONSTANTS}
+${UTILS}
 
 out vec4 fragColor;
 
@@ -956,11 +1045,6 @@ vec2 getCoordsAA(vec2 uv)
 	fr = smoothstep(0.5 - aa, 0.5 + aa, fr);
 
 	return fl + fr - 0.5;
-}
-
-vec3 linearTosRGB(vec3 col)
-{
-	return mix(1.055 * pow(col, vec3(1.0 / 2.4)) - 0.055, col * 12.92, lessThan(col, vec3(0.0031308)));
 }
 
 vec3 getParticleColor(vec4 data)
@@ -1077,9 +1161,14 @@ void main() {
 		color += emission;
 	}
 
+// Apply much lighter shadows to smoke and steam
+if (data.a == SMOKE || data.a == STEAM) {
+	color *= 0.8 + sha * 0.2; // Very subtle shading
+} else {
 	color *= 0.5 * max(hig, dropSha) + 0.5;
 	color *= sha * 1.0 + 0.2;
 	color += color * 0.4 * hig;
+}
 
 	if (data.a == FIRE) {
 		// Add glow based on heat
