@@ -1,5 +1,6 @@
 import { AXIO, AXNode } from "./axio.js";
 import { Gizmos } from "./gizmos.js";
+import { findPath, Heuristics } from "./astar.js";
 
 // ============================================================================
 // Geometry Types
@@ -95,6 +96,22 @@ class Navmesh {
     return Array.from(this.edges.values()).filter(
       (e) => e.from === nodeId || e.to === nodeId
     );
+  }
+
+  /**
+   * Get neighbors for A* pathfinding
+   */
+  getNeighbors(nodeId: string): Array<{ node: NavNode; cost: number }> {
+    const neighbors: Array<{ node: NavNode; cost: number }> = [];
+    for (const edge of this.edges.values()) {
+      if (edge.from === nodeId) {
+        const node = this.nodes.get(edge.to);
+        if (node) {
+          neighbors.push({ node, cost: edge.cost });
+        }
+      }
+    }
+    return neighbors;
   }
 }
 
@@ -1059,6 +1076,7 @@ class PetApp {
   #navmeshBuilder = new NavmeshBuilder();
   #overlayPid: number | null = null;
   #gizmos: Gizmos;
+  #currentPath: string[] = []; // Node IDs in the current path
 
   constructor() {
     this.#axio = new AXIO();
@@ -1112,6 +1130,50 @@ class PetApp {
       `[NavDemo] Built navmesh: ${this.#navmesh.nodes.size} nodes, ${
         this.#navmesh.edges.size
       } edges`
+    );
+    this.#findRandomPath();
+  }
+
+  /**
+   * Pick two random nodes and find a path between them
+   */
+  #findRandomPath(): void {
+    const nodes = Array.from(this.#navmesh.nodes.values());
+    if (nodes.length < 2) {
+      this.#currentPath = [];
+      return;
+    }
+
+    // Pick two random platform nodes (not landing nodes)
+    const platformNodes = nodes.filter(
+      (n) =>
+        n.type === "platform_left" ||
+        n.type === "platform_right" ||
+        n.type === "platform_center"
+    );
+
+    if (platformNodes.length < 2) {
+      this.#currentPath = [];
+      return;
+    }
+
+    const startNode =
+      platformNodes[Math.floor(Math.random() * platformNodes.length)];
+    let endNode: NavNode;
+    do {
+      endNode = platformNodes[Math.floor(Math.random() * platformNodes.length)];
+    } while (endNode.id === startNode.id);
+
+    console.log(`[NavDemo] Finding path from ${startNode.id} to ${endNode.id}`);
+
+    this.#currentPath = findPath(this.#navmesh, startNode.id, endNode.id, {
+      heuristic: Heuristics.euclidean,
+      closest: false,
+    });
+
+    console.log(
+      `[NavDemo] Path found with ${this.#currentPath.length} nodes:`,
+      this.#currentPath
     );
   }
 
@@ -1245,6 +1307,35 @@ class PetApp {
         { x: midX, y: midY - 5 },
         { fill: color, fontSize: 10, textAnchor: "middle" }
       );
+    }
+
+    // Draw path first (under nodes/edges)
+    if (this.#currentPath.length > 1) {
+      const pathNodes = this.#currentPath
+        .map((id) => this.#navmesh.getNode(id))
+        .filter((n): n is NavNode => n !== undefined);
+
+      // Draw path segments
+      for (let i = 0; i < pathNodes.length - 1; i++) {
+        const from = pathNodes[i];
+        const to = pathNodes[i + 1];
+        this.#gizmos.line(from.pos, to.pos, {
+          stroke: "rgba(255, 100, 255, 0.6)",
+          strokeWidth: 8,
+        });
+      }
+
+      // Highlight start and end
+      if (pathNodes.length > 0) {
+        const start = pathNodes[0];
+        const end = pathNodes[pathNodes.length - 1];
+        this.#gizmos.circle(start.pos, CHARACTER_RADIUS * 1.5, {
+          fill: "rgba(0, 255, 0, 0.5)",
+        });
+        this.#gizmos.circle(end.pos, CHARACTER_RADIUS * 1.5, {
+          fill: "rgba(255, 0, 0, 0.5)",
+        });
+      }
     }
 
     // Draw nodes
