@@ -30,11 +30,15 @@ let JUMP_ARC_HEIGHT = 70; // How high the jump arc peaks above the start point
 const MAX_STEP_GAP = CHARACTER_RADIUS * 3; // Max horizontal gap for stepping
 const MAX_STEP_HEIGHT = CHARACTER_RADIUS; // Max height difference for stepping
 
+// Drop parameters
+const MAX_DROP_GAP = CHARACTER_RADIUS * 2; // Max horizontal gap for dropping
+const MAX_DROP_HEIGHT = CHARACTER_RADIUS * 8; // Max vertical distance to drop down
+
 // ============================================================================
 // Navmesh Types
 // ============================================================================
 
-type EdgeType = "walk" | "climb" | "fall" | "jump" | "step";
+type EdgeType = "walk" | "climb" | "fall" | "jump" | "step" | "drop";
 
 interface NavNode {
   id: string;
@@ -166,7 +170,10 @@ class NavmeshBuilder {
     // Add step edges between nearby nodes (has precedence over jump)
     this.#addStepEdges(navmesh);
 
-    // Assign connected component IDs to nodes (via walk/step edges)
+    // Add drop edges for dropping down from platforms
+    this.#addDropEdges(navmesh);
+
+    // Assign connected component IDs to nodes (via walk/step/drop edges)
     this.#assignComponentIds(navmesh);
 
     // Add jump edges only between nodes in different components
@@ -229,6 +236,46 @@ class NavmeshBuilder {
   }
 
   /**
+   * Add drop edges for dropping down from platforms
+   * Unidirectional: you can drop down but not up
+   */
+  #addDropEdges(navmesh: Navmesh): void {
+    const nodes = Array.from(navmesh.nodes.values());
+    let dropCount = 0;
+
+    for (const fromNode of nodes) {
+      for (const toNode of nodes) {
+        if (fromNode.id === toNode.id) continue;
+        if (fromNode.windowId === toNode.windowId) continue; // Skip same window
+
+        const dx = toNode.pos.x - fromNode.pos.x;
+        const dy = toNode.pos.y - fromNode.pos.y; // Positive = toNode is below fromNode
+        const horizontalDist = Math.abs(dx);
+
+        // Must be dropping DOWN (toNode.y > fromNode.y, so dy > 0)
+        if (dy <= 0) continue;
+
+        // Check if within drop range
+        if (horizontalDist > MAX_DROP_GAP) continue;
+        if (dy > MAX_DROP_HEIGHT) continue;
+
+        // Add unidirectional drop edge
+        const straightDistance = Math.hypot(dx, dy);
+        navmesh.addEdge({
+          id: `drop_${fromNode.id}_to_${toNode.id}`,
+          from: fromNode.id,
+          to: toNode.id,
+          type: "drop",
+          cost: straightDistance * 0.8, // Drops are slightly preferred (faster than walking around)
+        });
+        dropCount++;
+      }
+    }
+
+    console.log(`[NavDemo] Added ${dropCount} drop edges`);
+  }
+
+  /**
    * Assign connected component IDs to all nodes based on walk/step connectivity
    * Nodes that can reach each other via walk/step edges get the same ID
    */
@@ -255,10 +302,15 @@ class NavmeshBuilder {
 
         currentNode.componentId = componentId;
 
-        // Add neighbors via walk/step edges
+        // Add neighbors via walk/step/drop edges
         for (const edge of navmesh.edges.values()) {
           if (edge.from !== nodeId) continue;
-          if (edge.type !== "walk" && edge.type !== "step") continue;
+          if (
+            edge.type !== "walk" &&
+            edge.type !== "step" &&
+            edge.type !== "drop"
+          )
+            continue;
           queue.push(edge.to);
         }
       }
@@ -668,6 +720,7 @@ class PetApp {
       fall: "rgba(255, 100, 100, 0.8)",
       jump: "rgba(255, 200, 0, 0.8)",
       step: "rgba(150, 255, 150, 0.8)",
+      drop: "rgba(255, 150, 255, 0.8)", // Purple/magenta for drop edges
     };
 
     const nodeColors = {
@@ -704,6 +757,38 @@ class PetApp {
           strokeWidth: 2,
           strokeDasharray: "5,5",
         });
+      } else if (edge.type === "drop") {
+        // Drop edges are dotted lines with arrow (unidirectional)
+        this.#gizmos.line(fromNode.pos, toNode.pos, {
+          stroke: color,
+          strokeWidth: 2,
+          strokeDasharray: "2,4",
+        });
+        // Draw arrow at end
+        const angle = Math.atan2(
+          toNode.pos.y - fromNode.pos.y,
+          toNode.pos.x - fromNode.pos.x
+        );
+        const arrowSize = 8;
+        const arrowAngle = Math.PI / 6;
+        const p1 = {
+          x: toNode.pos.x - arrowSize * Math.cos(angle - arrowAngle),
+          y: toNode.pos.y - arrowSize * Math.sin(angle - arrowAngle),
+        };
+        const p2 = {
+          x: toNode.pos.x - arrowSize * Math.cos(angle + arrowAngle),
+          y: toNode.pos.y - arrowSize * Math.sin(angle + arrowAngle),
+        };
+        const polygon = document.createElementNS(
+          "http://www.w3.org/2000/svg",
+          "polygon"
+        );
+        polygon.setAttribute(
+          "points",
+          `${toNode.pos.x},${toNode.pos.y} ${p1.x},${p1.y} ${p2.x},${p2.y}`
+        );
+        polygon.setAttribute("fill", color);
+        this.#gizmos.getSvg().appendChild(polygon);
       } else {
         // Walk edges are solid lines (bidirectional)
         this.#gizmos.line(fromNode.pos, toNode.pos, {
@@ -808,7 +893,14 @@ class PetApp {
 
   #updateUI(): void {
     // Count edges by type
-    const edgeCounts = { walk: 0, jump: 0, climb: 0, fall: 0, step: 0 };
+    const edgeCounts = {
+      walk: 0,
+      jump: 0,
+      climb: 0,
+      fall: 0,
+      step: 0,
+      drop: 0,
+    };
     for (const edge of this.#navmesh.edges.values()) {
       edgeCounts[edge.type]++;
     }
@@ -821,6 +913,8 @@ class PetApp {
       edgeCounts.walk.toString();
     document.getElementById("stepCount")!.textContent =
       edgeCounts.step.toString();
+    document.getElementById("dropCount")!.textContent =
+      edgeCounts.drop.toString();
     document.getElementById("jumpCount")!.textContent =
       edgeCounts.jump.toString();
     document.getElementById("jumpDistValue")!.textContent =
