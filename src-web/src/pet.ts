@@ -38,14 +38,28 @@ const MAX_DROP_HEIGHT = CHARACTER_RADIUS * 8; // Max vertical distance to drop d
 // Navmesh Types
 // ============================================================================
 
-type EdgeType = "walk" | "climb" | "fall" | "jump" | "step" | "drop";
+type EdgeType =
+  | "walk"
+  | "climb"
+  | "fall"
+  | "jump"
+  | "step"
+  | "drop"
+  | "hang"
+  | "attach";
 
 interface NavNode {
   id: string;
   pos: Vec2;
-  type: "platform_left" | "platform_right" | "platform_center";
+  type:
+    | "platform_left"
+    | "platform_right"
+    | "platform_center"
+    | "hang_left"
+    | "hang_right"
+    | "landing"; // Intermediate nodes created for jump/drop landing points
   windowId: string;
-  componentId?: number; // Which connected component (via walk/step) this node belongs to
+  componentId?: number; // Which connected component (via walk/step/drop/hang) this node belongs to
 }
 
 interface NavEdge {
@@ -91,182 +105,294 @@ class Navmesh {
 class NavmeshBuilder {
   #windows: WindowGeometry[] = [];
 
+  // Helper: Check if node is a platform node
+  #isPlatformNode(node: NavNode): boolean {
+    return (
+      node.type === "platform_left" ||
+      node.type === "platform_right" ||
+      node.type === "platform_center"
+    );
+  }
+
+  // Helper: Check if node is a hang node
+  #isHangNode(node: NavNode): boolean {
+    return node.type === "hang_left" || node.type === "hang_right";
+  }
+
+  // Helper: Add bidirectional edge between two nodes
+  #addBidirectionalEdge(
+    navmesh: Navmesh,
+    from: string,
+    to: string,
+    type: EdgeType,
+    cost: number,
+    idPrefix: string
+  ): void {
+    navmesh.addEdge({
+      id: `${idPrefix}_${from}_to_${to}`,
+      from,
+      to,
+      type,
+      cost,
+    });
+    navmesh.addEdge({
+      id: `${idPrefix}_${to}_to_${from}`,
+      from: to,
+      to: from,
+      type,
+      cost,
+    });
+  }
+
   build(windows: WindowGeometry[]): Navmesh {
     this.#windows = windows;
     const navmesh = new Navmesh();
 
-    // For each window, analyze it as a platform
-    windows.forEach((win) => {
-      const platformY = win.y - CHARACTER_RADIUS;
+    // Phase 1: Create base nodes from window geometry
+    this.#createPlatformNodes(navmesh, windows);
+    this.#createHangNodes(navmesh, windows);
 
-      // Find obstacles that sit on top of this platform
-      const obstacles = this.#findObstaclesOnPlatform(win, windows);
+    // Phase 2: Add primary locomotion edges (movement along surfaces)
+    // Walk and hang edges are already created with nodes above
 
-      // Split the platform into walkable segments (gaps between obstacles)
-      const segments = this.#splitPlatformIntoSegments(
-        win.x + CHARACTER_RADIUS,
-        win.x + win.width - CHARACTER_RADIUS,
-        obstacles
-      );
-
-      // Create nodes for each walkable segment
-      segments.forEach((segment, segIdx) => {
-        if (segment.width < MIN_PLATFORM_WIDTH) {
-          return; // Skip segments too narrow
-        }
-
-        // Try to find valid positions by pushing inward if needed
-        const leftPos = this.#findValidPosition(
-          { x: segment.left, y: platformY },
-          "right",
-          segment.right - MIN_PLATFORM_WIDTH / 2,
-          win.id
-        );
-
-        const rightPos = this.#findValidPosition(
-          { x: segment.right, y: platformY },
-          "left",
-          segment.left + MIN_PLATFORM_WIDTH / 2,
-          win.id
-        );
-
-        if (!leftPos || !rightPos) {
-          return;
-        }
-
-        if (rightPos.x - leftPos.x < MIN_PLATFORM_WIDTH) {
-          return;
-        }
-
-        // Create nodes for this segment
-        const leftNode: NavNode = {
-          id: `${win.id}_seg${segIdx}_left`,
-          pos: leftPos,
-          type: "platform_left",
-          windowId: win.id,
-        };
-        const rightNode: NavNode = {
-          id: `${win.id}_seg${segIdx}_right`,
-          pos: rightPos,
-          type: "platform_right",
-          windowId: win.id,
-        };
-
-        navmesh.addNode(leftNode);
-        navmesh.addNode(rightNode);
-
-        // Walk edge within this segment (doesn't go through obstacles)
-        const walkEdge: NavEdge = {
-          id: `${win.id}_seg${segIdx}_walk`,
-          from: leftNode.id,
-          to: rightNode.id,
-          type: "walk",
-          cost: rightPos.x - leftPos.x,
-        };
-        navmesh.addEdge(walkEdge);
-      });
-    });
-
-    // Add step edges between nearby nodes (has precedence over jump)
+    // Phase 3: Add step edges (small gaps between platforms)
     this.#addStepEdges(navmesh);
 
-    // Add drop edges for dropping down from platforms
+    // Phase 4: Add drop edges (falling between platform nodes)
     this.#addDropEdges(navmesh);
 
-    // Assign connected component IDs to nodes (via walk/step/drop edges)
+    // Phase 5: Add transitions between platform and hang systems
+    this.#addPlatformHangTransitions(navmesh);
+    this.#addAttachEdges(navmesh);
+
+    // Phase 6: Assign connected components (all reachable via walk/step/drop/hang/climb/attach)
     this.#assignComponentIds(navmesh);
 
-    // Add jump edges only between nodes in different components
+    // Phase 7: Create landing nodes for edges that can be landed on
+    // (requires componentIds to be assigned first)
+    this.#createLandingNodes(navmesh);
+
+    // Phase 8: Add jump edges between disconnected components
     this.#addJumpEdges(navmesh);
 
     return navmesh;
   }
 
   /**
-   * Add step edges between nearby nodes at similar heights
+   * Phase 1a: Create platform nodes and walk edges from window tops
    */
-  #addStepEdges(navmesh: Navmesh): void {
-    const nodes = Array.from(navmesh.nodes.values());
-    const stepPairs = new Set<string>();
-    let stepCount = 0;
-
-    for (const fromNode of nodes) {
-      for (const toNode of nodes) {
-        if (fromNode.id === toNode.id) continue;
-        if (fromNode.windowId === toNode.windowId) continue; // Skip same window
-
-        const dx = toNode.pos.x - fromNode.pos.x;
-        const dy = toNode.pos.y - fromNode.pos.y;
-        const horizontalDist = Math.abs(dx);
-        const heightDiff = Math.abs(dy);
-
-        // Check if within step range
-        if (horizontalDist > MAX_STEP_GAP) continue;
-        if (heightDiff > MAX_STEP_HEIGHT) continue;
-
-        // Create bidirectional step edge (only once per pair)
-        const pairId = [fromNode.id, toNode.id].sort().join(":");
-        if (stepPairs.has(pairId)) continue;
-
-        stepPairs.add(pairId);
-
-        // Add bidirectional step edges
-        const straightDistance = Math.hypot(dx, dy);
-        navmesh.addEdge({
-          id: `step_${fromNode.id}_to_${toNode.id}`,
-          from: fromNode.id,
-          to: toNode.id,
-          type: "step",
-          cost: straightDistance,
-        });
-        navmesh.addEdge({
-          id: `step_${toNode.id}_to_${fromNode.id}`,
-          from: toNode.id,
-          to: fromNode.id,
-          type: "step",
-          cost: straightDistance,
-        });
-        stepCount += 2;
-      }
-    }
-
-    console.log(
-      `[NavDemo] Added ${stepCount} step edges (${stepPairs.size} pairs)`
+  #createPlatformNodes(navmesh: Navmesh, windows: WindowGeometry[]): void {
+    this.#createSurfaceNodes(
+      navmesh,
+      windows,
+      "platform",
+      (win) => win.y - CHARACTER_RADIUS,
+      (win, windows) => this.#findObstaclesOnPlatform(win, windows)
     );
   }
 
   /**
-   * Add drop edges for dropping down from platforms
-   * Unidirectional: you can drop down but not up
+   * Phase 1b: Create hang nodes and hang edges from window undersides
+   */
+  #createHangNodes(navmesh: Navmesh, windows: WindowGeometry[]): void {
+    this.#createSurfaceNodes(
+      navmesh,
+      windows,
+      "hang",
+      (win) => win.y + win.height + CHARACTER_RADIUS,
+      (win, windows) => this.#findObstaclesOnHangSurface(win, windows)
+    );
+  }
+
+  /**
+   * Unified method to create nodes on a surface (platform or hang)
+   */
+  #createSurfaceNodes(
+    navmesh: Navmesh,
+    windows: WindowGeometry[],
+    surfaceType: "platform" | "hang",
+    getY: (win: WindowGeometry) => number,
+    getObstacles: (
+      win: WindowGeometry,
+      windows: WindowGeometry[]
+    ) => Array<{ left: number; right: number }>
+  ): void {
+    const leftType = surfaceType === "platform" ? "platform_left" : "hang_left";
+    const rightType =
+      surfaceType === "platform" ? "platform_right" : "hang_right";
+    const edgeType = surfaceType === "platform" ? "walk" : "hang";
+    const prefix = surfaceType === "platform" ? "seg" : "hang_seg";
+
+    windows.forEach((win) => {
+      const y = getY(win);
+      const obstacles = getObstacles(win, windows);
+      const segments = this.#splitPlatformIntoSegments(
+        win.x + CHARACTER_RADIUS,
+        win.x + win.width - CHARACTER_RADIUS,
+        obstacles
+      );
+
+      segments.forEach((segment, segIdx) => {
+        if (segment.width < MIN_PLATFORM_WIDTH) return;
+
+        const leftPos = this.#findValidPosition(
+          { x: segment.left, y },
+          "right",
+          segment.right - MIN_PLATFORM_WIDTH / 2,
+          win.id
+        );
+        const rightPos = this.#findValidPosition(
+          { x: segment.right, y },
+          "left",
+          segment.left + MIN_PLATFORM_WIDTH / 2,
+          win.id
+        );
+
+        if (
+          !leftPos ||
+          !rightPos ||
+          rightPos.x - leftPos.x < MIN_PLATFORM_WIDTH
+        )
+          return;
+
+        const leftNode: NavNode = {
+          id: `${win.id}_${prefix}${segIdx}_left`,
+          pos: leftPos,
+          type: leftType,
+          windowId: win.id,
+        };
+        const rightNode: NavNode = {
+          id: `${win.id}_${prefix}${segIdx}_right`,
+          pos: rightPos,
+          type: rightType,
+          windowId: win.id,
+        };
+
+        navmesh.addNode(leftNode);
+        navmesh.addNode(rightNode);
+        navmesh.addEdge({
+          id: `${win.id}_${prefix}${segIdx}_${edgeType}`,
+          from: leftNode.id,
+          to: rightNode.id,
+          type: edgeType,
+          cost: rightPos.x - leftPos.x,
+        });
+      });
+    });
+  }
+
+  /**
+   * Find obstacles on the underside of a window (windows hanging from above)
+   */
+  #findObstaclesOnHangSurface(
+    baseWin: WindowGeometry,
+    allWindows: WindowGeometry[]
+  ): Array<{ left: number; right: number }> {
+    const hangY = baseWin.y + baseWin.height + CHARACTER_RADIUS;
+    const obstacles: Array<{ left: number; right: number }> = [];
+
+    for (const win of allWindows) {
+      if (win.id === baseWin.id) continue;
+
+      // Check if this window hangs down and blocks the hang path
+      const windowBottom = win.y + win.height;
+      const isHangingInPath =
+        windowBottom > baseWin.y + baseWin.height &&
+        windowBottom < hangY + CHARACTER_RADIUS * 2;
+
+      if (!isHangingInPath) continue;
+
+      // Check horizontal overlap
+      const horizontalOverlap =
+        win.x < baseWin.x + baseWin.width && win.x + win.width > baseWin.x;
+
+      if (horizontalOverlap) {
+        obstacles.push({
+          left: Math.max(win.x, baseWin.x),
+          right: Math.min(win.x + win.width, baseWin.x + baseWin.width),
+        });
+      }
+    }
+
+    return obstacles;
+  }
+
+  /**
+   * Phase 3: Add step edges between nearby platform nodes at similar heights
+   */
+  #addStepEdges(navmesh: Navmesh): void {
+    const nodes = Array.from(navmesh.nodes.values());
+    const stepPairs = new Set<string>();
+    let pairCount = 0;
+
+    for (const fromNode of nodes) {
+      if (!this.#isPlatformNode(fromNode)) continue;
+
+      for (const toNode of nodes) {
+        if (fromNode.id === toNode.id) continue;
+        if (fromNode.windowId === toNode.windowId) continue;
+        if (!this.#isPlatformNode(toNode)) continue;
+
+        // Check distance constraints
+        const dx = toNode.pos.x - fromNode.pos.x;
+        const dy = toNode.pos.y - fromNode.pos.y;
+        if (Math.abs(dx) > MAX_STEP_GAP) continue;
+        if (Math.abs(dy) > MAX_STEP_HEIGHT) continue;
+
+        // Create bidirectional edge (once per pair)
+        const pairId = [fromNode.id, toNode.id].sort().join(":");
+        if (stepPairs.has(pairId)) continue;
+        stepPairs.add(pairId);
+
+        this.#addBidirectionalEdge(
+          navmesh,
+          fromNode.id,
+          toNode.id,
+          "step",
+          Math.hypot(dx, dy),
+          "step"
+        );
+        pairCount++;
+      }
+    }
+
+    console.log(`[NavDemo] Added ${pairCount} step edge pairs`);
+  }
+
+  /**
+   * Phase 4: Add drop edges for dropping down from platforms
    */
   #addDropEdges(navmesh: Navmesh): void {
     const nodes = Array.from(navmesh.nodes.values());
+    const stepPairs = this.#getStepPairs(navmesh);
     let dropCount = 0;
 
     for (const fromNode of nodes) {
+      if (!this.#isPlatformNode(fromNode)) continue;
+
       for (const toNode of nodes) {
         if (fromNode.id === toNode.id) continue;
-        if (fromNode.windowId === toNode.windowId) continue; // Skip same window
+        if (fromNode.windowId === toNode.windowId) continue;
+        if (!this.#isPlatformNode(toNode)) continue;
+
+        // Skip if step edge exists (precedence)
+        const pairId = [fromNode.id, toNode.id].sort().join(":");
+        if (stepPairs.has(pairId)) continue;
 
         const dx = toNode.pos.x - fromNode.pos.x;
-        const dy = toNode.pos.y - fromNode.pos.y; // Positive = toNode is below fromNode
-        const horizontalDist = Math.abs(dx);
+        const dy = toNode.pos.y - fromNode.pos.y;
 
-        // Must be dropping DOWN (toNode.y > fromNode.y, so dy > 0)
+        // Must drop down
         if (dy <= 0) continue;
-
-        // Check if within drop range
-        if (horizontalDist > MAX_DROP_GAP) continue;
+        if (Math.abs(dx) > MAX_DROP_GAP) continue;
         if (dy > MAX_DROP_HEIGHT) continue;
 
-        // Add unidirectional drop edge
-        const straightDistance = Math.hypot(dx, dy);
         navmesh.addEdge({
           id: `drop_${fromNode.id}_to_${toNode.id}`,
           from: fromNode.id,
           to: toNode.id,
           type: "drop",
-          cost: straightDistance * 0.8, // Drops are slightly preferred (faster than walking around)
+          cost: Math.hypot(dx, dy) * 0.8,
         });
         dropCount++;
       }
@@ -275,9 +401,124 @@ class NavmeshBuilder {
     console.log(`[NavDemo] Added ${dropCount} drop edges`);
   }
 
+  // Helper: Get set of node pairs connected by step edges
+  #getStepPairs(navmesh: Navmesh): Set<string> {
+    const stepPairs = new Set<string>();
+    for (const edge of navmesh.edges.values()) {
+      if (edge.type === "step") {
+        stepPairs.add([edge.from, edge.to].sort().join(":"));
+      }
+    }
+    return stepPairs;
+  }
+
   /**
-   * Assign connected component IDs to all nodes based on walk/step connectivity
-   * Nodes that can reach each other via walk/step edges get the same ID
+   * Add transition edges between platform and hang nodes
+   * These allow transitioning from walking to hanging and vice versa
+   */
+  #addPlatformHangTransitions(navmesh: Navmesh): void {
+    const nodes = Array.from(navmesh.nodes.values());
+    let transitionCount = 0;
+
+    for (const platformNode of nodes) {
+      // Only consider platform edge nodes
+      if (
+        platformNode.type !== "platform_left" &&
+        platformNode.type !== "platform_right"
+      )
+        continue;
+
+      for (const hangNode of nodes) {
+        // Only consider hang edge nodes
+        if (hangNode.type !== "hang_left" && hangNode.type !== "hang_right")
+          continue;
+
+        // Skip same window transitions (can't grab underneath your own platform)
+        if (platformNode.windowId === hangNode.windowId) continue;
+
+        const dx = hangNode.pos.x - platformNode.pos.x;
+        const dy = hangNode.pos.y - platformNode.pos.y;
+        const distance = Math.hypot(dx, dy);
+
+        // Must be close enough and hang node should be below platform node
+        if (distance > CHARACTER_RADIUS * 3) continue;
+        if (dy <= 0) continue; // Hang must be below platform
+
+        // Add bidirectional transition
+        // Platform -> Hang (drop to grab)
+        navmesh.addEdge({
+          id: `transition_${platformNode.id}_to_${hangNode.id}`,
+          from: platformNode.id,
+          to: hangNode.id,
+          type: "drop",
+          cost: distance * 1.2, // Slight penalty for transition
+        });
+
+        // Hang -> Platform (climb up)
+        navmesh.addEdge({
+          id: `transition_${hangNode.id}_to_${platformNode.id}`,
+          from: hangNode.id,
+          to: platformNode.id,
+          type: "climb",
+          cost: distance * 1.5, // Higher penalty for climbing up
+        });
+
+        transitionCount += 2;
+      }
+    }
+
+    console.log(`[NavDemo] Added ${transitionCount} platform-hang transitions`);
+  }
+
+  /**
+   * Add attach edges to grab onto hanging positions from platform edges
+   * This allows starting to hang from the edge of a platform
+   */
+  #addAttachEdges(navmesh: Navmesh): void {
+    const nodes = Array.from(navmesh.nodes.values());
+    let attachCount = 0;
+
+    for (const platformNode of nodes) {
+      // Only consider platform edge nodes
+      if (
+        platformNode.type !== "platform_left" &&
+        platformNode.type !== "platform_right"
+      )
+        continue;
+
+      for (const hangNode of nodes) {
+        // Only consider hang edge nodes
+        if (hangNode.type !== "hang_left" && hangNode.type !== "hang_right")
+          continue;
+
+        // Skip same window attachments
+        if (platformNode.windowId === hangNode.windowId) continue;
+
+        const dx = hangNode.pos.x - platformNode.pos.x;
+        const dy = hangNode.pos.y - platformNode.pos.y;
+        const distance = Math.hypot(dx, dy);
+
+        // Must be close enough and hang node should be below/at similar level
+        if (distance > CHARACTER_RADIUS * 2) continue;
+
+        // Add unidirectional attach edge (platform -> hang)
+        navmesh.addEdge({
+          id: `attach_${platformNode.id}_to_${hangNode.id}`,
+          from: platformNode.id,
+          to: hangNode.id,
+          type: "attach",
+          cost: distance * 1.1, // Small penalty for attaching
+        });
+        attachCount++;
+      }
+    }
+
+    console.log(`[NavDemo] Added ${attachCount} attach edges`);
+  }
+
+  /**
+   * Phase 6: Assign connected component IDs to all nodes
+   * Nodes reachable via walk/step/drop/hang/climb/attach get the same ID
    */
   #assignComponentIds(navmesh: Navmesh): void {
     let nextComponentId = 0;
@@ -302,13 +543,16 @@ class NavmeshBuilder {
 
         currentNode.componentId = componentId;
 
-        // Add neighbors via walk/step/drop edges
+        // Add neighbors via walk/step/drop/hang/climb/attach edges
         for (const edge of navmesh.edges.values()) {
           if (edge.from !== nodeId) continue;
           if (
             edge.type !== "walk" &&
             edge.type !== "step" &&
-            edge.type !== "drop"
+            edge.type !== "drop" &&
+            edge.type !== "hang" &&
+            edge.type !== "climb" &&
+            edge.type !== "attach"
           )
             continue;
           queue.push(edge.to);
@@ -320,80 +564,260 @@ class NavmeshBuilder {
   }
 
   /**
-   * Add jump edges between nodes that can be jumped between
-   * Only adds jumps between nodes in different connected components
+   * Phase 7: Create landing nodes where edges can be landed on
+   * This unifies all "landing on edges" logic in one place
+   * Requires componentIds to be assigned first (Phase 6)
+   */
+  #createLandingNodes(navmesh: Navmesh): void {
+    const nodes = Array.from(navmesh.nodes.values());
+    let landingNodeCount = 0;
+
+    // Get all walk/step edges that can be landed on
+    const walkStepEdges: Array<{ from: NavNode; to: NavNode; edge: NavEdge }> =
+      [];
+    for (const edge of navmesh.edges.values()) {
+      if (edge.type !== "walk" && edge.type !== "step") continue;
+      const fromNode = navmesh.getNode(edge.from);
+      const toNode = navmesh.getNode(edge.to);
+      if (!fromNode || !toNode) continue;
+      walkStepEdges.push({ from: fromNode, to: toNode, edge });
+    }
+
+    // Get existing step pairs for precedence checking
+    const stepPairs = new Set<string>();
+    for (const edge of navmesh.edges.values()) {
+      if (edge.type === "step") {
+        const pairId = [edge.from, edge.to].sort().join(":");
+        stepPairs.add(pairId);
+      }
+    }
+
+    // Helper to create/get a landing node on an edge
+    const createLandingNode = (
+      landingPoint: Vec2,
+      walkEdge: { from: NavNode; to: NavNode; edge: NavEdge }
+    ): NavNode => {
+      const landingNodeId = `landing_${walkEdge.from.windowId}_${Math.round(
+        landingPoint.x
+      )}_${Math.round(landingPoint.y)}`;
+
+      let landingNode = navmesh.getNode(landingNodeId);
+      if (!landingNode) {
+        landingNode = {
+          id: landingNodeId,
+          pos: landingPoint,
+          type: "landing",
+          windowId: walkEdge.from.windowId,
+          componentId: walkEdge.from.componentId,
+        };
+        navmesh.addNode(landingNode);
+
+        // Connect to edge endpoints
+        const edgeStart = walkEdge.from.pos;
+        const edgeEnd = walkEdge.to.pos;
+        const distToStart = Math.abs(landingPoint.x - edgeStart.x);
+        const distToEnd = Math.abs(landingPoint.x - edgeEnd.x);
+
+        navmesh.addEdge({
+          id: `${landingNodeId}_to_${walkEdge.from.id}`,
+          from: landingNodeId,
+          to: walkEdge.from.id,
+          type: walkEdge.edge.type,
+          cost: distToStart,
+        });
+        navmesh.addEdge({
+          id: `${walkEdge.from.id}_to_${landingNodeId}`,
+          from: walkEdge.from.id,
+          to: landingNodeId,
+          type: walkEdge.edge.type,
+          cost: distToStart,
+        });
+        navmesh.addEdge({
+          id: `${landingNodeId}_to_${walkEdge.to.id}`,
+          from: landingNodeId,
+          to: walkEdge.to.id,
+          type: walkEdge.edge.type,
+          cost: distToEnd,
+        });
+        navmesh.addEdge({
+          id: `${walkEdge.to.id}_to_${landingNodeId}`,
+          from: walkEdge.to.id,
+          to: landingNodeId,
+          type: walkEdge.edge.type,
+          cost: distToEnd,
+        });
+
+        landingNodeCount++;
+      }
+      return landingNode;
+    };
+
+    // Case 1: Drops from hang nodes (vertical raycast down)
+    for (const fromNode of nodes) {
+      if (fromNode.type !== "hang_left" && fromNode.type !== "hang_right")
+        continue;
+
+      for (const walkEdge of walkStepEdges) {
+        if (fromNode.componentId === walkEdge.from.componentId) continue;
+
+        const edgeStart = walkEdge.from.pos;
+        const edgeEnd = walkEdge.to.pos;
+        const edgeY = edgeStart.y;
+
+        if (edgeY <= fromNode.pos.y) continue;
+        if (fromNode.pos.x < Math.min(edgeStart.x, edgeEnd.x)) continue;
+        if (fromNode.pos.x > Math.max(edgeStart.x, edgeEnd.x)) continue;
+
+        const landingPoint = { x: fromNode.pos.x, y: edgeY };
+        const dy = landingPoint.y - fromNode.pos.y;
+
+        if (dy > MAX_DROP_HEIGHT) continue;
+        if (this.#lineIntersectsWindows(fromNode.pos, landingPoint)) continue;
+
+        const landingNode = createLandingNode(landingPoint, walkEdge);
+        const pairId = [fromNode.id, landingNode.id].sort().join(":");
+        if (stepPairs.has(pairId)) continue;
+
+        navmesh.addEdge({
+          id: `drop_${fromNode.id}_to_${landingNode.id}`,
+          from: fromNode.id,
+          to: landingNode.id,
+          type: "drop",
+          cost: dy * 0.8,
+        });
+      }
+    }
+
+    // Case 2: Jumps/drops from platform nodes (projected landing)
+    for (const fromNode of nodes) {
+      if (fromNode.type === "landing") continue;
+      if (fromNode.type === "hang_left" || fromNode.type === "hang_right")
+        continue;
+
+      for (const walkEdge of walkStepEdges) {
+        if (fromNode.componentId === walkEdge.from.componentId) continue;
+
+        const edgeStart = walkEdge.from.pos;
+        const edgeEnd = walkEdge.to.pos;
+        const edgeVec = {
+          x: edgeEnd.x - edgeStart.x,
+          y: edgeEnd.y - edgeStart.y,
+        };
+        const edgeLen = Math.hypot(edgeVec.x, edgeVec.y);
+        if (edgeLen < 0.01) continue;
+
+        // Project fromNode onto edge
+        const toEdgeVec = {
+          x: fromNode.pos.x - edgeStart.x,
+          y: fromNode.pos.y - edgeStart.y,
+        };
+        const t = Math.max(
+          0,
+          Math.min(
+            1,
+            (toEdgeVec.x * edgeVec.x + toEdgeVec.y * edgeVec.y) /
+              (edgeLen * edgeLen)
+          )
+        );
+
+        if (t < 0.1 || t > 0.9) continue; // Too close to endpoints
+
+        const landingPoint = {
+          x: edgeStart.x + t * edgeVec.x,
+          y: edgeStart.y + t * edgeVec.y,
+        };
+        const dx = landingPoint.x - fromNode.pos.x;
+        const dy = landingPoint.y - fromNode.pos.y;
+        const horizontalDist = Math.abs(dx);
+
+        if (horizontalDist > MAX_JUMP_DISTANCE) continue;
+        const maxJumpUp = JUMP_ARC_HEIGHT * 0.5;
+        if (dy < -maxJumpUp) continue;
+        if (this.#lineIntersectsWindows(fromNode.pos, landingPoint)) continue;
+        if (!this.#isJumpArcClear(fromNode.pos, landingPoint)) continue;
+
+        const landingNode = createLandingNode(landingPoint, walkEdge);
+        const straightDistance = Math.hypot(dx, dy);
+        navmesh.addEdge({
+          id: `jump_${fromNode.id}_to_${landingNode.id}`,
+          from: fromNode.id,
+          to: landingNode.id,
+          type: "jump",
+          cost: straightDistance * 1.5,
+        });
+      }
+    }
+
+    console.log(`[NavDemo] Created ${landingNodeCount} landing nodes`);
+  }
+
+  /**
+   * Phase 8: Add jump edges between disconnected components (node-to-node only)
    */
   #addJumpEdges(navmesh: Navmesh): void {
     const nodes = Array.from(navmesh.nodes.values());
     let jumpCount = 0;
     let totalTests = 0;
-    let rejectedByDistance = 0;
-    let rejectedByLine = 0;
-    let rejectedByPhysics = 0;
-    let rejectedByParabola = 0;
-    let rejectedByComponent = 0;
+    const rejected = {
+      component: 0,
+      distance: 0,
+      physics: 0,
+      line: 0,
+      parabola: 0,
+    };
 
     for (const fromNode of nodes) {
+      // Only platform nodes can initiate jumps
+      if (!this.#isPlatformNode(fromNode)) continue;
+
       for (const toNode of nodes) {
         if (fromNode.id === toNode.id) continue;
-        if (fromNode.windowId === toNode.windowId) continue; // Skip same window
+        if (fromNode.windowId === toNode.windowId) continue;
+        // Can't jump to hang nodes
+        if (this.#isHangNode(toNode)) continue;
 
         totalTests++;
 
-        // Skip if in same connected component (already reachable via walk/step)
+        // Skip if already connected
         if (fromNode.componentId === toNode.componentId) {
-          rejectedByComponent++;
+          rejected.component++;
           continue;
         }
+
         const dx = toNode.pos.x - fromNode.pos.x;
         const dy = toNode.pos.y - fromNode.pos.y;
-        const horizontalDist = Math.abs(dx);
 
-        // 1. Quick distance check - too far to jump horizontally
-        if (horizontalDist > MAX_JUMP_DISTANCE) {
-          rejectedByDistance++;
+        // Check jump constraints
+        if (Math.abs(dx) > MAX_JUMP_DISTANCE) {
+          rejected.distance++;
           continue;
         }
-
-        // 2. Can't jump too high up (but can jump down any distance)
-        const maxJumpUp = JUMP_ARC_HEIGHT * 0.5; // Can jump half the arc height upward
-        if (dy < -maxJumpUp) {
-          rejectedByPhysics++;
+        if (dy < -JUMP_ARC_HEIGHT * 0.5) {
+          rejected.physics++;
           continue;
         }
-
-        // 3. Quick line check - does straight line intersect any windows?
         if (this.#lineIntersectsWindows(fromNode.pos, toNode.pos)) {
-          rejectedByLine++;
+          rejected.line++;
           continue;
         }
-
-        // 4. Verify the parabolic arc is clear
         if (!this.#isJumpArcClear(fromNode.pos, toNode.pos)) {
-          rejectedByParabola++;
+          rejected.parabola++;
           continue;
         }
 
-        // Add jump edge
-        const straightDistance = Math.hypot(dx, dy);
-        const jumpCost = straightDistance * 1.5; // Distance-based cost with penalty
         navmesh.addEdge({
           id: `jump_${fromNode.id}_to_${toNode.id}`,
           from: fromNode.id,
           to: toNode.id,
           type: "jump",
-          cost: jumpCost,
+          cost: Math.hypot(dx, dy) * 1.5,
         });
         jumpCount++;
       }
     }
 
     console.log(`[NavDemo] Jump edges: ${jumpCount}/${totalTests} tests`);
-    console.log(`  - Rejected by component: ${rejectedByComponent}`);
-    console.log(`  - Rejected by distance: ${rejectedByDistance}`);
-    console.log(`  - Rejected by line: ${rejectedByLine}`);
-    console.log(`  - Rejected by physics: ${rejectedByPhysics}`);
-    console.log(`  - Rejected by parabola: ${rejectedByParabola}`);
+    console.log(`  - Rejected:`, rejected);
   }
 
   /**
@@ -720,13 +1144,18 @@ class PetApp {
       fall: "rgba(255, 100, 100, 0.8)",
       jump: "rgba(255, 200, 0, 0.8)",
       step: "rgba(150, 255, 150, 0.8)",
-      drop: "rgba(255, 150, 255, 0.8)", // Purple/magenta for drop edges
+      drop: "rgba(255, 150, 255, 0.8)",
+      hang: "rgba(0, 255, 255, 0.8)",
+      attach: "rgba(255, 100, 200, 0.8)", // Pink for attach edges
     };
 
     const nodeColors = {
       platform_left: "rgba(255, 200, 0, 0.9)",
       platform_right: "rgba(0, 200, 255, 0.9)",
       platform_center: "rgba(0, 255, 0, 0.9)",
+      hang_left: "rgba(0, 255, 255, 0.9)",
+      hang_right: "rgba(0, 200, 200, 0.9)",
+      landing: "rgba(200, 200, 200, 0.7)", // Gray for landing nodes
     };
 
     // Draw character radius circles
@@ -757,8 +1186,12 @@ class PetApp {
           strokeWidth: 2,
           strokeDasharray: "5,5",
         });
-      } else if (edge.type === "drop") {
-        // Drop edges are dotted lines with arrow (unidirectional)
+      } else if (
+        edge.type === "drop" ||
+        edge.type === "climb" ||
+        edge.type === "attach"
+      ) {
+        // Drop/climb/attach edges are dotted lines with arrow (unidirectional)
         this.#gizmos.line(fromNode.pos, toNode.pos, {
           stroke: color,
           strokeWidth: 2,
@@ -789,6 +1222,13 @@ class PetApp {
         );
         polygon.setAttribute("fill", color);
         this.#gizmos.getSvg().appendChild(polygon);
+      } else if (edge.type === "hang") {
+        // Hang edges are wavy lines (bidirectional) - like walk but different style
+        this.#gizmos.line(fromNode.pos, toNode.pos, {
+          stroke: color,
+          strokeWidth: 3,
+          strokeDasharray: "8,4",
+        });
       } else {
         // Walk edges are solid lines (bidirectional)
         this.#gizmos.line(fromNode.pos, toNode.pos, {
@@ -900,6 +1340,8 @@ class PetApp {
       fall: 0,
       step: 0,
       drop: 0,
+      hang: 0,
+      attach: 0,
     };
     for (const edge of this.#navmesh.edges.values()) {
       edgeCounts[edge.type]++;
@@ -913,6 +1355,12 @@ class PetApp {
       edgeCounts.walk.toString();
     document.getElementById("stepCount")!.textContent =
       edgeCounts.step.toString();
+    document.getElementById("hangCount")!.textContent =
+      edgeCounts.hang.toString();
+    document.getElementById("attachCount")!.textContent =
+      edgeCounts.attach.toString();
+    document.getElementById("climbCount")!.textContent =
+      edgeCounts.climb.toString();
     document.getElementById("dropCount")!.textContent =
       edgeCounts.drop.toString();
     document.getElementById("jumpCount")!.textContent =
