@@ -22,17 +22,26 @@ interface WindowGeometry {
 const CHARACTER_RADIUS = 32; // Half of character width (64px total)
 const MIN_PLATFORM_WIDTH = 1; // Minimum walkable space (1 pixel)
 
+// Jump parameters (arcade-style, mutable for UI controls)
+let MAX_JUMP_DISTANCE = 200; // Maximum horizontal jump distance in pixels
+let JUMP_ARC_HEIGHT = 70; // How high the jump arc peaks above the start point
+
+// Step parameters
+const MAX_STEP_GAP = CHARACTER_RADIUS * 3; // Max horizontal gap for stepping
+const MAX_STEP_HEIGHT = CHARACTER_RADIUS; // Max height difference for stepping
+
 // ============================================================================
 // Navmesh Types
 // ============================================================================
 
-type EdgeType = "walk" | "climb" | "fall";
+type EdgeType = "walk" | "climb" | "fall" | "jump" | "step";
 
 interface NavNode {
   id: string;
   pos: Vec2;
   type: "platform_left" | "platform_right" | "platform_center";
   windowId: string;
+  componentId?: number; // Which connected component (via walk/step) this node belongs to
 }
 
 interface NavEdge {
@@ -154,7 +163,248 @@ class NavmeshBuilder {
       });
     });
 
+    // Add step edges between nearby nodes (has precedence over jump)
+    this.#addStepEdges(navmesh);
+
+    // Assign connected component IDs to nodes (via walk/step edges)
+    this.#assignComponentIds(navmesh);
+
+    // Add jump edges only between nodes in different components
+    this.#addJumpEdges(navmesh);
+
     return navmesh;
+  }
+
+  /**
+   * Add step edges between nearby nodes at similar heights
+   */
+  #addStepEdges(navmesh: Navmesh): void {
+    const nodes = Array.from(navmesh.nodes.values());
+    const stepPairs = new Set<string>();
+    let stepCount = 0;
+
+    for (const fromNode of nodes) {
+      for (const toNode of nodes) {
+        if (fromNode.id === toNode.id) continue;
+        if (fromNode.windowId === toNode.windowId) continue; // Skip same window
+
+        const dx = toNode.pos.x - fromNode.pos.x;
+        const dy = toNode.pos.y - fromNode.pos.y;
+        const horizontalDist = Math.abs(dx);
+        const heightDiff = Math.abs(dy);
+
+        // Check if within step range
+        if (horizontalDist > MAX_STEP_GAP) continue;
+        if (heightDiff > MAX_STEP_HEIGHT) continue;
+
+        // Create bidirectional step edge (only once per pair)
+        const pairId = [fromNode.id, toNode.id].sort().join(":");
+        if (stepPairs.has(pairId)) continue;
+
+        stepPairs.add(pairId);
+
+        // Add bidirectional step edges
+        const straightDistance = Math.hypot(dx, dy);
+        navmesh.addEdge({
+          id: `step_${fromNode.id}_to_${toNode.id}`,
+          from: fromNode.id,
+          to: toNode.id,
+          type: "step",
+          cost: straightDistance,
+        });
+        navmesh.addEdge({
+          id: `step_${toNode.id}_to_${fromNode.id}`,
+          from: toNode.id,
+          to: fromNode.id,
+          type: "step",
+          cost: straightDistance,
+        });
+        stepCount += 2;
+      }
+    }
+
+    console.log(
+      `[NavDemo] Added ${stepCount} step edges (${stepPairs.size} pairs)`
+    );
+  }
+
+  /**
+   * Assign connected component IDs to all nodes based on walk/step connectivity
+   * Nodes that can reach each other via walk/step edges get the same ID
+   */
+  #assignComponentIds(navmesh: Navmesh): void {
+    let nextComponentId = 0;
+    const nodes = Array.from(navmesh.nodes.values());
+
+    for (const node of nodes) {
+      // Skip if already assigned
+      if (node.componentId !== undefined) continue;
+
+      // Flood fill from this node
+      const componentId = nextComponentId++;
+      const queue = [node.id];
+      const visited = new Set<string>();
+
+      while (queue.length > 0) {
+        const nodeId = queue.shift()!;
+        if (visited.has(nodeId)) continue;
+        visited.add(nodeId);
+
+        const currentNode = navmesh.getNode(nodeId);
+        if (!currentNode) continue;
+
+        currentNode.componentId = componentId;
+
+        // Add neighbors via walk/step edges
+        for (const edge of navmesh.edges.values()) {
+          if (edge.from !== nodeId) continue;
+          if (edge.type !== "walk" && edge.type !== "step") continue;
+          queue.push(edge.to);
+        }
+      }
+    }
+
+    console.log(`[NavDemo] Found ${nextComponentId} connected components`);
+  }
+
+  /**
+   * Add jump edges between nodes that can be jumped between
+   * Only adds jumps between nodes in different connected components
+   */
+  #addJumpEdges(navmesh: Navmesh): void {
+    const nodes = Array.from(navmesh.nodes.values());
+    let jumpCount = 0;
+    let totalTests = 0;
+    let rejectedByDistance = 0;
+    let rejectedByLine = 0;
+    let rejectedByPhysics = 0;
+    let rejectedByParabola = 0;
+    let rejectedByComponent = 0;
+
+    for (const fromNode of nodes) {
+      for (const toNode of nodes) {
+        if (fromNode.id === toNode.id) continue;
+        if (fromNode.windowId === toNode.windowId) continue; // Skip same window
+
+        totalTests++;
+
+        // Skip if in same connected component (already reachable via walk/step)
+        if (fromNode.componentId === toNode.componentId) {
+          rejectedByComponent++;
+          continue;
+        }
+        const dx = toNode.pos.x - fromNode.pos.x;
+        const dy = toNode.pos.y - fromNode.pos.y;
+        const horizontalDist = Math.abs(dx);
+
+        // 1. Quick distance check - too far to jump horizontally
+        if (horizontalDist > MAX_JUMP_DISTANCE) {
+          rejectedByDistance++;
+          continue;
+        }
+
+        // 2. Can't jump too high up (but can jump down any distance)
+        const maxJumpUp = JUMP_ARC_HEIGHT * 0.5; // Can jump half the arc height upward
+        if (dy < -maxJumpUp) {
+          rejectedByPhysics++;
+          continue;
+        }
+
+        // 3. Quick line check - does straight line intersect any windows?
+        if (this.#lineIntersectsWindows(fromNode.pos, toNode.pos)) {
+          rejectedByLine++;
+          continue;
+        }
+
+        // 4. Verify the parabolic arc is clear
+        if (!this.#isJumpArcClear(fromNode.pos, toNode.pos)) {
+          rejectedByParabola++;
+          continue;
+        }
+
+        // Add jump edge
+        const straightDistance = Math.hypot(dx, dy);
+        const jumpCost = straightDistance * 1.5; // Distance-based cost with penalty
+        navmesh.addEdge({
+          id: `jump_${fromNode.id}_to_${toNode.id}`,
+          from: fromNode.id,
+          to: toNode.id,
+          type: "jump",
+          cost: jumpCost,
+        });
+        jumpCount++;
+      }
+    }
+
+    console.log(`[NavDemo] Jump edges: ${jumpCount}/${totalTests} tests`);
+    console.log(`  - Rejected by component: ${rejectedByComponent}`);
+    console.log(`  - Rejected by distance: ${rejectedByDistance}`);
+    console.log(`  - Rejected by line: ${rejectedByLine}`);
+    console.log(`  - Rejected by physics: ${rejectedByPhysics}`);
+    console.log(`  - Rejected by parabola: ${rejectedByParabola}`);
+  }
+
+  /**
+   * Quick check if a straight line intersects any window
+   */
+  #lineIntersectsWindows(start: Vec2, end: Vec2): boolean {
+    const samples = 10;
+    for (let i = 0; i <= samples; i++) {
+      const t = i / samples;
+      const x = start.x + (end.x - start.x) * t;
+      const y = start.y + (end.y - start.y) * t;
+
+      // Check if this point is inside any window
+      for (const win of this.#windows) {
+        if (
+          x > win.x &&
+          x < win.x + win.width &&
+          y > win.y &&
+          y < win.y + win.height
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Check if a simple parabolic jump arc is clear of obstacles
+   * Uses a fixed arc height for arcade-style jumping
+   */
+  #isJumpArcClear(start: Vec2, end: Vec2): boolean {
+    const samples = 20;
+
+    for (let i = 0; i <= samples; i++) {
+      const t = i / samples;
+
+      // Linear interpolation for x
+      const x = start.x + (end.x - start.x) * t;
+
+      // Parabolic arc for y: goes up to arcHeight then down
+      // Peak is at the highest point between start and end
+      const highestY = Math.min(start.y, end.y) - JUMP_ARC_HEIGHT;
+      const parabola = -4 * (t - 0.5) * (t - 0.5) + 1; // 0 to 1 to 0
+      const y =
+        start.y + (end.y - start.y) * t + (highestY - start.y) * parabola;
+
+      // Check if this position collides with any window
+      for (const win of this.#windows) {
+        const closestX = Math.max(win.x, Math.min(x, win.x + win.width));
+        const closestY = Math.max(win.y, Math.min(y, win.y + win.height));
+
+        const distX = x - closestX;
+        const distY = y - closestY;
+        const distSq = distX * distX + distY * distY;
+
+        if (distSq < CHARACTER_RADIUS * CHARACTER_RADIUS) {
+          return false; // Path blocked
+        }
+      }
+    }
+
+    return true;
   }
 
   /**
@@ -340,6 +590,7 @@ class PetApp {
     this.#gizmos = new Gizmos(debugLayer);
 
     this.#setupAXIO();
+    this.#setupPhysicsControls();
   }
 
   async #setupAXIO(): Promise<void> {
@@ -415,6 +666,8 @@ class PetApp {
       walk: "rgba(0, 255, 0, 0.8)",
       climb: "rgba(100, 150, 255, 0.8)",
       fall: "rgba(255, 100, 100, 0.8)",
+      jump: "rgba(255, 200, 0, 0.8)",
+      step: "rgba(150, 255, 150, 0.8)",
     };
 
     const nodeColors = {
@@ -440,10 +693,24 @@ class PetApp {
       if (!fromNode || !toNode) continue;
 
       const color = edgeColors[edge.type];
-      this.#gizmos.line(fromNode.pos, toNode.pos, {
-        stroke: color,
-        strokeWidth: 3,
-      });
+
+      // Jump edges get parabolic arcs (directional)
+      if (edge.type === "jump") {
+        this.#drawJumpArc(fromNode.pos, toNode.pos, color);
+      } else if (edge.type === "step") {
+        // Step edges are dashed lines (bidirectional)
+        this.#gizmos.line(fromNode.pos, toNode.pos, {
+          stroke: color,
+          strokeWidth: 2,
+          strokeDasharray: "5,5",
+        });
+      } else {
+        // Walk edges are solid lines (bidirectional)
+        this.#gizmos.line(fromNode.pos, toNode.pos, {
+          stroke: color,
+          strokeWidth: 3,
+        });
+      }
 
       // Edge label
       const midX = (fromNode.pos.x + toNode.pos.x) / 2;
@@ -473,14 +740,122 @@ class PetApp {
     }
   }
 
+  #drawJumpArc(start: Vec2, end: Vec2, color: string): void {
+    const samples = 30;
+
+    // Build parabolic arc path
+    let pathData = `M ${start.x} ${start.y}`;
+
+    for (let i = 1; i <= samples; i++) {
+      const t = i / samples;
+      const x = start.x + (end.x - start.x) * t;
+
+      // Parabolic arc that peaks at JUMP_ARC_HEIGHT above the higher platform
+      const highestY = Math.min(start.y, end.y) - JUMP_ARC_HEIGHT;
+      const parabola = -4 * (t - 0.5) * (t - 0.5) + 1;
+      const y =
+        start.y + (end.y - start.y) * t + (highestY - start.y) * parabola;
+
+      pathData += ` L ${x} ${y}`;
+    }
+
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", pathData);
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", color);
+    path.setAttribute("stroke-width", "2");
+    this.#gizmos.getSvg().appendChild(path);
+
+    // Draw arrow at end
+    const t1 = 1.0;
+    const t0 = 0.95;
+
+    const x1 = start.x + (end.x - start.x) * t1;
+    const highestY = Math.min(start.y, end.y) - JUMP_ARC_HEIGHT;
+    const parabola1 = -4 * (t1 - 0.5) * (t1 - 0.5) + 1;
+    const y1 =
+      start.y + (end.y - start.y) * t1 + (highestY - start.y) * parabola1;
+
+    const x0 = start.x + (end.x - start.x) * t0;
+    const parabola0 = -4 * (t0 - 0.5) * (t0 - 0.5) + 1;
+    const y0 =
+      start.y + (end.y - start.y) * t0 + (highestY - start.y) * parabola0;
+
+    const angle = Math.atan2(y1 - y0, x1 - x0);
+    const arrowSize = 8;
+    const arrowAngle = Math.PI / 6;
+
+    const p1 = {
+      x: x1 - arrowSize * Math.cos(angle - arrowAngle),
+      y: y1 - arrowSize * Math.sin(angle - arrowAngle),
+    };
+    const p2 = {
+      x: x1 - arrowSize * Math.cos(angle + arrowAngle),
+      y: y1 - arrowSize * Math.sin(angle + arrowAngle),
+    };
+
+    const polygon = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "polygon"
+    );
+    polygon.setAttribute(
+      "points",
+      `${x1},${y1} ${p1.x},${p1.y} ${p2.x},${p2.y}`
+    );
+    polygon.setAttribute("fill", color);
+    this.#gizmos.getSvg().appendChild(polygon);
+  }
+
   #updateUI(): void {
-    document.getElementById("petState")!.textContent = "🗺️ Navmesh ready";
+    // Count edges by type
+    const edgeCounts = { walk: 0, jump: 0, climb: 0, fall: 0, step: 0 };
+    for (const edge of this.#navmesh.edges.values()) {
+      edgeCounts[edge.type]++;
+    }
+
     document.getElementById("nodeCount")!.textContent =
       this.#navmesh.nodes.size.toString();
-    document.getElementById("edgeCount")!.textContent =
-      this.#navmesh.edges.size.toString();
     document.getElementById("windowCount")!.textContent =
       this.#windows.length.toString();
+    document.getElementById("walkCount")!.textContent =
+      edgeCounts.walk.toString();
+    document.getElementById("stepCount")!.textContent =
+      edgeCounts.step.toString();
+    document.getElementById("jumpCount")!.textContent =
+      edgeCounts.jump.toString();
+    document.getElementById("jumpDistValue")!.textContent =
+      MAX_JUMP_DISTANCE.toString();
+    document.getElementById("arcHeightValue")!.textContent =
+      JUMP_ARC_HEIGHT.toString();
+  }
+
+  #setupPhysicsControls(): void {
+    const distSlider = document.getElementById(
+      "jumpDistSlider"
+    ) as HTMLInputElement;
+    const heightSlider = document.getElementById(
+      "arcHeightSlider"
+    ) as HTMLInputElement;
+
+    if (distSlider) {
+      distSlider.value = MAX_JUMP_DISTANCE.toString();
+      distSlider.addEventListener("input", (e) => {
+        MAX_JUMP_DISTANCE = parseInt((e.target as HTMLInputElement).value);
+        this.#rebuildNavmesh();
+        this.#render();
+        this.#updateUI();
+      });
+    }
+
+    if (heightSlider) {
+      heightSlider.value = JUMP_ARC_HEIGHT.toString();
+      heightSlider.addEventListener("input", (e) => {
+        JUMP_ARC_HEIGHT = parseInt((e.target as HTMLInputElement).value);
+        this.#rebuildNavmesh();
+        this.#render();
+        this.#updateUI();
+      });
+    }
   }
 }
 

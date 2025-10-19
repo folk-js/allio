@@ -41,6 +41,10 @@ export class Gizmos {
     this.#setupViewBox();
   }
 
+  getSvg(): SVGElement {
+    return this.#svg;
+  }
+
   #setupViewBox(): void {
     this.#svg.setAttribute(
       "viewBox",
@@ -141,5 +145,76 @@ export class Gizmos {
     text.setAttribute("text-anchor", textAnchor);
     text.textContent = content;
     this.#svg.appendChild(text);
+  }
+
+  /**
+   * Draw a parabolic arc with arrow
+   * Used for jump trajectories
+   */
+  parabola(
+    start: Vec2,
+    end: Vec2,
+    duration: number,
+    gravity: number,
+    jumpVelocity: number,
+    { stroke = "blue", strokeWidth = 2 }: LineOptions = {}
+  ): void {
+    const dx = end.x - start.x;
+    const vx = dx / duration;
+    const samples = 30;
+
+    // Build path
+    let pathData = `M ${start.x} ${start.y}`;
+    for (let i = 1; i <= samples; i++) {
+      const t = (i / samples) * duration;
+      const x = start.x + vx * t;
+      const y = start.y + jumpVelocity * t - 0.5 * gravity * t * t;
+      pathData += ` L ${x} ${y}`;
+    }
+
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", pathData);
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", stroke);
+    path.setAttribute("stroke-width", strokeWidth.toString());
+    this.#svg.appendChild(path);
+
+    // Draw arrow head at the end
+    const lastT = duration;
+    const secondLastT = duration * 0.95;
+
+    const lastX = start.x + vx * lastT;
+    const lastY =
+      start.y + jumpVelocity * lastT - 0.5 * gravity * lastT * lastT;
+
+    const secondLastX = start.x + vx * secondLastT;
+    const secondLastY =
+      start.y +
+      jumpVelocity * secondLastT -
+      0.5 * gravity * secondLastT * secondLastT;
+
+    const angle = Math.atan2(lastY - secondLastY, lastX - secondLastX);
+    const arrowSize = 8;
+    const arrowAngle = Math.PI / 6;
+
+    const p1 = {
+      x: lastX - arrowSize * Math.cos(angle - arrowAngle),
+      y: lastY - arrowSize * Math.sin(angle - arrowAngle),
+    };
+    const p2 = {
+      x: lastX - arrowSize * Math.cos(angle + arrowAngle),
+      y: lastY - arrowSize * Math.sin(angle + arrowAngle),
+    };
+
+    const polygon = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "polygon"
+    );
+    polygon.setAttribute(
+      "points",
+      `${lastX},${lastY} ${p1.x},${p1.y} ${p2.x},${p2.y}`
+    );
+    polygon.setAttribute("fill", stroke);
+    this.#svg.appendChild(polygon);
   }
 }
