@@ -1066,6 +1066,386 @@ class NavmeshBuilder {
 }
 
 // ============================================================================
+// Physics World Manager
+// ============================================================================
+
+class PhysicsWorld {
+  #RAPIER: any;
+  #world: any;
+  #windowColliders: Map<string, any> = new Map();
+
+  constructor(RAPIER: any) {
+    this.#RAPIER = RAPIER;
+    const gravity = { x: 0.0, y: 500.0 }; // Positive Y is down in our coordinate system
+    this.#world = new RAPIER.World(gravity);
+  }
+
+  getWorld(): any {
+    return this.#world;
+  }
+
+  getRAPIER(): any {
+    return this.#RAPIER;
+  }
+
+  step(deltaTime: number): void {
+    // Rapier expects deltaTime in seconds
+    this.#world.timestep = Math.min(deltaTime / 1000, 0.1);
+    this.#world.step();
+  }
+
+  updateWindows(windows: WindowGeometry[]): void {
+    // Remove old window colliders
+    for (const collider of this.#windowColliders.values()) {
+      this.#world.removeCollider(collider, false);
+    }
+    this.#windowColliders.clear();
+
+    // Create new window colliders (static platforms)
+    for (const win of windows) {
+      const colliderDesc = this.#RAPIER.ColliderDesc.cuboid(
+        win.width / 2,
+        win.height / 2
+      ).setTranslation(win.x + win.width / 2, win.y + win.height / 2);
+
+      const collider = this.#world.createCollider(colliderDesc);
+      this.#windowColliders.set(win.id, collider);
+    }
+  }
+
+  createCharacterRigidBody(pos: Vec2): any {
+    const rigidBodyDesc = this.#RAPIER.RigidBodyDesc.dynamic()
+      .setTranslation(pos.x, pos.y)
+      .setLinearDamping(2.0) // Air resistance
+      .setCanSleep(false); // Always active for responsive controls
+
+    const rigidBody = this.#world.createRigidBody(rigidBodyDesc);
+
+    // Create character collider (circle)
+    const colliderDesc = this.#RAPIER.ColliderDesc.ball(CHARACTER_RADIUS)
+      .setRestitution(0.0) // No bounciness
+      .setFriction(0.5);
+
+    this.#world.createCollider(colliderDesc, rigidBody);
+
+    return rigidBody;
+  }
+}
+
+// ============================================================================
+// Character
+// ============================================================================
+
+type CharacterState = "idle" | "walking" | "jumping" | "falling" | "hanging";
+
+class Character {
+  pos: Vec2;
+  velocity: Vec2 = { x: 0, y: 0 };
+  state: CharacterState = "idle";
+
+  #path: string[] = []; // Current path (node IDs)
+  #pathIndex: number = 0; // Current target node in path
+  #destinationNode: string | null = null;
+
+  #navmesh: Navmesh;
+  #physicsWorld: PhysicsWorld;
+  #rigidBody: any;
+
+  // Movement constants
+  #walkSpeed = 200; // Pixels per second
+  #maxSpeed = 250;
+
+  // Timers
+  #idleTimer = 0;
+  #idleDelay = 2000; // ms before picking new destination
+
+  constructor(
+    navmesh: Navmesh,
+    _windows: WindowGeometry[],
+    physicsWorld: PhysicsWorld
+  ) {
+    this.#navmesh = navmesh;
+    this.#physicsWorld = physicsWorld;
+
+    // Start at a random platform node
+    const spawnPos = this.#getRandomSpawnPosition();
+    this.pos = spawnPos;
+
+    // Create physics rigid body
+    this.#rigidBody = physicsWorld.createCharacterRigidBody(spawnPos);
+  }
+
+  #getRandomSpawnPosition(): Vec2 {
+    const platformNodes = Array.from(this.#navmesh.nodes.values()).filter(
+      (n) =>
+        n.type === "platform_left" ||
+        n.type === "platform_right" ||
+        n.type === "platform_center"
+    );
+
+    if (platformNodes.length === 0) {
+      return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+    }
+
+    const node =
+      platformNodes[Math.floor(Math.random() * platformNodes.length)];
+    return { ...node.pos };
+  }
+
+  update(deltaTime: number): void {
+    // Sync position from physics
+    const translation = this.#rigidBody.translation();
+    this.pos = { x: translation.x, y: translation.y };
+
+    const linvel = this.#rigidBody.linvel();
+    this.velocity = { x: linvel.x, y: linvel.y };
+
+    // Update state based on physics
+    this.#updateState();
+
+    // Update behavior
+    switch (this.state) {
+      case "idle":
+        this.#updateIdle(deltaTime);
+        break;
+      case "walking":
+        this.#updateWalking(deltaTime);
+        break;
+      case "jumping":
+      case "falling":
+        this.#updateAirborne(deltaTime);
+        break;
+    }
+  }
+
+  #updateState(): void {
+    const onGround = this.#isOnGround();
+
+    if (onGround) {
+      if (this.state === "falling" || this.state === "jumping") {
+        this.state = "idle";
+      }
+    } else {
+      if (this.state === "walking" || this.state === "idle") {
+        this.state = "falling";
+      }
+    }
+  }
+
+  #isOnGround(): boolean {
+    // Check if character is touching ground using Rapier's collision detection
+    const world = this.#physicsWorld.getWorld();
+    const RAPIER = this.#physicsWorld.getRAPIER();
+
+    // Cast a small ray downward to detect ground
+    const rayOrigin = { x: this.pos.x, y: this.pos.y };
+    const rayDir = { x: 0, y: 1 };
+    const maxToi = CHARACTER_RADIUS + 5; // Slightly beyond character radius
+
+    const ray = new RAPIER.Ray(rayOrigin, rayDir);
+    const hit = world.castRay(ray, maxToi, false);
+
+    return hit !== null;
+  }
+
+  #updateIdle(deltaTime: number): void {
+    // Stop horizontal movement
+    this.#rigidBody.setLinvel({ x: 0, y: this.velocity.y }, true);
+
+    this.#idleTimer += deltaTime;
+    if (this.#idleTimer >= this.#idleDelay) {
+      this.#idleTimer = 0;
+      this.#pickNewDestination();
+    }
+  }
+
+  #updateWalking(_deltaTime: number): void {
+    if (this.#path.length === 0 || this.#pathIndex >= this.#path.length) {
+      // Reached destination
+      this.state = "idle";
+      this.#rigidBody.setLinvel({ x: 0, y: this.velocity.y }, true);
+      this.#path = [];
+      this.#pathIndex = 0;
+      return;
+    }
+
+    const targetNodeId = this.#path[this.#pathIndex];
+    const targetNode = this.#navmesh.getNode(targetNodeId);
+
+    if (!targetNode) {
+      console.warn(
+        `[Character] Target node ${targetNodeId} not found, replanning...`
+      );
+      this.#pickNewDestination();
+      return;
+    }
+
+    // Move towards target node
+    const dx = targetNode.pos.x - this.pos.x;
+    const distToTarget = Math.abs(dx);
+
+    if (distToTarget < 15) {
+      // Reached this waypoint, move to next
+      this.#pathIndex++;
+      if (this.#pathIndex >= this.#path.length) {
+        this.state = "idle";
+        this.#rigidBody.setLinvel({ x: 0, y: this.velocity.y }, true);
+      }
+    } else {
+      // Apply force towards target
+      const direction = dx > 0 ? 1 : -1;
+      const targetVelX = direction * this.#walkSpeed;
+
+      // Clamp speed
+      const clampedVelX = Math.max(
+        -this.#maxSpeed,
+        Math.min(this.#maxSpeed, targetVelX)
+      );
+
+      this.#rigidBody.setLinvel({ x: clampedVelX, y: this.velocity.y }, true);
+    }
+  }
+
+  #updateAirborne(_deltaTime: number): void {
+    // Maintain some horizontal control in air
+    // Physics handles gravity automatically
+  }
+
+  #pickNewDestination(): void {
+    // Find nearest node to current position
+    const startNode = this.#findNearestNode();
+    if (!startNode) {
+      console.warn("[Character] No valid start node found");
+      return;
+    }
+
+    // Pick random destination
+    const platformNodes = Array.from(this.#navmesh.nodes.values()).filter(
+      (n) =>
+        (n.type === "platform_left" ||
+          n.type === "platform_right" ||
+          n.type === "platform_center") &&
+        n.id !== startNode.id
+    );
+
+    if (platformNodes.length === 0) {
+      console.warn("[Character] No destination nodes available");
+      return;
+    }
+
+    const destNode =
+      platformNodes[Math.floor(Math.random() * platformNodes.length)];
+
+    console.log(
+      `[Character] Planning path from ${startNode.id} to ${destNode.id}`
+    );
+
+    this.#path = findPath(this.#navmesh, startNode.id, destNode.id, {
+      heuristic: Heuristics.euclidean,
+      closest: true,
+    });
+
+    if (this.#path.length > 0) {
+      console.log(`[Character] Found path with ${this.#path.length} nodes`);
+      this.#pathIndex = 0;
+      this.#destinationNode = destNode.id;
+      this.state = "walking";
+    } else {
+      console.warn("[Character] No path found");
+    }
+  }
+
+  #findNearestNode(): NavNode | null {
+    const nodes = Array.from(this.#navmesh.nodes.values());
+    if (nodes.length === 0) return null;
+
+    let nearest: NavNode | null = null;
+    let minDist = Infinity;
+
+    for (const node of nodes) {
+      const dist = Math.hypot(node.pos.x - this.pos.x, node.pos.y - this.pos.y);
+      if (dist < minDist) {
+        minDist = dist;
+        nearest = node;
+      }
+    }
+
+    return nearest;
+  }
+
+  replaceNavmesh(
+    navmesh: Navmesh,
+    _windows: WindowGeometry[],
+    physicsWorld: PhysicsWorld
+  ): void {
+    this.#navmesh = navmesh;
+    this.#physicsWorld = physicsWorld;
+
+    // Physics world has been updated with new window colliders
+
+    // If we're currently following a path, replan
+    if (this.state === "walking" && this.#destinationNode) {
+      const startNode = this.#findNearestNode();
+      const destNode = navmesh.getNode(this.#destinationNode);
+
+      if (startNode && destNode) {
+        console.log("[Character] Replanning due to navmesh change");
+        this.#path = findPath(navmesh, startNode.id, destNode.id, {
+          heuristic: Heuristics.euclidean,
+          closest: true,
+        });
+        this.#pathIndex = 0;
+
+        if (this.#path.length === 0) {
+          console.warn("[Character] Replan failed, picking new destination");
+          this.#pickNewDestination();
+        }
+      } else {
+        console.warn("[Character] Destination lost, picking new destination");
+        this.#pickNewDestination();
+      }
+    }
+  }
+
+  getPath(): string[] {
+    return this.#path;
+  }
+
+  render(gizmos: Gizmos): void {
+    // Draw simple character: cube with legs
+    const size = CHARACTER_RADIUS;
+
+    // Body (cube)
+    gizmos.rect(this.pos.x - size / 2, this.pos.y - size, size, size, {
+      fill: "rgba(100, 150, 255, 0.9)",
+      stroke: "rgba(0, 0, 0, 0.8)",
+      strokeWidth: 2,
+    });
+
+    // Legs (simple lines)
+    const legWidth = 3;
+    const legHeight = size / 2;
+    gizmos.line(
+      { x: this.pos.x - size / 4, y: this.pos.y },
+      { x: this.pos.x - size / 4, y: this.pos.y + legHeight },
+      { stroke: "rgba(0, 0, 0, 0.8)", strokeWidth: legWidth }
+    );
+    gizmos.line(
+      { x: this.pos.x + size / 4, y: this.pos.y },
+      { x: this.pos.x + size / 4, y: this.pos.y + legHeight },
+      { stroke: "rgba(0, 0, 0, 0.8)", strokeWidth: legWidth }
+    );
+
+    // State indicator
+    gizmos.text(
+      this.state,
+      { x: this.pos.x, y: this.pos.y - size - 10 },
+      { fill: "white", fontSize: 12, textAnchor: "middle" }
+    );
+  }
+}
+
+// ============================================================================
 // Main Application
 // ============================================================================
 
@@ -1076,15 +1456,56 @@ class PetApp {
   #navmeshBuilder = new NavmeshBuilder();
   #overlayPid: number | null = null;
   #gizmos: Gizmos;
-  #currentPath: string[] = []; // Node IDs in the current path
+  #character: Character | null = null;
+  #physicsWorld: PhysicsWorld | null = null;
+  #lastTime = performance.now();
 
   constructor() {
     this.#axio = new AXIO();
     const debugLayer = document.getElementById("debug-layer") as any;
     this.#gizmos = new Gizmos(debugLayer);
 
+    this.#initPhysics();
     this.#setupAXIO();
     this.#setupPhysicsControls();
+    this.#startGameLoop();
+  }
+
+  async #initPhysics(): Promise<void> {
+    try {
+      // Load Rapier asynchronously
+      const RAPIER = await import("@dimforge/rapier2d");
+      this.#physicsWorld = new PhysicsWorld(RAPIER);
+      console.log("[NavDemo] Rapier physics initialized");
+    } catch (error) {
+      console.error("[NavDemo] Failed to initialize Rapier:", error);
+    }
+  }
+
+  #startGameLoop(): void {
+    const loop = (currentTime: number) => {
+      const deltaTime = currentTime - this.#lastTime;
+      this.#lastTime = currentTime;
+
+      // Step physics simulation
+      if (this.#physicsWorld) {
+        this.#physicsWorld.step(deltaTime);
+      }
+
+      // Update character
+      if (this.#character) {
+        this.#character.update(deltaTime);
+      }
+
+      // Render (only if we have a character to show)
+      if (this.#character) {
+        this.#render();
+      }
+
+      requestAnimationFrame(loop);
+    };
+
+    requestAnimationFrame(loop);
   }
 
   async #setupAXIO(): Promise<void> {
@@ -1111,8 +1532,8 @@ class PetApp {
 
         // Rebuild navmesh whenever windows change
         this.#rebuildNavmesh();
-        this.#render();
         this.#updateUI();
+        // Note: Rendering is handled by game loop
       });
 
       await this.#axio.setClickthrough(true);
@@ -1131,57 +1552,38 @@ class PetApp {
         this.#navmesh.edges.size
       } edges`
     );
-    this.#findRandomPath();
-  }
 
-  /**
-   * Pick two random nodes and find a path between them
-   */
-  #findRandomPath(): void {
-    const nodes = Array.from(this.#navmesh.nodes.values());
-    if (nodes.length < 2) {
-      this.#currentPath = [];
-      return;
+    // Update physics world with new window colliders
+    if (this.#physicsWorld) {
+      this.#physicsWorld.updateWindows(this.#windows);
     }
 
-    // Pick two random platform nodes (not landing nodes)
-    const platformNodes = nodes.filter(
-      (n) =>
-        n.type === "platform_left" ||
-        n.type === "platform_right" ||
-        n.type === "platform_center"
-    );
-
-    if (platformNodes.length < 2) {
-      this.#currentPath = [];
-      return;
+    // Create or update character
+    if (!this.#character && this.#physicsWorld) {
+      this.#character = new Character(
+        this.#navmesh,
+        this.#windows,
+        this.#physicsWorld
+      );
+      console.log("[NavDemo] Character spawned");
+    } else if (this.#character && this.#physicsWorld) {
+      this.#character.replaceNavmesh(
+        this.#navmesh,
+        this.#windows,
+        this.#physicsWorld
+      );
     }
-
-    const startNode =
-      platformNodes[Math.floor(Math.random() * platformNodes.length)];
-    let endNode: NavNode;
-    do {
-      endNode = platformNodes[Math.floor(Math.random() * platformNodes.length)];
-    } while (endNode.id === startNode.id);
-
-    console.log(`[NavDemo] Finding path from ${startNode.id} to ${endNode.id}`);
-
-    this.#currentPath = findPath(this.#navmesh, startNode.id, endNode.id, {
-      heuristic: Heuristics.euclidean,
-      closest: false,
-    });
-
-    console.log(
-      `[NavDemo] Path found with ${this.#currentPath.length} nodes:`,
-      this.#currentPath
-    );
   }
 
   #render(): void {
-    console.log("[NavDemo] Rendering...");
     this.#gizmos.clear();
     this.#renderWindowGeometry();
     this.#renderNavmesh();
+
+    // Render character on top
+    if (this.#character) {
+      this.#character.render(this.#gizmos);
+    }
   }
 
   #renderWindowGeometry(): void {
@@ -1309,32 +1711,33 @@ class PetApp {
       );
     }
 
-    // Draw path first (under nodes/edges)
-    if (this.#currentPath.length > 1) {
-      const pathNodes = this.#currentPath
-        .map((id) => this.#navmesh.getNode(id))
-        .filter((n): n is NavNode => n !== undefined);
+    // Draw character's path
+    if (this.#character) {
+      const characterPath = this.#character.getPath();
+      if (characterPath.length > 1) {
+        const pathNodes = characterPath
+          .map((id) => this.#navmesh.getNode(id))
+          .filter((n): n is NavNode => n !== undefined);
 
-      // Draw path segments
-      for (let i = 0; i < pathNodes.length - 1; i++) {
-        const from = pathNodes[i];
-        const to = pathNodes[i + 1];
-        this.#gizmos.line(from.pos, to.pos, {
-          stroke: "rgba(255, 100, 255, 0.6)",
-          strokeWidth: 8,
-        });
-      }
+        // Draw path segments
+        for (let i = 0; i < pathNodes.length - 1; i++) {
+          const from = pathNodes[i];
+          const to = pathNodes[i + 1];
+          this.#gizmos.line(from.pos, to.pos, {
+            stroke: "rgba(255, 100, 255, 0.6)",
+            strokeWidth: 4,
+          });
+        }
 
-      // Highlight start and end
-      if (pathNodes.length > 0) {
-        const start = pathNodes[0];
-        const end = pathNodes[pathNodes.length - 1];
-        this.#gizmos.circle(start.pos, CHARACTER_RADIUS * 1.5, {
-          fill: "rgba(0, 255, 0, 0.5)",
-        });
-        this.#gizmos.circle(end.pos, CHARACTER_RADIUS * 1.5, {
-          fill: "rgba(255, 0, 0, 0.5)",
-        });
+        // Highlight destination
+        if (pathNodes.length > 0) {
+          const end = pathNodes[pathNodes.length - 1];
+          this.#gizmos.circle(end.pos, CHARACTER_RADIUS * 1.2, {
+            fill: "rgba(255, 0, 0, 0.4)",
+            stroke: "rgba(255, 0, 0, 0.8)",
+            strokeWidth: 2,
+          });
+        }
       }
     }
 
@@ -1475,7 +1878,6 @@ class PetApp {
       distSlider.addEventListener("input", (e) => {
         MAX_JUMP_DISTANCE = parseInt((e.target as HTMLInputElement).value);
         this.#rebuildNavmesh();
-        this.#render();
         this.#updateUI();
       });
     }
@@ -1485,7 +1887,6 @@ class PetApp {
       heightSlider.addEventListener("input", (e) => {
         JUMP_ARC_HEIGHT = parseInt((e.target as HTMLInputElement).value);
         this.#rebuildNavmesh();
-        this.#render();
         this.#updateUI();
       });
     }
