@@ -1,6 +1,5 @@
 import { AXIO, AXNode } from "./axio.js";
 import { Gizmos } from "./gizmos.js";
-import { findPath, Heuristics } from "./astar.js";
 
 // ============================================================================
 // Geometry Types
@@ -19,9 +18,32 @@ interface WindowGeometry {
   height: number;
 }
 
-// Character size constants
-const CHARACTER_RADIUS = 32; // Half of character width (64px total)
-const MIN_PLATFORM_WIDTH = 1; // Minimum walkable space (1 pixel)
+// ============================================================================
+// Physics Constants
+// ============================================================================
+
+// Physics units: pixels (no conversion needed, Rapier works directly in pixels)
+const GRAVITY = { x: 0.0, y: 980.0 }; // Pixels per second^2 (doubled for less floaty)
+const CHARACTER_RADIUS = 25; // 50x50 circle (25px radius)
+const MIN_PLATFORM_WIDTH = 1;
+
+// Character movement constants
+const CHARACTER = {
+  up: { x: 0.0, y: -1.0 },
+  additionalMass: 20,
+  maxSlopeClimbAngle: (45 * Math.PI) / 180,
+  slideEnabled: true,
+  minSlopeSlideAngle: (30 * Math.PI) / 180,
+  applyImpulsesToDynamicBodies: true,
+  autostepHeight: 20, // Increased for better step climbing
+  autostepMaxClimbAngle: (60 * Math.PI) / 180, // More lenient angle
+  snapToGroundDistance: 10, // Increased to stick to ground better
+  maxMoveSpeedX: 200, // pixels/sec
+  moveAcceleration: 1200, // pixels/sec^2
+  moveDeceleration: 800, // pixels/sec^2
+  jumpVelocity: 350, // Reduced for less floaty jump
+  gravityMultiplier: 1,
+};
 
 // Jump parameters (arcade-style, mutable for UI controls)
 let MAX_JUMP_DISTANCE = 200; // Maximum horizontal jump distance in pixels
@@ -1073,11 +1095,11 @@ class PhysicsWorld {
   #RAPIER: any;
   #world: any;
   #windowColliders: Map<string, any> = new Map();
+  #windowPositions: Map<string, { x: number; y: number }> = new Map();
 
   constructor(RAPIER: any) {
     this.#RAPIER = RAPIER;
-    const gravity = { x: 0.0, y: 500.0 }; // Positive Y is down in our coordinate system
-    this.#world = new RAPIER.World(gravity);
+    this.#world = new RAPIER.World(GRAVITY);
   }
 
   getWorld(): any {
@@ -1089,334 +1111,315 @@ class PhysicsWorld {
   }
 
   step(deltaTime: number): void {
-    // Rapier expects deltaTime in seconds
-    this.#world.timestep = Math.min(deltaTime / 1000, 0.1);
-    this.#world.step();
+    try {
+      // Rapier expects deltaTime in seconds
+      // Clamp timestep to prevent instability
+      this.#world.timestep = Math.max(0.001, Math.min(deltaTime / 1000, 0.033)); // 1ms to 33ms
+      this.#world.step();
+    } catch (error) {
+      console.error("[Physics] Error during physics step:", error);
+      // Don't rethrow - let the game continue
+    }
   }
 
   updateWindows(windows: WindowGeometry[]): void {
-    // Remove old window colliders
-    for (const collider of this.#windowColliders.values()) {
-      this.#world.removeCollider(collider, false);
-    }
-    this.#windowColliders.clear();
+    // Update existing window positions or create new ones
+    const seenWindows = new Set<string>();
 
-    // Create new window colliders (static platforms)
     for (const win of windows) {
-      const colliderDesc = this.#RAPIER.ColliderDesc.cuboid(
-        win.width / 2,
-        win.height / 2
-      ).setTranslation(win.x + win.width / 2, win.y + win.height / 2);
+      seenWindows.add(win.id);
+      const existingCollider = this.#windowColliders.get(win.id);
+      const newPos = { x: win.x + win.width / 2, y: win.y + win.height / 2 };
 
-      const collider = this.#world.createCollider(colliderDesc);
-      this.#windowColliders.set(win.id, collider);
+      if (existingCollider) {
+        try {
+          // Update collider position and size directly
+          existingCollider.setTranslation(newPos);
+          existingCollider.setHalfExtents({
+            x: win.width / 2,
+            y: win.height / 2,
+          });
+
+          this.#windowPositions.set(win.id, newPos);
+        } catch (error) {
+          console.error(`[Physics] Error updating window ${win.id}:`, error);
+        }
+      } else {
+        try {
+          // Create static collider (windows are immovable obstacles from character POV)
+          const colliderDesc = this.#RAPIER.ColliderDesc.cuboid(
+            win.width / 2,
+            win.height / 2
+          )
+            .setTranslation(newPos.x, newPos.y)
+            .setFriction(1.0) // High friction on platforms
+            .setRestitution(0.0); // No bounce to prevent jitter
+
+          const collider = this.#world.createCollider(colliderDesc);
+
+          this.#windowColliders.set(win.id, collider);
+          this.#windowPositions.set(win.id, newPos);
+
+          console.log(
+            `[Physics] Created window collider: ${win.id} at (${Math.round(
+              newPos.x
+            )}, ${Math.round(newPos.y)})`
+          );
+        } catch (error) {
+          console.error(`[Physics] Error creating window ${win.id}:`, error);
+        }
+      }
+    }
+
+    // Remove windows that no longer exist
+    for (const [id, collider] of this.#windowColliders.entries()) {
+      if (!seenWindows.has(id)) {
+        try {
+          this.#world.removeCollider(collider, true);
+          this.#windowColliders.delete(id);
+          this.#windowPositions.delete(id);
+          console.log(`[Physics] Removed window collider: ${id}`);
+        } catch (error) {
+          console.error(`[Physics] Error removing window ${id}:`, error);
+        }
+      }
     }
   }
 
-  createCharacterRigidBody(pos: Vec2): any {
-    const rigidBodyDesc = this.#RAPIER.RigidBodyDesc.dynamic()
+  createCharacterController(offset: number): any {
+    // Create character controller with small offset for collision margin
+    return this.#world.createCharacterController(offset);
+  }
+
+  createCharacterBody(pos: Vec2): { rigidBody: any; collider: any } {
+    // Create kinematic position-based rigid body
+    const rigidBodyDesc = this.#RAPIER.RigidBodyDesc.kinematicPositionBased()
       .setTranslation(pos.x, pos.y)
-      .setLinearDamping(2.0) // Air resistance
-      .setCanSleep(false); // Always active for responsive controls
+      .setAdditionalMass(CHARACTER.additionalMass)
+      .lockRotations();
 
     const rigidBody = this.#world.createRigidBody(rigidBodyDesc);
 
-    // Create character collider (circle)
+    // Create ball collider (circle character)
+    // Lower friction to prevent catching on edges
     const colliderDesc = this.#RAPIER.ColliderDesc.ball(CHARACTER_RADIUS)
-      .setRestitution(0.0) // No bounciness
-      .setFriction(0.5);
+      .setRestitution(0.0) // No bounce to prevent jitter
+      .setFriction(0.3); // Lower friction to slide smoothly over edges
 
-    this.#world.createCollider(colliderDesc, rigidBody);
+    const collider = this.#world.createCollider(colliderDesc, rigidBody);
 
-    return rigidBody;
+    return { rigidBody, collider };
   }
 }
 
 // ============================================================================
-// Character
+// Player-Controlled Character (using Rapier Character Controller)
 // ============================================================================
-
-type CharacterState = "idle" | "walking" | "jumping" | "falling" | "hanging";
 
 class Character {
   pos: Vec2;
-  velocity: Vec2 = { x: 0, y: 0 };
-  state: CharacterState = "idle";
+  velocity: Vec2 = { x: 0, y: 0 }; // Track velocity for physics (pixels/sec)
 
-  #path: string[] = []; // Current path (node IDs)
-  #pathIndex: number = 0; // Current target node in path
-  #destinationNode: string | null = null;
-
-  #navmesh: Navmesh;
-  #physicsWorld: PhysicsWorld;
   #rigidBody: any;
+  #collider: any;
+  #characterController: any;
 
-  // Movement constants
-  #walkSpeed = 200; // Pixels per second
-  #maxSpeed = 250;
+  // Input state
+  #keys: Set<string> = new Set();
 
-  // Timers
-  #idleTimer = 0;
-  #idleDelay = 2000; // ms before picking new destination
-
-  constructor(
-    navmesh: Navmesh,
-    _windows: WindowGeometry[],
-    physicsWorld: PhysicsWorld
-  ) {
-    this.#navmesh = navmesh;
-    this.#physicsWorld = physicsWorld;
-
-    // Start at a random platform node
-    const spawnPos = this.#getRandomSpawnPosition();
+  constructor(physicsWorld: PhysicsWorld, spawnPos: Vec2) {
     this.pos = spawnPos;
 
-    // Create physics rigid body
-    this.#rigidBody = physicsWorld.createCharacterRigidBody(spawnPos);
-  }
+    // Create character controller with smaller offset to reduce jitter
+    const controller = physicsWorld.createCharacterController(0.01);
+    this.#characterController = controller;
 
-  #getRandomSpawnPosition(): Vec2 {
-    const platformNodes = Array.from(this.#navmesh.nodes.values()).filter(
-      (n) =>
-        n.type === "platform_left" ||
-        n.type === "platform_right" ||
-        n.type === "platform_center"
+    // Configure character controller (exactly like the working implementation)
+    controller.setUp(CHARACTER.up);
+    controller.setMaxSlopeClimbAngle(CHARACTER.maxSlopeClimbAngle);
+    controller.setSlideEnabled(CHARACTER.slideEnabled);
+    controller.setMinSlopeSlideAngle(CHARACTER.minSlopeSlideAngle);
+    controller.setApplyImpulsesToDynamicBodies(
+      CHARACTER.applyImpulsesToDynamicBodies
     );
+    controller.enableAutostep(
+      CHARACTER.autostepHeight,
+      CHARACTER.autostepMaxClimbAngle,
+      true
+    );
+    controller.enableSnapToGround(CHARACTER.snapToGroundDistance);
 
-    if (platformNodes.length === 0) {
-      return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
-    }
+    // Create kinematic rigid body for the character
+    const { rigidBody, collider } = physicsWorld.createCharacterBody(spawnPos);
+    this.#rigidBody = rigidBody;
+    this.#collider = collider;
 
-    const node =
-      platformNodes[Math.floor(Math.random() * platformNodes.length)];
-    return { ...node.pos };
+    // Setup keyboard input
+    this.#setupInput();
   }
 
-  update(deltaTime: number): void {
-    // Sync position from physics
+  #setupInput(): void {
+    window.addEventListener("keydown", (e) => {
+      this.#keys.add(e.key.toLowerCase());
+    });
+
+    window.addEventListener("keyup", (e) => {
+      this.#keys.delete(e.key.toLowerCase());
+    });
+  }
+
+  update(_deltaTime: number): void {
+    // Fixed timestep (like the reference implementation)
+    const timeStep = 1 / 60;
+
+    // Get current position
     const translation = this.#rigidBody.translation();
     this.pos = { x: translation.x, y: translation.y };
 
-    const linvel = this.#rigidBody.linvel();
-    this.velocity = { x: linvel.x, y: linvel.y };
-
-    // Update state based on physics
-    this.#updateState();
-
-    // Update behavior
-    switch (this.state) {
-      case "idle":
-        this.#updateIdle(deltaTime);
-        break;
-      case "walking":
-        this.#updateWalking(deltaTime);
-        break;
-      case "jumping":
-      case "falling":
-        this.#updateAirborne(deltaTime);
-        break;
-    }
-  }
-
-  #updateState(): void {
-    const onGround = this.#isOnGround();
-
-    if (onGround) {
-      if (this.state === "falling" || this.state === "jumping") {
-        this.state = "idle";
-      }
-    } else {
-      if (this.state === "walking" || this.state === "idle") {
-        this.state = "falling";
-      }
-    }
-  }
-
-  #isOnGround(): boolean {
-    // Check if character is touching ground using Rapier's collision detection
-    const world = this.#physicsWorld.getWorld();
-    const RAPIER = this.#physicsWorld.getRAPIER();
-
-    // Cast a small ray downward to detect ground
-    const rayOrigin = { x: this.pos.x, y: this.pos.y };
-    const rayDir = { x: 0, y: 1 };
-    const maxToi = CHARACTER_RADIUS + 5; // Slightly beyond character radius
-
-    const ray = new RAPIER.Ray(rayOrigin, rayDir);
-    const hit = world.castRay(ray, maxToi, false);
-
-    return hit !== null;
-  }
-
-  #updateIdle(deltaTime: number): void {
-    // Stop horizontal movement
-    this.#rigidBody.setLinvel({ x: 0, y: this.velocity.y }, true);
-
-    this.#idleTimer += deltaTime;
-    if (this.#idleTimer >= this.#idleDelay) {
-      this.#idleTimer = 0;
-      this.#pickNewDestination();
-    }
-  }
-
-  #updateWalking(_deltaTime: number): void {
-    if (this.#path.length === 0 || this.#pathIndex >= this.#path.length) {
-      // Reached destination
-      this.state = "idle";
-      this.#rigidBody.setLinvel({ x: 0, y: this.velocity.y }, true);
-      this.#path = [];
-      this.#pathIndex = 0;
+    // Check if character fell off screen
+    if (this.#shouldRespawn()) {
+      this.#respawn();
       return;
     }
 
-    const targetNodeId = this.#path[this.#pathIndex];
-    const targetNode = this.#navmesh.getNode(targetNodeId);
+    // Check if grounded BEFORE movement (like reference)
+    const grounded = this.#characterController.computedGrounded();
 
-    if (!targetNode) {
-      console.warn(
-        `[Character] Target node ${targetNodeId} not found, replanning...`
-      );
-      this.#pickNewDestination();
-      return;
-    }
+    // Calculate input acceleration
+    const right = this.#keys.has("d") || this.#keys.has("arrowright") ? 1 : 0;
+    const left = this.#keys.has("a") || this.#keys.has("arrowleft") ? -1 : 0;
+    const acceleration = {
+      x: (right + left) * CHARACTER.moveAcceleration,
+      y: CHARACTER.gravityMultiplier * GRAVITY.y,
+    };
 
-    // Move towards target node
-    const dx = targetNode.pos.x - this.pos.x;
-    const distToTarget = Math.abs(dx);
+    // Check for jump
+    const isJumping =
+      (this.#keys.has("w") ||
+        this.#keys.has(" ") ||
+        this.#keys.has("arrowup")) &&
+      grounded;
 
-    if (distToTarget < 15) {
-      // Reached this waypoint, move to next
-      this.#pathIndex++;
-      if (this.#pathIndex >= this.#path.length) {
-        this.state = "idle";
-        this.#rigidBody.setLinvel({ x: 0, y: this.velocity.y }, true);
-      }
-    } else {
-      // Apply force towards target
-      const direction = dx > 0 ? 1 : -1;
-      const targetVelX = direction * this.#walkSpeed;
+    // Get current velocity from rigidbody
+    const currentVel = this.#rigidBody.linvel();
+    const velocity = {
+      x: currentVel.x,
+      y: isJumping ? -CHARACTER.jumpVelocity : currentVel.y,
+    };
 
-      // Clamp speed
-      const clampedVelX = Math.max(
-        -this.#maxSpeed,
-        Math.min(this.#maxSpeed, targetVelX)
-      );
-
-      this.#rigidBody.setLinvel({ x: clampedVelX, y: this.velocity.y }, true);
-    }
-  }
-
-  #updateAirborne(_deltaTime: number): void {
-    // Maintain some horizontal control in air
-    // Physics handles gravity automatically
-  }
-
-  #pickNewDestination(): void {
-    // Find nearest node to current position
-    const startNode = this.#findNearestNode();
-    if (!startNode) {
-      console.warn("[Character] No valid start node found");
-      return;
-    }
-
-    // Pick random destination
-    const platformNodes = Array.from(this.#navmesh.nodes.values()).filter(
-      (n) =>
-        (n.type === "platform_left" ||
-          n.type === "platform_right" ||
-          n.type === "platform_center") &&
-        n.id !== startNode.id
+    // Calculate displacement using proper physics (like reference)
+    const displacement = this.#getDisplacement(
+      velocity,
+      acceleration,
+      timeStep,
+      CHARACTER.maxMoveSpeedX,
+      CHARACTER.moveDeceleration
     );
 
-    if (platformNodes.length === 0) {
-      console.warn("[Character] No destination nodes available");
-      return;
-    }
-
-    const destNode =
-      platformNodes[Math.floor(Math.random() * platformNodes.length)];
-
-    console.log(
-      `[Character] Planning path from ${startNode.id} to ${destNode.id}`
+    // Compute collision-aware movement
+    this.#characterController.computeColliderMovement(
+      this.#collider,
+      displacement
     );
 
-    this.#path = findPath(this.#navmesh, startNode.id, destNode.id, {
-      heuristic: Heuristics.euclidean,
-      closest: true,
-    });
+    // Get corrected displacement
+    const correctedDisplacement = this.#characterController.computedMovement();
 
-    if (this.#path.length > 0) {
-      console.log(`[Character] Found path with ${this.#path.length} nodes`);
-      this.#pathIndex = 0;
-      this.#destinationNode = destNode.id;
-      this.state = "walking";
-    } else {
-      console.warn("[Character] No path found");
-    }
+    // Apply to kinematic body
+    const nextX = translation.x + correctedDisplacement.x;
+    const nextY = translation.y + correctedDisplacement.y;
+    this.#rigidBody.setNextKinematicTranslation({ x: nextX, y: nextY });
+
+    // Update velocity for next frame
+    this.velocity = {
+      x: velocity.x + acceleration.x * timeStep,
+      y: velocity.y + acceleration.y * timeStep,
+    };
+
+    // Store velocity in rigidbody for next frame
+    this.#rigidBody.setLinvel(this.velocity, true);
   }
 
-  #findNearestNode(): NavNode | null {
-    const nodes = Array.from(this.#navmesh.nodes.values());
-    if (nodes.length === 0) return null;
+  // Displacement calculation (from reference implementation)
+  #getDisplacement(
+    velocity: Vec2,
+    acceleration: Vec2,
+    timeStep: number,
+    speedLimitX: number,
+    decelerationX: number
+  ): Vec2 {
+    let newVelocityX =
+      acceleration.x === 0 && velocity.x !== 0
+        ? Math.max(Math.abs(velocity.x) - decelerationX * timeStep, 0) *
+          Math.sign(velocity.x)
+        : velocity.x + acceleration.x * timeStep;
 
-    let nearest: NavNode | null = null;
-    let minDist = Infinity;
+    newVelocityX =
+      Math.min(Math.abs(newVelocityX), speedLimitX) * Math.sign(newVelocityX);
 
-    for (const node of nodes) {
-      const dist = Math.hypot(node.pos.x - this.pos.x, node.pos.y - this.pos.y);
-      if (dist < minDist) {
-        minDist = dist;
-        nearest = node;
-      }
-    }
+    const averageVelocityX = (velocity.x + newVelocityX) / 2;
+    const x = averageVelocityX * timeStep;
+    const y = velocity.y * timeStep + 0.5 * acceleration.y * timeStep ** 2;
 
-    return nearest;
+    return { x, y };
   }
 
-  replaceNavmesh(
-    navmesh: Navmesh,
-    _windows: WindowGeometry[],
-    physicsWorld: PhysicsWorld
-  ): void {
-    this.#navmesh = navmesh;
-    this.#physicsWorld = physicsWorld;
-
-    // Physics world has been updated with new window colliders
-
-    // If we're currently following a path, replan
-    if (this.state === "walking" && this.#destinationNode) {
-      const startNode = this.#findNearestNode();
-      const destNode = navmesh.getNode(this.#destinationNode);
-
-      if (startNode && destNode) {
-        console.log("[Character] Replanning due to navmesh change");
-        this.#path = findPath(navmesh, startNode.id, destNode.id, {
-          heuristic: Heuristics.euclidean,
-          closest: true,
-        });
-        this.#pathIndex = 0;
-
-        if (this.#path.length === 0) {
-          console.warn("[Character] Replan failed, picking new destination");
-          this.#pickNewDestination();
-        }
-      } else {
-        console.warn("[Character] Destination lost, picking new destination");
-        this.#pickNewDestination();
-      }
+  #shouldRespawn(): boolean {
+    // Fell off the screen
+    if (
+      this.pos.y > window.innerHeight + 200 ||
+      this.pos.x < -200 ||
+      this.pos.x > window.innerWidth + 200 ||
+      this.pos.y < -200
+    ) {
+      console.log("[Character] Fell off screen, respawning...");
+      return true;
     }
+    return false;
   }
 
-  getPath(): string[] {
-    return this.#path;
+  #respawn(): void {
+    console.log("[Character] 🔄 Respawning at center...");
+
+    // Respawn at center-top of screen
+    const spawnPos = { x: window.innerWidth / 2, y: 100 };
+
+    // Reset physics
+    this.#rigidBody.setNextKinematicTranslation(spawnPos);
+
+    // Reset state
+    this.pos = spawnPos;
+    this.velocity = { x: 0, y: 0 };
   }
 
   render(gizmos: Gizmos): void {
     // Draw simple character: cube with legs
     const size = CHARACTER_RADIUS;
+    const feetY = this.pos.y + CHARACTER_RADIUS; // Bottom of physics circle
 
-    // Body (cube)
-    gizmos.rect(this.pos.x - size / 2, this.pos.y - size, size, size, {
+    // DEBUG: Draw physics collider (circle)
+    gizmos.circle(this.pos, CHARACTER_RADIUS, {
+      fill: "none",
+      stroke: "rgba(255, 0, 255, 0.5)",
+      strokeWidth: 2,
+      strokeDasharray: "5,5",
+    });
+
+    // DEBUG: Draw velocity vector (scaled to be visible)
+    if (Math.abs(this.velocity.x) > 1 || Math.abs(this.velocity.y) > 1) {
+      const velScale = 0.2; // Scale for visibility
+      const velEnd = {
+        x: this.pos.x + this.velocity.x * velScale,
+        y: this.pos.y + this.velocity.y * velScale,
+      };
+      gizmos.line(this.pos, velEnd, {
+        stroke: "rgba(255, 255, 0, 0.8)",
+        strokeWidth: 3,
+      });
+    }
+
+    // Body (cube) - positioned so bottom aligns with physics circle bottom
+    gizmos.rect(this.pos.x - size / 2, feetY - size, size, size, {
       fill: "rgba(100, 150, 255, 0.9)",
       stroke: "rgba(0, 0, 0, 0.8)",
       strokeWidth: 2,
@@ -1424,22 +1427,35 @@ class Character {
 
     // Legs (simple lines)
     const legWidth = 3;
-    const legHeight = size / 2;
+    const legHeight = size / 3;
     gizmos.line(
-      { x: this.pos.x - size / 4, y: this.pos.y },
-      { x: this.pos.x - size / 4, y: this.pos.y + legHeight },
+      { x: this.pos.x - size / 4, y: feetY },
+      { x: this.pos.x - size / 4, y: feetY + legHeight },
       { stroke: "rgba(0, 0, 0, 0.8)", strokeWidth: legWidth }
     );
     gizmos.line(
-      { x: this.pos.x + size / 4, y: this.pos.y },
-      { x: this.pos.x + size / 4, y: this.pos.y + legHeight },
+      { x: this.pos.x + size / 4, y: feetY },
+      { x: this.pos.x + size / 4, y: feetY + legHeight },
       { stroke: "rgba(0, 0, 0, 0.8)", strokeWidth: legWidth }
     );
 
-    // State indicator
+    // Controls hint
+    const grounded = this.#characterController.computedGrounded();
+    const stateText = grounded ? "WASD/Arrows: Move & Jump" : "In Air";
+
+    // Background for text
+    const textWidth = stateText.length * 7;
+    gizmos.rect(
+      this.pos.x - textWidth / 2,
+      this.pos.y - size - 40,
+      textWidth,
+      16,
+      { fill: "rgba(0, 0, 0, 0.7)", stroke: "none" }
+    );
+
     gizmos.text(
-      this.state,
-      { x: this.pos.x, y: this.pos.y - size - 10 },
+      stateText,
+      { x: this.pos.x, y: this.pos.y - size - 28 },
       { fill: "white", fontSize: 12, textAnchor: "middle" }
     );
   }
@@ -1459,6 +1475,7 @@ class PetApp {
   #character: Character | null = null;
   #physicsWorld: PhysicsWorld | null = null;
   #lastTime = performance.now();
+  #cursorPos: Vec2 = { x: 0, y: 0 };
 
   constructor() {
     this.#axio = new AXIO();
@@ -1530,16 +1547,47 @@ class PetApp {
             height: w.bounds!.size.height,
           }));
 
-        // Rebuild navmesh whenever windows change
+        // UPDATE PHYSICS FIRST before anything else!
+        if (this.#physicsWorld) {
+          this.#physicsWorld.updateWindows(this.#windows);
+        }
+
+        // Then rebuild navmesh (which depends on correct physics)
         this.#rebuildNavmesh();
         this.#updateUI();
+        this.#updateCursorPassthrough();
         // Note: Rendering is handled by game loop
+      });
+
+      // Track global cursor position for passthrough logic
+      this.#axio.onMousePosition((x, y) => {
+        this.#cursorPos = { x, y };
+        this.#updateCursorPassthrough();
       });
 
       await this.#axio.setClickthrough(true);
     } catch (error) {
       console.error("[NavDemo] Failed to connect:", error);
     }
+  }
+
+  #updateCursorPassthrough(): void {
+    // Check if cursor is over any window
+    let overWindow = false;
+    for (const win of this.#windows) {
+      if (
+        this.#cursorPos.x >= win.x &&
+        this.#cursorPos.x <= win.x + win.width &&
+        this.#cursorPos.y >= win.y &&
+        this.#cursorPos.y <= win.y + win.height
+      ) {
+        overWindow = true;
+        break;
+      }
+    }
+
+    // Set clickthrough based on whether we're over a window
+    this.#axio.setClickthrough(overWindow);
   }
 
   #rebuildNavmesh(): void {
@@ -1553,24 +1601,14 @@ class PetApp {
       } edges`
     );
 
-    // Update physics world with new window colliders
-    if (this.#physicsWorld) {
-      this.#physicsWorld.updateWindows(this.#windows);
-    }
+    // Physics world already updated in onWindowUpdate - don't update again!
 
-    // Create or update character
+    // Create character if it doesn't exist
     if (!this.#character && this.#physicsWorld) {
-      this.#character = new Character(
-        this.#navmesh,
-        this.#windows,
-        this.#physicsWorld
-      );
-      console.log("[NavDemo] Character spawned");
-    } else if (this.#character && this.#physicsWorld) {
-      this.#character.replaceNavmesh(
-        this.#navmesh,
-        this.#windows,
-        this.#physicsWorld
+      const spawnPos = { x: window.innerWidth / 2, y: 100 };
+      this.#character = new Character(this.#physicsWorld, spawnPos);
+      console.log(
+        "[Player] Character spawned - use WASD or Arrow keys to move!"
       );
     }
   }
@@ -1711,37 +1749,9 @@ class PetApp {
       );
     }
 
-    // Draw character's path
-    if (this.#character) {
-      const characterPath = this.#character.getPath();
-      if (characterPath.length > 1) {
-        const pathNodes = characterPath
-          .map((id) => this.#navmesh.getNode(id))
-          .filter((n): n is NavNode => n !== undefined);
+    // No path visualization needed for player control
 
-        // Draw path segments
-        for (let i = 0; i < pathNodes.length - 1; i++) {
-          const from = pathNodes[i];
-          const to = pathNodes[i + 1];
-          this.#gizmos.line(from.pos, to.pos, {
-            stroke: "rgba(255, 100, 255, 0.6)",
-            strokeWidth: 4,
-          });
-        }
-
-        // Highlight destination
-        if (pathNodes.length > 0) {
-          const end = pathNodes[pathNodes.length - 1];
-          this.#gizmos.circle(end.pos, CHARACTER_RADIUS * 1.2, {
-            fill: "rgba(255, 0, 0, 0.4)",
-            stroke: "rgba(255, 0, 0, 0.8)",
-            strokeWidth: 2,
-          });
-        }
-      }
-    }
-
-    // Draw nodes
+    // Draw nodes (commented out for now)
     for (const node of this.#navmesh.nodes.values()) {
       const color = nodeColors[node.type];
       this.#gizmos.circle(node.pos, 6, {
