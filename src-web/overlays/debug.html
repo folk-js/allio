@@ -4,7 +4,6 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Window Overlay</title>
     <style>
       * {
         margin: 0;
@@ -17,94 +16,43 @@
         height: 100vh;
         overflow: hidden;
         background: transparent;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          sans-serif;
       }
 
-      #outline {
+      #window-list {
         position: fixed;
-        border: 3px solid #ff0000;
-        background: transparent;
-        pointer-events: none;
-        opacity: 0.8;
-        box-sizing: border-box;
-        display: none;
-        z-index: 9999;
-        transition: none; /* Remove any transitions for immediate updates */
-      }
-
-      #app-sidebar {
-        position: fixed;
-        top: 50px;
+        top: 38px; /* macOS menu bar height */
         left: 10px;
-        background: rgba(0, 0, 0, 0.9);
-        color: white;
-        padding: 15px;
-        border-radius: 5px;
-        font-family: sans-serif;
+        width: 500px;
+        max-height: calc(100vh - 48px);
+        background: rgba(0, 0, 0, 0.85);
+        color: #ccc;
+        padding: 10px;
+        border-radius: 4px;
+        overflow-y: auto;
+        z-index: 10000;
         pointer-events: auto;
-        width: 280px;
-        height: calc(100vh - 60px);
-        overflow-y: auto;
-        z-index: 10000;
-        font-size: 12px;
-      }
-
-      #app-sidebar h3 {
-        color: #4caf50;
-        margin-bottom: 15px;
-        border-bottom: 1px solid #333;
-        padding-bottom: 5px;
-      }
-
-      #info {
-        position: fixed;
-        top: 50px;
-        right: 10px;
-        background: rgba(0, 0, 0, 0.8);
-        color: white;
-        padding: 10px;
-        border-radius: 5px;
+        font-family: "Monaco", "Menlo", monospace;
         font-size: 11px;
-        font-family: monospace;
-        pointer-events: none;
-        width: 250px;
-        z-index: 10000;
+        line-height: 1.5;
       }
 
-      #ui-tree {
-        position: fixed;
-        top: 50px;
-        left: 300px;
-        background: rgba(0, 0, 0, 0.9);
-        color: white;
-        padding: 10px;
-        border-radius: 5px;
-        font-family: monospace;
-        pointer-events: none;
-        width: calc((100vw - 570px) / 2);
-        height: calc(100vh - 60px);
-        overflow-y: auto;
-        z-index: 10000;
-        font-size: 10px;
-        line-height: 14px;
-        white-space: pre-wrap;
+      .window-item {
+        margin-bottom: 12px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      .window-item:last-child {
+        border-bottom: none;
       }
     </style>
   </head>
 
   <body>
-    <div id="outline"></div>
-    <div id="app-sidebar">
-      <h3>📱 Open Apps</h3>
-      <div id="app-list"></div>
-    </div>
-    <div id="info">
-      <div>Cmd+Shift+P: toggle sand</div>
-      <div>Cmd+Shift+E: toggle clickthrough</div>
-      <div id="window-details"></div>
-    </div>
-    <div id="ui-tree">
-      <div id="tree-status">Select an app to view its accessibility tree</div>
-      <div id="tree-content"></div>
+    <div id="window-list">
+      <div id="windows"></div>
     </div>
     <script type="module" src="../src/debug.ts"></script>
   </body>

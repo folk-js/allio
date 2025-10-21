@@ -124,7 +124,7 @@ export interface AXNode {
   readonly selected?: boolean;
 
   // Geometry (optional, not all nodes have screen position)
-  readonly bounds?: Bounds;
+  readonly bounds: Bounds;
 
   // Tree structure
   readonly children_count: number; // Total number of children (whether loaded or not)

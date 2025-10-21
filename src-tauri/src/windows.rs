@@ -24,13 +24,15 @@ const POLLING_INTERVAL_MS: u64 = 8; // ~120 FPS - fast enough for smooth trackin
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct WindowInfo {
     pub id: String,
-    pub name: String,
+    pub app_name: String,
+    pub title: String,
     pub x: i32,
     pub y: i32,
     pub w: i32,
     pub h: i32,
     pub focused: bool,
     pub process_id: u32,
+    pub fullscreen: bool,
 }
 
 // Convert x-win WindowInfo to our WindowInfo struct
@@ -38,35 +40,16 @@ impl WindowInfo {
     fn from_x_win(window: &x_win::WindowInfo, focused: bool) -> Self {
         WindowInfo {
             id: window.id.to_string(),
-            name: window.title.clone(),
+            app_name: window.info.name.clone(),
+            title: window.title.clone(),
             x: window.position.x,
             y: window.position.y,
             w: window.position.width,
             h: window.position.height,
             focused,
             process_id: window.info.process_id,
+            fullscreen: window.position.is_full_screen,
         }
-    }
-
-    /// Check if window is fullscreen (covers entire screen with no chrome)
-    ///
-    /// NOTE: We currently filter out ALL fullscreen windows to avoid issues with
-    /// screenshot/recording UIs. This might need to change in the future if we want
-    /// to support overlays on fullscreen apps (games, videos, etc).
-    #[cfg(target_os = "macos")]
-    fn is_fullscreen(&self) -> bool {
-        let (screen_width, screen_height) = get_main_screen_dimensions();
-
-        // Check if window covers the entire screen exactly
-        self.x == 0
-            && self.y == 0
-            && (self.w as f64) == screen_width
-            && (self.h as f64) == screen_height
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    fn is_fullscreen(&self) -> bool {
-        false
     }
 }
 
@@ -93,19 +76,35 @@ impl WindowInfo {
             .map(|children_array| children_array.len() as usize)
             .unwrap_or(0);
 
+        // Build description with app name and fullscreen status
+        let description = {
+            let mut desc_parts = vec![];
+            if !self.app_name.is_empty() {
+                desc_parts.push(format!("app={}", self.app_name));
+            }
+            if self.fullscreen {
+                desc_parts.push("fullscreen=true".to_string());
+            }
+            if desc_parts.is_empty() {
+                None
+            } else {
+                Some(desc_parts.join(";"))
+            }
+        };
+
         Some(AXNode {
             pid: self.process_id,
             path: vec![], // Windows are root nodes (empty path)
             id: self.id.clone(),
             role: AXRole::Window,
             subrole: None,
-            title: if !self.name.is_empty() {
-                Some(self.name.clone())
+            title: if !self.title.is_empty() {
+                Some(self.title.clone())
             } else {
                 None
             },
             value: None,
-            description: None,
+            description,
             placeholder: None,
             focused: self.focused,
             enabled: true, // Windows are always enabled
@@ -250,7 +249,9 @@ pub fn get_all_windows_with_focus() -> Vec<WindowInfo> {
         .map(|w| (w.position.x, w.position.y))
         .unwrap_or((0, 0));
 
-    // Convert all windows, excluding our overlay, filtered apps, and fullscreen windows
+    // Convert all windows, excluding our overlay and filtered apps
+    // NOTE: We NO LONGER filter out fullscreen windows - pass that info to frontend
+    // NOTE: Coordinates are relative to the overlay window position
     all_windows
         .iter()
         .filter(|w| w.info.process_id != current_pid && !should_filter_process(w.info.process_id))
@@ -258,7 +259,6 @@ pub fn get_all_windows_with_focus() -> Vec<WindowInfo> {
             let focused = active_window_id.map_or(false, |id| id == w.id);
             WindowInfo::from_x_win(w, focused).with_offset(overlay_offset.0, overlay_offset.1)
         })
-        .filter(|w| !w.is_fullscreen()) // Also filter out fullscreen windows
         .collect()
 }
 
