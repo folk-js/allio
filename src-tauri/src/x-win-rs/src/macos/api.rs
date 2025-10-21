@@ -115,9 +115,8 @@ impl Api for MacosAPI {
 fn get_windows_informations(only_active: bool) -> Result<Vec<WindowInfo>> {
     let mut windows: Vec<WindowInfo> = Vec::new();
 
-    let options = CGWindowListOption::OptionOnScreenOnly
-        | CGWindowListOption::ExcludeDesktopElements
-        | CGWindowListOption::OptionIncludingWindow;
+    let options = CGWindowListOption::OptionAll | CGWindowListOption::ExcludeDesktopElements;
+    // | CGWindowListOption::OptionIncludingWindow;
     let window_list_info: &CFArray = unsafe { &CGWindowListCopyWindowInfo(options, 0).unwrap() };
     let windows_count = CFArray::count(window_list_info);
 
@@ -130,12 +129,21 @@ fn get_windows_informations(only_active: bool) -> Result<Vec<WindowInfo>> {
         if window_cf_dictionary_ref.is_null() {
             continue;
         }
+
         let window_cf_dictionary =
             unsafe { CFRetained::retain(std::ptr::NonNull::from(&*window_cf_dictionary_ref)) };
-        let is_screen: bool = get_cf_boolean_value(&window_cf_dictionary, "kCGWindowIsOnscreen");
-        if !is_screen {
-            continue;
-        }
+        // TODO: pass through
+        // let is_screen: bool = get_cf_boolean_value(&window_cf_dictionary, "kCGWindowIsOnscreen");
+        // if !is_screen {
+        //     continue;
+        // }
+
+        println!(
+            "Window {}: layer={}, pid={}",
+            idx,
+            get_cf_number_value(&window_cf_dictionary, "kCGWindowLayer"),
+            get_cf_number_value(&window_cf_dictionary, "kCGWindowOwnerPID")
+        );
 
         let window_layer = get_cf_number_value(&window_cf_dictionary, "kCGWindowLayer");
 
