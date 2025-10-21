@@ -5974,9 +5974,7 @@ dependencies = [
 
 [[package]]
 name = "x-win"
-version = "5.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fe143dc192a8825cbe696542bc29acf4c0996f2b587e1698162daded6ea7c5e"
+version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
  "block2 0.6.2",
