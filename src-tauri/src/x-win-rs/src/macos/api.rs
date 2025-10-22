@@ -1,10 +1,8 @@
 #![deny(unused_imports)]
 
-use std::collections::HashSet;
 use std::ffi::c_void;
 use std::process::Command;
 use std::ptr::null_mut;
-use std::sync::Mutex;
 
 use crate::common::x_win_struct::icon_info::IconInfo;
 use crate::common::{
@@ -30,9 +28,6 @@ use objc2_core_graphics::{
     CGRectMakeWithDictionaryRepresentation, CGWindowListCopyWindowInfo, CGWindowListOption,
 };
 use objc2_foundation::{MainThreadMarker, NSDictionary, NSObject, NSRect, NSString};
-
-// Track window IDs that have been onscreen at any point
-static KNOWN_ONSCREEN_WINDOWS: Mutex<Option<HashSet<u32>>> = Mutex::new(None);
 
 pub struct MacosAPI {}
 
@@ -120,45 +115,13 @@ impl Api for MacosAPI {
 fn get_windows_informations(only_active: bool) -> Result<Vec<WindowInfo>> {
     let mut windows: Vec<WindowInfo> = Vec::new();
 
-    // PASS 1: Get currently onscreen windows
+    // Get only currently onscreen windows - no state tracking
     let onscreen_options =
         CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements;
-    let onscreen_list: &CFArray = { &CGWindowListCopyWindowInfo(onscreen_options, 0).unwrap() };
-    let onscreen_count = CFArray::count(onscreen_list);
-
-    let mut current_onscreen_ids = HashSet::new();
-    for idx in 0..onscreen_count {
-        let dict_ref =
-            unsafe { CFArray::value_at_index(onscreen_list, idx) as *const CFDictionary };
-        if !dict_ref.is_null() {
-            let dict = unsafe { CFRetained::retain(std::ptr::NonNull::from(&*dict_ref)) };
-            let is_onscreen = get_cf_boolean_value(&dict, "kCGWindowIsOnscreen");
-            if is_onscreen {
-                let window_id = get_cf_number_value(&dict, "kCGWindowNumber");
-                if window_id != 0 {
-                    current_onscreen_ids.insert(window_id as u32);
-                }
-            }
-        }
-    }
-
-    // Update persistent set: union of current and previous onscreen windows
-    let mut known_windows = KNOWN_ONSCREEN_WINDOWS.lock().unwrap();
-    if known_windows.is_none() {
-        *known_windows = Some(HashSet::new());
-    }
-    let known_set = known_windows.as_mut().unwrap();
-    known_set.extend(&current_onscreen_ids);
-
-    // PASS 2: Get all windows and filter
-    let all_options = CGWindowListOption::OptionAll | CGWindowListOption::ExcludeDesktopElements;
-    let window_list_info: &CFArray = { &CGWindowListCopyWindowInfo(all_options, 0).unwrap() };
+    let window_list_info: &CFArray = { &CGWindowListCopyWindowInfo(onscreen_options, 0).unwrap() };
     let windows_count = CFArray::count(window_list_info);
 
     let screen_rect = get_screen_rect();
-
-    // Track all window IDs we see in this iteration for cleanup
-    let mut all_window_ids = HashSet::new();
 
     for idx in 0..windows_count {
         let window_cf_dictionary_ref =
@@ -170,15 +133,6 @@ fn get_windows_informations(only_active: bool) -> Result<Vec<WindowInfo>> {
 
         let window_cf_dictionary =
             unsafe { CFRetained::retain(std::ptr::NonNull::from(&*window_cf_dictionary_ref)) };
-
-        // Get window ID early for filtering
-        let window_id = get_cf_number_value(&window_cf_dictionary, "kCGWindowNumber") as u32;
-        all_window_ids.insert(window_id);
-
-        // Filter: only include if currently onscreen OR was previously onscreen
-        if !current_onscreen_ids.contains(&window_id) && !known_set.contains(&window_id) {
-            continue;
-        }
 
         // Filter 1: Check window alpha (0 means completely transparent/invisible)
         let alpha = get_cf_number_value(&window_cf_dictionary, "kCGWindowAlpha");
@@ -217,6 +171,8 @@ fn get_windows_informations(only_active: bool) -> Result<Vec<WindowInfo>> {
         if process_id == 0 {
             continue;
         }
+
+        let window_id = get_cf_number_value(&window_cf_dictionary, "kCGWindowNumber") as u32;
 
         let app = get_running_application_from_pid(process_id as u32);
         if app.is_err() {
@@ -290,9 +246,6 @@ fn get_windows_informations(only_active: bool) -> Result<Vec<WindowInfo>> {
             break;
         }
     }
-
-    // Clean up: remove windows from persistent set that no longer exist
-    known_set.retain(|id| all_window_ids.contains(id));
 
     Ok(windows)
 }

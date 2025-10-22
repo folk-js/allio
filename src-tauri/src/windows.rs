@@ -1,11 +1,26 @@
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
+    ffi::c_void,
     panic::{self},
-    sync::Mutex,
+    sync::{Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
+
+use accessibility::AXUIElement;
+use accessibility_sys::{
+    kAXUIElementDestroyedNotification, AXObserverAddNotification, AXObserverCreate,
+    AXObserverGetRunLoopSource, AXObserverRef, AXUIElementRef,
+};
+use core_foundation::base::TCFType;
+use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopSource};
+use core_foundation::string::{CFString, CFStringRef};
+
+// Private CoreGraphics function to get window ID from AXUIElement
+extern "C" {
+    fn _AXUIElementGetWindow(element: AXUIElementRef, window_id: *mut u32) -> i32;
+}
 
 // Cache for bundle ID lookups (PID -> Bundle ID)
 static BUNDLE_ID_CACHE: Mutex<Option<HashMap<u32, Option<String>>>> = Mutex::new(None);
@@ -17,6 +32,280 @@ use core_graphics::display::{
 
 use crate::axio::{AXNode, AXRole, Bounds, Position, Size};
 use crate::websocket::WebSocketState;
+
+// ============================================================================
+// WindowTracker - Maintains windows with AXUIElements and close event observers
+// ============================================================================
+
+/// Tracked window with its accessibility element
+#[derive(Clone)]
+struct TrackedWindow {
+    info: WindowInfo,
+    #[allow(dead_code)] // Stored for observer reference - must be kept alive
+    ax_element: AXUIElement,
+}
+
+/// Context for window close callbacks
+struct WindowCloseContext {
+    window_id: String,
+    tracker: Arc<WindowTracker>,
+}
+
+/// Manages window tracking with accessibility observers
+pub struct WindowTracker {
+    tracked_windows: Arc<Mutex<HashMap<String, TrackedWindow>>>,
+    observers: Arc<Mutex<HashMap<u32, AXObserverRef>>>, // PID -> Observer
+    close_contexts: Arc<Mutex<HashMap<String, *mut c_void>>>, // window_id -> context pointer
+}
+
+unsafe impl Send for WindowTracker {}
+unsafe impl Sync for WindowTracker {}
+
+impl WindowTracker {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            tracked_windows: Arc::new(Mutex::new(HashMap::new())),
+            observers: Arc::new(Mutex::new(HashMap::new())),
+            close_contexts: Arc::new(Mutex::new(HashMap::new())),
+        })
+    }
+
+    /// Update tracked windows from polling results
+    /// Adds new windows and subscribes to close events
+    /// Keeps windows that are no longer onscreen until close event fires
+    pub fn update_from_poll(self: &Arc<Self>, current_windows: &[WindowInfo]) {
+        let mut tracked = self.tracked_windows.lock().unwrap();
+
+        // Add new windows and subscribe to close events
+        for window in current_windows {
+            if !tracked.contains_key(&window.id) {
+                // New window detected
+                println!(
+                    "🆕 New window detected: {} (PID: {})",
+                    window.id, window.process_id
+                );
+
+                // Get AXUIElement for the window
+                if let Some(ax_element) = self.get_window_element(window.process_id, window) {
+                    // Subscribe to close event
+                    if let Err(e) =
+                        self.subscribe_to_close_event(window.process_id, &window.id, &ax_element)
+                    {
+                        println!(
+                            "⚠️  Failed to subscribe to close event for window {}: {}",
+                            window.id, e
+                        );
+                    } else {
+                        println!("✅ Subscribed to close event for window {}", window.id);
+                    }
+
+                    // Add to tracked windows
+                    tracked.insert(
+                        window.id.clone(),
+                        TrackedWindow {
+                            info: window.clone(),
+                            ax_element,
+                        },
+                    );
+                } else {
+                    println!("⚠️  Could not get AXUIElement for window {}", window.id);
+                }
+            } else {
+                // Update existing window info (position might have changed)
+                if let Some(tracked_window) = tracked.get_mut(&window.id) {
+                    tracked_window.info = window.clone();
+                }
+            }
+        }
+    }
+
+    /// Get all currently tracked windows
+    pub fn get_tracked_windows(&self) -> Vec<WindowInfo> {
+        self.tracked_windows
+            .lock()
+            .unwrap()
+            .values()
+            .map(|tw| tw.info.clone())
+            .collect()
+    }
+
+    /// Remove a window (called by close event callback)
+    fn remove_window(&self, window_id: &str) {
+        let mut tracked = self.tracked_windows.lock().unwrap();
+        if let Some(tracked_window) = tracked.remove(window_id) {
+            println!("🗑️  Removed window from tracking: {}", window_id);
+
+            // Remove observer if this was the last window for this PID
+            let pid = tracked_window.info.process_id;
+            let has_other_windows = tracked.values().any(|w| w.info.process_id == pid);
+
+            if !has_other_windows {
+                let mut observers = self.observers.lock().unwrap();
+                if let Some(_observer) = observers.remove(&pid) {
+                    println!("🧹 Removed observer for PID {} (no more windows)", pid);
+                }
+            }
+
+            // Clean up context
+            let mut contexts = self.close_contexts.lock().unwrap();
+            if let Some(context_ptr) = contexts.remove(window_id) {
+                unsafe {
+                    let _ = Box::from_raw(context_ptr as *mut WindowCloseContext);
+                }
+            }
+        }
+    }
+
+    /// Get the AXUIElement for a specific window by matching window ID using private API
+    fn get_window_element(&self, pid: u32, window_info: &WindowInfo) -> Option<AXUIElement> {
+        use accessibility::AXAttribute;
+
+        let app_element = AXUIElement::application(pid as i32);
+
+        // Parse window ID from string
+        let target_window_id: u32 = window_info.id.parse().ok()?;
+
+        // Get the windows array from the application
+        let windows_attr = app_element.attribute(&AXAttribute::windows()).ok()?;
+
+        // Iterate through all windows to find the one with matching window ID
+        for i in 0..windows_attr.len() {
+            if let Some(window_element_ref) = windows_attr.get(i) {
+                // Clone to get owned AXUIElement
+                let window_element = window_element_ref.clone();
+
+                // Use private API to get the actual window ID
+                let element_ref = window_element.as_concrete_TypeRef() as AXUIElementRef;
+                let mut ax_window_id: u32 = 0;
+
+                let result = unsafe { _AXUIElementGetWindow(element_ref, &mut ax_window_id) };
+
+                if result == 0 && ax_window_id == target_window_id {
+                    println!(
+                        "  ✅ Matched window element by ID for window {}",
+                        window_info.id
+                    );
+                    return Some(window_element);
+                }
+            }
+        }
+
+        println!(
+            "  ⚠️  Could not match window element for window {}",
+            window_info.id
+        );
+        None
+    }
+
+    /// Subscribe to window close events
+    fn subscribe_to_close_event(
+        self: &Arc<Self>,
+        pid: u32,
+        window_id: &str,
+        element: &AXUIElement,
+    ) -> Result<(), String> {
+        // Get or create observer for this PID
+        let observer = {
+            let mut observers = self.observers.lock().unwrap();
+            if !observers.contains_key(&pid) {
+                // Create new observer
+                let mut observer_ref: AXObserverRef = std::ptr::null_mut();
+
+                let result = unsafe {
+                    AXObserverCreate(
+                        pid as i32,
+                        window_close_callback as _,
+                        &mut observer_ref as *mut _,
+                    )
+                };
+
+                if result != 0 {
+                    return Err(format!("Failed to create observer: error code {}", result));
+                }
+
+                println!("✅ Created AXObserver for PID {}", pid);
+
+                // Add observer to the main run loop
+                unsafe {
+                    let run_loop_source_ref = AXObserverGetRunLoopSource(observer_ref);
+                    if run_loop_source_ref.is_null() {
+                        return Err("Failed to get run loop source from observer".to_string());
+                    }
+
+                    let run_loop_source =
+                        CFRunLoopSource::wrap_under_get_rule(run_loop_source_ref as *mut _);
+                    let main_run_loop = CFRunLoop::get_main();
+                    main_run_loop.add_source(&run_loop_source, kCFRunLoopDefaultMode);
+
+                    println!("✅ Added observer to main run loop");
+                }
+
+                observers.insert(pid, observer_ref);
+                observer_ref
+            } else {
+                *observers.get(&pid).unwrap()
+            }
+        };
+
+        // Create context for this window
+        let context = Box::new(WindowCloseContext {
+            window_id: window_id.to_string(),
+            tracker: self.clone(),
+        });
+        let context_ptr = Box::into_raw(context) as *mut c_void;
+
+        // Store context pointer
+        self.close_contexts
+            .lock()
+            .unwrap()
+            .insert(window_id.to_string(), context_ptr);
+
+        // Register for destroyed notification
+        let element_ref = element.as_concrete_TypeRef() as AXUIElementRef;
+        let notif_cfstring = CFString::new(kAXUIElementDestroyedNotification);
+
+        let result = unsafe {
+            AXObserverAddNotification(
+                observer,
+                element_ref,
+                notif_cfstring.as_concrete_TypeRef() as _,
+                context_ptr,
+            )
+        };
+
+        if result != 0 {
+            return Err(format!("Failed to add notification: error code {}", result));
+        }
+
+        Ok(())
+    }
+}
+
+/// C callback for window close notifications
+unsafe extern "C" fn window_close_callback(
+    _observer: AXObserverRef,
+    _element: AXUIElementRef,
+    notification: CFStringRef,
+    refcon: *mut c_void,
+) {
+    if refcon.is_null() {
+        return;
+    }
+
+    let context = &*(refcon as *const WindowCloseContext);
+    let notif_cfstring = CFString::wrap_under_get_rule(notification);
+    let notification_name = notif_cfstring.to_string();
+
+    println!(
+        "🔔 Window notification: {} for window {}",
+        notification_name, context.window_id
+    );
+
+    if notification_name == "AXUIElementDestroyed" {
+        println!("🪟 Window closed: {}", context.window_id);
+        context.tracker.remove_window(&context.window_id);
+    }
+}
 
 // Constants - optimized polling rate
 const POLLING_INTERVAL_MS: u64 = 8; // ~120 FPS - fast enough for smooth tracking
@@ -265,26 +554,32 @@ pub fn get_all_windows_with_focus() -> Vec<WindowInfo> {
 // WebSocket-only polling loop
 pub fn window_polling_loop(ws_state: WebSocketState) {
     let mut last_windows: Option<Vec<WindowInfo>> = None;
+    let window_tracker = WindowTracker::new();
 
     loop {
         let loop_start = Instant::now();
 
-        // Get fresh data from system
-        let current_windows = get_all_windows_with_focus();
+        // Poll for currently onscreen windows
+        let onscreen_windows = get_all_windows_with_focus();
 
-        // No longer auto-push tree on focus change - let overlays request what they need
+        // Update tracker with onscreen windows
+        // This adds new windows and subscribes to close events
+        window_tracker.update_from_poll(&onscreen_windows);
+
+        // Get all tracked windows (onscreen + offscreen-but-not-yet-closed)
+        let tracked_windows = window_tracker.get_tracked_windows();
 
         // Broadcast window updates if something changed
-        if last_windows.as_ref() != Some(&current_windows) {
+        if last_windows.as_ref() != Some(&tracked_windows) {
             // Convert windows to AXNodes (filter out any that fail to convert)
-            let window_nodes: Vec<AXNode> = current_windows
+            let window_nodes: Vec<AXNode> = tracked_windows
                 .iter()
                 .filter_map(|w| w.to_ax_node())
                 .collect();
 
             // Update WebSocket state and broadcast
             let ws_state_clone = ws_state.clone();
-            let windows_clone = current_windows.clone();
+            let windows_clone = tracked_windows.clone();
 
             tokio::spawn(async move {
                 ws_state_clone.update_windows(&windows_clone).await;
@@ -294,7 +589,7 @@ pub fn window_polling_loop(ws_state: WebSocketState) {
                 windows: window_nodes,
             });
 
-            last_windows = Some(current_windows);
+            last_windows = Some(tracked_windows);
         }
 
         // Precise interval handling
