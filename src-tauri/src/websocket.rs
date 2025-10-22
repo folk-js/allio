@@ -327,7 +327,7 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
     });
     if let Ok(msg_json) = serde_json::to_string(&overlay_pid_msg) {
         let _ = socket.send(Message::Text(msg_json)).await;
-        println!("📡 Sent overlay PID {} to client", std::process::id());
+        // println!("📡 Sent overlay PID {} to client", std::process::id());
     }
 
     // Send initial window state immediately

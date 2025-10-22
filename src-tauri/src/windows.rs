@@ -179,7 +179,7 @@ fn get_bundle_id(pid: u32) -> Option<String> {
                 if let Some(start) = after_eq.find('"') {
                     if let Some(end) = after_eq[start + 1..].find('"') {
                         let id = after_eq[start + 1..start + 1 + end].to_string();
-                        println!("📋 PID {} has bundle ID: {}", pid, id);
+                        // println!( "📋 PID {} has bundle ID: {}", pid, id);
                         Some(id)
                     } else {
                         None
