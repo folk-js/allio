@@ -106,6 +106,17 @@ const FILTERED_BUNDLE_IDS: &[&str] = &[
     "com.apple.QuickTimePlayerX", // QuickTime recording (optional - user might want this)
 ];
 
+/// Parse bundle ID from lsappinfo output
+/// Handles formats: 'bundleid="com.example"' or '"CFBundleIdentifier"="com.example"'
+#[cfg(target_os = "macos")]
+fn parse_bundle_id(info: &str) -> Option<String> {
+    let eq_pos = info.rfind('=')?;
+    let after_eq = &info[eq_pos + 1..];
+    let start = after_eq.find('"')?;
+    let end = after_eq[start + 1..].find('"')?;
+    Some(after_eq[start + 1..start + 1 + end].to_string())
+}
+
 /// Get bundle ID for a PID, with caching
 #[cfg(target_os = "macos")]
 fn get_bundle_id(pid: u32) -> Option<String> {
@@ -119,44 +130,23 @@ fn get_bundle_id(pid: u32) -> Option<String> {
         }
     }
 
-    // Not in cache, query it
-    let output = Command::new("lsappinfo")
+    // Query bundle ID from lsappinfo
+    let bundle_id = Command::new("lsappinfo")
         .args(&["info", "-only", "bundleid", &format!("{}", pid)])
-        .output();
-
-    let bundle_id = if let Ok(output) = output {
-        if let Ok(info) = String::from_utf8(output.stdout) {
-            // Output format: 'bundleid="com.apple.screencaptureui"' or '"CFBundleIdentifier"="com.apple.screencaptureui"'
-            // Find the last "=" to handle both formats
-            if let Some(eq_pos) = info.rfind('=') {
-                let after_eq = &info[eq_pos + 1..];
-                // Now extract the quoted value after the =
-                if let Some(start) = after_eq.find('"') {
-                    if let Some(end) = after_eq[start + 1..].find('"') {
-                        let id = after_eq[start + 1..start + 1 + end].to_string();
-                        println!("📋 PID {} has bundle ID: {}", pid, id);
-                        Some(id)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .and_then(|info| parse_bundle_id(&info))
+        .map(|id| {
+            println!("📋 PID {} has bundle ID: {}", pid, id);
+            id
+        });
 
     // Store in cache
-    {
-        let mut cache = BUNDLE_ID_CACHE.lock().unwrap();
-        cache.insert(pid, bundle_id.clone());
-    }
+    BUNDLE_ID_CACHE
+        .lock()
+        .unwrap()
+        .insert(pid, bundle_id.clone());
 
     bundle_id
 }
