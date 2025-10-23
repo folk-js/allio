@@ -67,18 +67,15 @@ impl WindowInfo {
             && (self.w as f64) == screen_width
             && (self.h as f64) == screen_height
     }
-
-    #[cfg(not(target_os = "macos"))]
-    fn is_fullscreen(&self) -> bool {
-        false
-    }
-}
-
-impl WindowInfo {
     fn with_offset(mut self, offset_x: i32, offset_y: i32) -> Self {
         self.x -= offset_x;
         self.y -= offset_y;
         self
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn is_fullscreen(&self) -> bool {
+        false
     }
 }
 
