@@ -24,7 +24,8 @@ const POLLING_INTERVAL_MS: u64 = 8; // ~120 FPS - fast enough for smooth trackin
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct WindowInfo {
     pub id: String,
-    pub name: String,
+    pub title: String,
+    pub app_name: String,
     pub x: i32,
     pub y: i32,
     pub w: i32,
@@ -38,7 +39,8 @@ impl WindowInfo {
     fn from_x_win(window: &x_win::WindowInfo, focused: bool) -> Self {
         WindowInfo {
             id: window.id.to_string(),
-            name: window.title.clone(),
+            title: window.title.clone(),
+            app_name: window.info.name.clone(),
             x: window.position.x,
             y: window.position.y,
             w: window.position.width,
@@ -99,8 +101,10 @@ impl WindowInfo {
             id: self.id.clone(),
             role: AXRole::Window,
             subrole: None,
-            title: if !self.name.is_empty() {
-                Some(self.name.clone())
+            title: if !self.title.is_empty() {
+                Some(self.title.clone())
+            } else if !self.app_name.is_empty() {
+                Some(self.app_name.clone())
             } else {
                 None
             },
