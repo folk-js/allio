@@ -16,7 +16,7 @@ use tower_http::cors::{Any, CorsLayer};
 
 use crate::axio::AXNode;
 use crate::node_watcher::NodeWatcher;
-use crate::platform::{get_ax_tree_by_pid, write_to_element};
+use crate::platform::{get_children_by_element_id, write_to_element_by_id};
 use crate::windows::{WindowInfo, WindowUpdatePayload};
 
 // ============================================================================
@@ -91,7 +91,10 @@ struct MessageType {
 #[serde(deny_unknown_fields)]
 struct AccessibilityTreeRequest {
     msg_type: String,
-    pid: u32,
+    #[serde(default)]
+    window_id: Option<String>, // NEW: Preferred way - uses cached window element
+    #[serde(default)]
+    pid: Option<u32>, // LEGACY: Falls back to app element
     #[serde(default = "default_max_depth")]
     max_depth: usize,
     #[serde(default = "default_max_children_per_level")]
@@ -111,7 +114,10 @@ fn default_max_children_per_level() -> usize {
 struct GetChildrenRequest {
     msg_type: String,
     pid: u32,
-    path: Vec<usize>,
+    #[serde(default)]
+    element_id: Option<String>, // NEW: Preferred (uses ElementRegistry)
+    #[serde(default)]
+    path: Option<Vec<usize>>, // LEGACY: Fallback (navigates by path)
     #[serde(default = "default_max_depth")]
     max_depth: usize,
     #[serde(default = "default_max_children_per_level")]
@@ -122,8 +128,12 @@ struct GetChildrenRequest {
 #[serde(deny_unknown_fields)]
 struct AccessibilityWriteRequest {
     msg_type: String,
-    pid: u32,
-    element_path: Vec<usize>,
+    #[serde(default)]
+    pid: Option<u32>, // Optional for backwards compatibility
+    #[serde(default)]
+    element_id: Option<String>, // NEW: Preferred (uses ElementRegistry)
+    #[serde(default)]
+    element_path: Option<Vec<usize>>, // LEGACY: Fallback (navigates by path)
     text: String,
 }
 
@@ -182,7 +192,9 @@ struct SetClickthroughData {
 struct WatchNodeRequest {
     msg_type: String,
     pid: u32,
-    path: Vec<usize>,
+    element_id: Option<String>, // NEW: Preferred
+    #[serde(default)]
+    path: Option<Vec<usize>>, // LEGACY: Deprecated
     node_id: String,
 }
 
@@ -448,25 +460,31 @@ async fn handle_client_message(
                 write_request
             );
 
-            // Attempt to write to the element
-            let (success, message, error) = match write_to_element(
-                write_request.pid,
-                &write_request.element_path,
-                &write_request.text,
-            ) {
-                Ok(_) => (
-                    true,
-                    format!("Successfully wrote '{}' to element", write_request.text),
-                    None,
-                ),
-                Err(e) => (false, "Failed to write to element".to_string(), Some(e)),
+            // Attempt to write to the element - prefer element_id over path
+            let (success, message, error) = if let Some(ref element_id) = write_request.element_id {
+                // NEW: Use element_id (direct registry lookup)
+                println!("✍️ Writing via element_id: {}", element_id);
+                match write_to_element_by_id(element_id, &write_request.text) {
+                    Ok(_) => (
+                        true,
+                        format!("Successfully wrote '{}' to element", write_request.text),
+                        None,
+                    ),
+                    Err(e) => (false, "Failed to write to element".to_string(), Some(e)),
+                }
+            } else {
+                (
+                    false,
+                    "Neither element_id nor (pid + path) provided".to_string(),
+                    Some("Invalid write request".to_string()),
+                )
             };
 
             let response = WsResponse {
                 msg_type: msg_types::ACCESSIBILITY_WRITE_RESPONSE.to_string(),
                 success,
                 data: AccessibilityWriteData {
-                    pid: write_request.pid,
+                    pid: write_request.pid.unwrap_or(0),
                     message,
                     error,
                 },
@@ -478,20 +496,27 @@ async fn handle_client_message(
 
         msg_types::GET_CHILDREN => {
             let get_children_req = serde_json::from_str::<GetChildrenRequest>(message)?;
-            println!(
-                "👶 Client requesting children for PID: {} path: {:?}",
-                get_children_req.pid, get_children_req.path
-            );
 
-            // Get children of the specified node
-            let (success, children, error) = match crate::platform::get_children_by_path(
-                get_children_req.pid,
-                &get_children_req.path,
-                get_children_req.max_depth,
-                get_children_req.max_children_per_level,
-            ) {
-                Ok(ch) => (true, Some(ch), None),
-                Err(e) => (false, None, Some(e)),
+            // Get children of the specified node by element_id
+            let (success, children, error) = if let Some(ref element_id) =
+                get_children_req.element_id
+            {
+                println!(
+                    "👶 Client requesting children for element_id: {} (max_depth: {}, max_children: {})",
+                    element_id, get_children_req.max_depth, get_children_req.max_children_per_level
+                );
+
+                match get_children_by_element_id(
+                    get_children_req.pid,
+                    element_id,
+                    get_children_req.max_depth,
+                    get_children_req.max_children_per_level,
+                ) {
+                    Ok(ch) => (true, Some(ch), None),
+                    Err(e) => (false, None, Some(e)),
+                }
+            } else {
+                (false, None, Some("element_id not provided".to_string()))
             };
 
             let response = WsResponse {
@@ -499,7 +524,7 @@ async fn handle_client_message(
                 success,
                 data: GetChildrenData {
                     pid: get_children_req.pid,
-                    path: get_children_req.path,
+                    path: get_children_req.path.unwrap_or_default(),
                     children,
                     error,
                 },
@@ -509,39 +534,47 @@ async fn handle_client_message(
             socket.send(Message::Text(response_json)).await.ok();
 
             if success {
-                println!("✅ Sent children for PID {}", get_children_req.pid);
+                println!("✅ Sent children");
             } else {
-                println!("❌ Failed to get children for PID {}", get_children_req.pid);
+                println!("❌ Failed to get children");
             }
         }
 
         msg_types::GET_ACCESSIBILITY_TREE => {
             let ax_request = serde_json::from_str::<AccessibilityTreeRequest>(message)?;
             println!("🌳 Parsed as AccessibilityTreeRequest: {:?}", ax_request);
-            println!(
-                "🌳 Client requesting accessibility tree for PID: {} (max_depth: {}, max_children: {})",
-                ax_request.pid, ax_request.max_depth, ax_request.max_children_per_level
-            );
 
-            // Get the accessibility tree with configurable limits
-            // load_children=true to maintain backward compatibility (full tree)
-            let (success, tree, error) = match get_ax_tree_by_pid(
-                ax_request.pid,
-                ax_request.max_depth,
-                ax_request.max_children_per_level,
-                true, // Load full tree
-            ) {
-                Ok(ax_tree) => (true, Some(ax_tree), None),
-                Err(e) => (false, None, Some(e)),
+            // Get accessibility tree by window_id (uses cached window element)
+            let (success, tree, error, pid) = if let Some(ref window_id) = ax_request.window_id {
+                println!(
+                    "🌳 Client requesting tree for window_id: {} (max_depth: {}, max_children: {})",
+                    window_id, ax_request.max_depth, ax_request.max_children_per_level
+                );
+
+                // Use cached window element as root
+                match crate::platform::get_ax_tree_by_window_id(
+                    window_id,
+                    ax_request.max_depth,
+                    ax_request.max_children_per_level,
+                    true, // Load full tree
+                ) {
+                    Ok(ax_tree) => {
+                        let pid = ax_tree.pid;
+                        (true, Some(ax_tree), None, pid)
+                    }
+                    Err(e) => (false, None, Some(e), 0),
+                }
+            } else {
+                (false, None, Some("window_id not provided".to_string()), 0)
             };
 
             let response = WsResponse {
                 msg_type: msg_types::ACCESSIBILITY_TREE_RESPONSE.to_string(),
                 success,
                 data: AccessibilityTreeData {
-                    pid: ax_request.pid,
+                    pid,
                     tree,
-                    error,
+                    error: error.clone(),
                 },
             };
 
@@ -549,12 +582,16 @@ async fn handle_client_message(
             socket.send(Message::Text(response_json)).await.ok();
 
             if success {
-                println!("✅ Sent accessibility tree for PID {}", ax_request.pid);
+                if ax_request.window_id.is_some() {
+                    println!(
+                        "✅ Sent accessibility tree for window_id: {:?}",
+                        ax_request.window_id
+                    );
+                } else {
+                    println!("✅ Sent accessibility tree for PID {}", pid);
+                }
             } else {
-                println!(
-                    "❌ Failed to get accessibility tree for PID {}",
-                    ax_request.pid
-                );
+                println!("❌ Failed to get accessibility tree: {:?}", error);
             }
         }
 
@@ -609,17 +646,20 @@ async fn handle_client_message(
 
         msg_types::WATCH_NODE => {
             let watch_req = serde_json::from_str::<WatchNodeRequest>(message)?;
-            println!(
-                "👁️  Client requesting to watch node: PID {} path {:?} ID {}",
-                watch_req.pid, watch_req.path, watch_req.node_id
-            );
 
-            // Start watching the node
-            let result = ws_state.node_watcher.watch_node(
-                watch_req.pid,
-                watch_req.path,
-                watch_req.node_id.clone(),
-            );
+            let result = if let Some(ref element_id) = watch_req.element_id {
+                println!(
+                    "👁️  Client requesting to watch node: element_id {} ID {}",
+                    element_id, watch_req.node_id
+                );
+                ws_state.node_watcher.watch_node_by_id(
+                    watch_req.pid,
+                    element_id.clone(),
+                    watch_req.node_id.clone(),
+                )
+            } else {
+                Err("element_id not provided".to_string())
+            };
 
             let (success, error) = match result {
                 Ok(_) => {

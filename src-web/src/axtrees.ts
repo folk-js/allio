@@ -130,12 +130,12 @@ class AXTreeOverlay {
       newFocusedWindow.id !== this.lastFocusedWindow.id
     ) {
       console.log(
-        `🎯 Focus changed to "${newFocusedWindow.title}", fetching tree`
+        `🎯 Focus changed to "${newFocusedWindow.title}", fetching tree by window_id`
       );
       this.lastFocusedWindow = newFocusedWindow;
 
       this.axio
-        .getTree(newFocusedWindow.process_id, 3, 100)
+        .getTreeByWindowId(newFocusedWindow.id, 3, 100)
         .then((tree) => {
           this.displayAccessibilityTree(tree, newFocusedWindow);
         })
@@ -487,7 +487,7 @@ class AXTreeOverlay {
       // Get the target element's position and size from when the panel was opened
       if (this.currentTargetElement) {
         // Find the element in the current tree to get updated position
-        const elementPath = this.currentTargetElement.node.path;
+        const elementPath = this.currentTargetElement.node.path || [];
 
         const elementPosition = this.getElementPositionFromTree(elementPath);
 
@@ -1081,11 +1081,21 @@ class AXTreeOverlay {
       // Unwatch this node (stop receiving updates)
       const stored = this.nodeElements.get(nodeId);
       if (stored) {
-        this.axio
-          .unwatchNode(stored.node.pid, stored.node.path)
-          .catch((err) => {
-            console.error(`Failed to unwatch node ${nodeId}:`, err);
-          });
+        // Use element_id if available (Phase 3), fallback to path
+        if (stored.node.element_id) {
+          this.axio
+            .unwatchNodeByElementId(stored.node.pid, stored.node.element_id)
+            .catch((err) => {
+              console.error(`Failed to unwatch node ${nodeId}:`, err);
+            });
+        } else if (stored.node.path) {
+          // Legacy fallback
+          this.axio
+            .unwatchNode(stored.node.pid, stored.node.path)
+            .catch((err) => {
+              console.error(`Failed to unwatch node ${nodeId}:`, err);
+            });
+        }
       }
 
       // Update indicator
@@ -1102,11 +1112,25 @@ class AXTreeOverlay {
       // Watch this node (start receiving updates)
       const stored = this.nodeElements.get(nodeId);
       if (stored) {
-        this.axio
-          .watchNode(stored.node.pid, stored.node.path, nodeId)
-          .catch((err) => {
-            console.error(`Failed to watch node ${nodeId}:`, err);
-          });
+        // Use element_id if available (Phase 3), fallback to path
+        if (stored.node.element_id) {
+          this.axio
+            .watchNodeByElementId(
+              stored.node.pid,
+              stored.node.element_id,
+              nodeId
+            )
+            .catch((err) => {
+              console.error(`Failed to watch node ${nodeId}:`, err);
+            });
+        } else if (stored.node.path) {
+          // Legacy fallback
+          this.axio
+            .watchNode(stored.node.pid, stored.node.path, nodeId)
+            .catch((err) => {
+              console.error(`Failed to watch node ${nodeId}:`, err);
+            });
+        }
       }
 
       // Update indicator
@@ -1170,9 +1194,19 @@ class AXTreeOverlay {
       this.expandedNodes.add(nodeId);
 
       // Watch this node for changes (now that it's expanded)
-      this.axio.watchNode(node.pid, node.path, nodeId).catch((err) => {
-        console.error(`Failed to watch node ${nodeId}:`, err);
-      });
+      // Use element_id if available (Phase 3), fallback to path
+      if (node.element_id) {
+        this.axio
+          .watchNodeByElementId(node.pid, node.element_id, nodeId)
+          .catch((err) => {
+            console.error(`Failed to watch node ${nodeId}:`, err);
+          });
+      } else if (node.path) {
+        // Legacy fallback
+        this.axio.watchNode(node.pid, node.path, nodeId).catch((err) => {
+          console.error(`Failed to watch node ${nodeId}:`, err);
+        });
+      }
 
       // Update indicator
       if (indicator && indicator instanceof HTMLElement) {

@@ -12,13 +12,13 @@
 
 ## Cleanup
 
-- [ ] Remove unused `push_tree_for_window()` in WebSocketState (marked dead_code)
+- [x] Remove unused `push_tree_for_window()` in WebSocketState (marked dead_code)
 - [ ] Consider removing `NodeUpdate.path` field (comment says "not used for identification")
-- [ ] Refactor WebSocket message handler chain (300+ lines of if-else)
+- [x] Refactor WebSocket message handler chain (300+ lines of if-else)
   - Use match statement or dispatch table
-- [ ] Use string constants/enums for message type strings instead of literals
-- [ ] Create generic `Response<T>` type to reduce duplication across response structs
-- [ ] Consider `lazy_static` or `once_cell` for bundle ID cache initialization
+- [x] Use string constants/enums for message type strings instead of literals
+- [x] Create generic `Response<T>` type to reduce duplication across response structs
+- [x] Consider `lazy_static` or `once_cell` for bundle ID cache initialization
 
 ## Current Work
 

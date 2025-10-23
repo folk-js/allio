@@ -92,20 +92,26 @@ pub enum AXRole {
 /// Core accessibility node
 ///
 /// Represents a single element in the accessibility tree.
-/// Nodes know their location (pid + path) so they can perform operations on themselves.
+/// Nodes know their location (pid + element_id) so they can perform operations on themselves.
 /// Forms a tree structure via the children field.
 ///
-/// TODO(future): Investigate element reference caching for performance
-/// TODO(future): Add staleness detection (path navigation fails)
-/// TODO(future): Consider stable identity beyond paths (research AXUIElement lifecycle)
+/// Phase 3: Switched from path-based navigation to element ID-based lookup.
+/// Elements are registered in ElementRegistry when tree is built, enabling direct access.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AXNode {
     // Location (for operations - nodes know where they are)
     pub pid: u32,
-    pub path: Vec<usize>, // Child indices from root to this node
+    pub element_id: String, // UUID from ElementRegistry
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>, // UUID of parent element (None for root)
+
+    // Legacy path field for backwards compatibility during transition
+    // TODO: Remove this once all operations are migrated to element_id
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<Vec<usize>>,
 
     // Identity
-    pub id: String,
+    pub id: String, // Same as element_id (kept for frontend compatibility)
     pub role: AXRole,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subrole: Option<String>,

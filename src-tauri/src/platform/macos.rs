@@ -99,21 +99,28 @@ fn generate_stable_element_id(element: &AXUIElement, pid: u32) -> String {
 /// This is the main conversion function that maps macOS accessibility
 /// elements to our platform-agnostic AXIO format.
 ///
+/// Phase 3: Now registers elements in ElementRegistry and uses element_id instead of path.
+///
 /// If `load_children` is false, children_count is populated but children array is empty.
 pub fn element_to_axnode(
     element: &AXUIElement,
     pid: u32,
-    path: Vec<usize>,
+    parent_id: Option<String>,
     depth: usize,
     max_depth: usize,
     max_children_per_level: usize,
     load_children: bool,
 ) -> Option<AXNode> {
+    use crate::element_registry::ElementRegistry;
+
     // Stop traversal past max depth
     // Note: max_depth is inclusive (max_depth=1 means depths 0 and 1 are allowed)
     if depth > max_depth {
         return None;
     }
+
+    // Register this element and get its UUID
+    let element_id = ElementRegistry::register(element.clone());
 
     // Get role and convert to AXIO format
     let platform_role = element
@@ -198,9 +205,6 @@ pub fn element_to_axnode(
     // Get geometry (position and size)
     let bounds = get_element_bounds(element);
 
-    // Generate stable ID for this element
-    let id = generate_stable_element_id(element, pid);
-
     // Get children count (always, regardless of load_children flag)
     let children_count = element
         .attribute(&AXAttribute::children())
@@ -213,7 +217,7 @@ pub fn element_to_axnode(
         get_element_children(
             element,
             pid,
-            path.clone(),
+            Some(element_id.clone()), // Pass element_id as parent_id
             depth,
             max_depth,
             max_children_per_level,
@@ -225,8 +229,10 @@ pub fn element_to_axnode(
 
     Some(AXNode {
         pid,
-        path,
-        id,
+        element_id: element_id.clone(),
+        parent_id,
+        path: None,     // Legacy field, no longer used
+        id: element_id, // Use element_id as the node ID
         role,
         subrole,
         title,
@@ -324,7 +330,7 @@ fn get_element_bounds(element: &AXUIElement) -> Option<Bounds> {
 fn get_element_children(
     element: &AXUIElement,
     pid: u32,
-    parent_path: Vec<usize>,
+    parent_id: Option<String>,
     depth: usize,
     max_depth: usize,
     max_children_per_level: usize,
@@ -340,14 +346,10 @@ fn get_element_children(
 
     for i in 0..child_count.min(max_children_per_level as isize) {
         if let Some(child_ref) = children_array.get(i) {
-            // Build path for this child
-            let mut child_path = parent_path.clone();
-            child_path.push(i as usize);
-
             if let Some(child_node) = element_to_axnode(
                 &(*child_ref),
                 pid,
-                child_path,
+                parent_id.clone(),
                 depth + 1,
                 max_depth,
                 max_children_per_level,
@@ -367,49 +369,144 @@ fn get_element_children(
 /// in AXIO format from a macOS application.
 ///
 /// If `load_children` is false, returns only the root node with children_count populated.
-pub fn get_ax_tree_by_pid(
+/// Get all window AXUIElements for a given PID
+///
+/// Returns a vector of (AXUIElement, CGWindowID) tuples for each window.
+/// Uses the private _AXUIElementGetWindow API to get CGWindowIDs for matching.
+pub fn get_window_elements(pid: u32) -> Result<Vec<(AXUIElement, Option<u32>)>, String> {
+    use crate::platform::ax_private::get_window_id_from_element;
+    use core_foundation::string::CFString;
+
+    let app_element = AXUIElement::application(pid as i32);
+
+    // Get children of the application element (using the same approach as get_element_children)
+    let children_array = match app_element.attribute(&AXAttribute::children()) {
+        Ok(children) => children,
+        Err(_) => {
+            println!("⚠️  PID {} has no AXChildren attribute", pid);
+            return Ok(Vec::new());
+        }
+    };
+
+    let child_count = children_array.len();
+
+    println!(
+        "🔍 get_window_elements: PID {} has {} children",
+        pid, child_count
+    );
+
+    let mut result = Vec::new();
+
+    // Filter children by role = "AXWindow"
+    for i in 0..child_count {
+        if let Some(child_element) = children_array.get(i) {
+            // Check if role is "AXWindow"
+            if let Ok(role) = child_element.attribute(&AXAttribute::role()) {
+                let role_str = unsafe {
+                    let cf_string = CFString::wrap_under_get_rule(role.as_CFTypeRef() as *const _);
+                    cf_string.to_string()
+                };
+                println!("     Child {}: role = {}", i, role_str);
+
+                if role_str == "AXWindow" {
+                    // Try to get the CGWindowID using private API
+                    let window_id = get_window_id_from_element(child_element.as_concrete_TypeRef());
+                    println!(
+                        "       ✅ Found window element, CGWindowID = {:?}",
+                        window_id
+                    );
+                    result.push(((*child_element).clone(), window_id));
+                }
+            }
+        }
+    }
+
+    println!(
+        "🔍 get_window_elements: PID {} returned {} window elements (filtered from {} children)",
+        pid,
+        result.len(),
+        child_count
+    );
+
+    Ok(result)
+}
+
+/// Get accessibility tree using a window element from the cache
+///
+/// This is the NEW approach - uses the cached window element as root.
+/// The window element is the correct root for a window's accessibility tree.
+pub fn get_ax_tree_from_element(
+    window_element: &AXUIElement,
     pid: u32,
     max_depth: usize,
     max_children_per_level: usize,
     load_children: bool,
 ) -> Result<AXNode, String> {
-    let app_element = AXUIElement::application(pid as i32);
-
     element_to_axnode(
-        &app_element,
+        window_element,
         pid,
-        vec![],
+        None, // Root element has no parent
         0,
         max_depth,
         max_children_per_level,
         load_children,
     )
-    .ok_or_else(|| format!("Failed to get accessibility tree for PID {}", pid))
+    .ok_or_else(|| "Failed to get accessibility tree from window element".to_string())
 }
 
-/// Get children of a specific node by path
+/// Get accessibility tree by window ID (uses cached window element)
 ///
-/// Returns the children of the node at the given path, with their own children_count populated
+/// This is the preferred method - looks up the window in the cache and uses its element.
+pub fn get_ax_tree_by_window_id(
+    window_id: &str,
+    max_depth: usize,
+    max_children_per_level: usize,
+    load_children: bool,
+) -> Result<AXNode, String> {
+    use crate::window_manager::WindowManager;
+
+    // Get the cached window (includes the AX element)
+    let managed_window = WindowManager::get_window(window_id)
+        .ok_or_else(|| format!("Window {} not found in cache", window_id))?;
+
+    // Get the window element
+    let window_element = managed_window
+        .ax_element
+        .ok_or_else(|| format!("Window {} has no AX element", window_id))?;
+
+    // Build tree from the window element (not app element!)
+    get_ax_tree_from_element(
+        &window_element,
+        managed_window.info.process_id,
+        max_depth,
+        max_children_per_level,
+        load_children,
+    )
+}
+
+/// Get children of a specific node by element ID (NEW - Phase 3)
+///
+/// Returns the children of the node, with their own children_count populated
 /// but not their children (unless max_depth > 1).
-pub fn get_children_by_path(
+pub fn get_children_by_element_id(
     pid: u32,
-    path: &[usize],
+    element_id: &str,
     max_depth: usize,
     max_children_per_level: usize,
 ) -> Result<Vec<AXNode>, String> {
-    let app_element = AXUIElement::application(pid as i32);
+    use crate::element_registry::ElementRegistry;
 
-    // Navigate to the target node
-    let target_element = navigate_to_element(&app_element, path)
-        .ok_or_else(|| "Could not find target element".to_string())?;
+    // Get the element from the registry
+    let target_element = ElementRegistry::get(element_id)
+        .ok_or_else(|| format!("Element {} not found in registry", element_id))?;
 
     // Get children of this node
     // Depth = 0 means we're getting immediate children with their counts, but not grandchildren
     let children = get_element_children(
         &target_element,
         pid,
-        path.to_vec(),
-        0, // Start depth at 0 for children
+        Some(element_id.to_string()), // Pass element_id as parent_id
+        0,                            // Start depth at 0 for children
         max_depth,
         max_children_per_level,
         max_depth > 1, // Only load grandchildren if max_depth > 1
@@ -418,15 +515,13 @@ pub fn get_children_by_path(
     Ok(children)
 }
 
-/// Write text to a specific element (identified by path through the tree)
-///
-/// Path is a sequence of child indices from root to target element.
-pub fn write_to_element(pid: u32, element_path: &[usize], text: &str) -> Result<(), String> {
-    let app_element = AXUIElement::application(pid as i32);
+/// Write text to a specific element (identified by element ID) (NEW - Phase 3)
+pub fn write_to_element_by_id(element_id: &str, text: &str) -> Result<(), String> {
+    use crate::element_registry::ElementRegistry;
 
-    // Navigate to target element
-    let target_element = navigate_to_element(&app_element, element_path)
-        .ok_or_else(|| "Could not find target element".to_string())?;
+    // Get the element from the registry
+    let target_element = ElementRegistry::get(element_id)
+        .ok_or_else(|| format!("Element {} not found in registry", element_id))?;
 
     // Check if element is writable
     let role = target_element
@@ -446,24 +541,6 @@ pub fn write_to_element(pid: u32, element_path: &[usize], text: &str) -> Result<
         .map_err(|e| format!("Failed to set value: {:?}", e))?;
 
     Ok(())
-}
-
-/// Navigate to an element using a path of child indices
-pub fn navigate_to_element(root: &AXUIElement, path: &[usize]) -> Option<AXUIElement> {
-    let mut current = root.clone();
-
-    for &index in path {
-        let children = current.attribute(&AXAttribute::children()).ok()?;
-
-        if index >= children.len() as usize {
-            return None;
-        }
-
-        let child_ref = children.get(index as isize)?;
-        current = (*child_ref).clone();
-    }
-
-    Some(current)
 }
 
 /// Check if a role represents a writable element

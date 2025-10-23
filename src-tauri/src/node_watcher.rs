@@ -24,13 +24,16 @@ use core_foundation::string::{CFString, CFStringRef};
 use tokio::sync::broadcast;
 
 use crate::axio::{AXValue, Bounds};
-use crate::platform;
 
-/// Unique identifier for a node (PID + path)
+/// Unique identifier for a node
+/// Phase 3: Now supports element_id (preferred) or path (legacy)
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub struct NodeIdentifier {
     pub pid: u32,
-    pub path: Vec<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub element_id: Option<String>, // NEW: Preferred (Phase 3)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<Vec<usize>>, // LEGACY: Fallback
 }
 
 /// Context passed to observer callbacks
@@ -42,9 +45,12 @@ struct ObserverContext {
 /// Delta update for a node (only changed fields included)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeUpdate {
-    pub id: String, // Stable node ID for frontend to match
+    pub id: String, // Stable element_id for frontend to match
     pub pid: u32,
-    pub path: Vec<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub element_id: Option<String>, // NEW: Element ID from registry
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<Vec<usize>>, // LEGACY: Deprecated
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<AXValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -75,29 +81,50 @@ impl NodeWatcher {
     }
 
     /// Watch a node for changes (registers for accessibility notifications)
-    pub fn watch_node(&self, pid: u32, path: Vec<usize>, node_id: String) -> Result<(), String> {
+    /// Supports both element_id (Phase 3) and path (legacy) for backwards compatibility
+    pub fn watch_node_by_id(
+        &self,
+        pid: u32,
+        element_id: String,
+        node_id: String,
+    ) -> Result<(), String> {
+        use crate::element_registry::ElementRegistry;
+
         println!(
-            "🔍 watch_node called: PID {} path {:?} ID {}",
-            pid, path, node_id
+            "🔍 watch_node called: PID {} element_id {} ID {}",
+            pid, element_id, node_id
         );
 
         let node_identifier = NodeIdentifier {
             pid,
-            path: path.clone(),
+            element_id: Some(element_id.clone()),
+            path: None,
         };
 
-        // Navigate to the target element
-        println!("  🗺️  Navigating to element...");
-        let element = match self.navigate_to_element(pid, &path) {
+        // Get element from registry
+        println!("  🗺️  Getting element from registry...");
+        let element = match ElementRegistry::get(&element_id) {
             Some(el) => {
-                println!("  ✅ Navigation successful");
+                println!("  ✅ Element found in registry");
                 el
             }
             None => {
-                println!("  ❌ Navigation failed");
-                return Err("Could not navigate to element".to_string());
+                println!("  ❌ Element not found in registry");
+                return Err("Element not found in registry".to_string());
             }
         };
+
+        self.watch_element_internal(node_identifier, element, node_id)
+    }
+
+    /// Internal method to watch an element (used by both path and element_id versions)
+    fn watch_element_internal(
+        &self,
+        node_identifier: NodeIdentifier,
+        element: AXUIElement,
+        node_id: String,
+    ) -> Result<(), String> {
+        let pid = node_identifier.pid;
 
         // Get or create observer for this PID
         let observer = {
@@ -191,9 +218,20 @@ impl NodeWatcher {
             .unwrap()
             .insert(node_identifier.clone(), (element, context_ptr));
 
+        let path_str = node_identifier
+            .path
+            .as_ref()
+            .map(|p| format!("{:?}", p))
+            .unwrap_or_else(|| "N/A".to_string());
+        let element_id_str = node_identifier
+            .element_id
+            .as_ref()
+            .map(|id| id.clone())
+            .unwrap_or_else(|| "N/A".to_string());
+
         println!(
-            "👁️  Successfully watching node: ID {} PID {} path {:?}",
-            node_id, pid, path
+            "👁️  Successfully watching node: ID {} PID {} element_id: {} path: {}",
+            node_id, pid, element_id_str, path_str
         );
 
         // Store the watch for debugging
@@ -209,7 +247,8 @@ impl NodeWatcher {
     pub fn unwatch_node(&self, pid: u32, path: Vec<usize>) {
         let node_id = NodeIdentifier {
             pid,
-            path: path.clone(),
+            element_id: None,
+            path: Some(path.clone()),
         };
 
         // Remove from watch list
@@ -256,25 +295,16 @@ impl NodeWatcher {
 
         // Unwatch each node
         for node_id in nodes {
-            self.unwatch_node(node_id.pid, node_id.path);
+            if let Some(path) = node_id.path {
+                self.unwatch_node(node_id.pid, path);
+            }
+            // If element_id is present, we would use unwatch_node_by_id (future enhancement)
         }
 
         // Clear observers (they should all be removed by now, but just in case)
         self.observers.lock().unwrap().clear();
 
         println!("✨ All watches cleared");
-    }
-
-    /// Navigate to an element by path
-    fn navigate_to_element(&self, pid: u32, path: &[usize]) -> Option<AXUIElement> {
-        let app_element = AXUIElement::application(pid as i32);
-
-        if path.is_empty() {
-            return Some(app_element);
-        }
-
-        // Use platform function to navigate
-        platform::navigate_to_element(&app_element, path)
     }
 }
 
@@ -425,7 +455,8 @@ fn handle_notification_direct(
     let mut update = NodeUpdate {
         id: stable_id.clone(),
         pid: context.node_id.pid,
-        path: vec![], // We're not using paths anymore for identification
+        element_id: context.node_id.element_id.clone(),
+        path: context.node_id.path.clone(),
         value: None,
         bounds: None,
         focused: None,

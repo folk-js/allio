@@ -16,10 +16,12 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 
 mod ax_value;
 mod axio;
+mod element_registry;
 mod mouse;
 mod node_watcher;
 mod platform;
 mod websocket;
+mod window_manager;
 mod windows;
 
 use websocket::WebSocketState;

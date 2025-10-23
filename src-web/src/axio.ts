@@ -120,17 +120,21 @@ export interface Window {
 /**
  * Core accessibility node
  *
- * Nodes know their location (pid + path) so they can perform operations on themselves.
+ * Nodes know their location (pid + element_id) so they can perform operations on themselves.
  * Forms a tree structure via the children field.
- * Operations use path-based navigation (re-navigate from root each time).
+ * Phase 3: Switched to element ID-based operations (direct registry lookup, no re-navigation).
  */
 export interface AXNode {
   // Location (for operations - nodes know where they are)
   readonly pid: number;
-  readonly path: number[]; // Child indices from root to this node
+  readonly element_id: string; // UUID from ElementRegistry
+  readonly parent_id?: string; // UUID of parent element (None for root)
+
+  // Legacy path field for backwards compatibility
+  readonly path?: number[]; // Deprecated, will be removed
 
   // Identity
-  readonly id: string;
+  readonly id: string; // Same as element_id
   readonly role: AXRole;
   readonly subrole?: string; // Platform-specific subtype (or native name for unknown roles)
 
@@ -290,7 +294,68 @@ export class AXIO {
   // ============================================================================
 
   /**
-   * Get accessibility tree for a process
+   * Get accessibility tree for a window by window ID (PREFERRED)
+   * Uses cached window element as root - faster and more accurate
+   * Returns hierarchical tree structure with children
+   * All nodes have setValue() method attached for easy operations
+   */
+  async getTreeByWindowId(
+    windowId: string,
+    maxDepth: number = 50,
+    maxChildrenPerLevel: number = 2000
+  ): Promise<AXNode> {
+    return new Promise((resolve, reject) => {
+      const handler = (data: any) => {
+        // Remove this specific handler
+        const listeners = this.listeners.get("accessibility_tree_response");
+        if (listeners) {
+          listeners.delete(handler);
+        }
+
+        if (data.success && data.tree) {
+          // Attach methods to all nodes in the tree
+          const tree = this.attachNodeMethods(data.tree);
+          resolve(tree);
+        } else {
+          reject(new Error(data.error || "Failed to get tree"));
+        }
+      };
+
+      // Add temporary handler
+      if (!this.listeners.has("accessibility_tree_response")) {
+        this.listeners.set("accessibility_tree_response", new Set());
+      }
+      this.listeners.get("accessibility_tree_response")!.add(handler);
+
+      // Send request
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(
+          JSON.stringify({
+            msg_type: "get_accessibility_tree",
+            window_id: windowId,
+            max_depth: maxDepth,
+            max_children_per_level: maxChildrenPerLevel,
+          })
+        );
+      } else {
+        reject(new Error("WebSocket not connected"));
+      }
+
+      // Timeout after 10s
+      setTimeout(() => {
+        const listeners = this.listeners.get("accessibility_tree_response");
+        if (listeners) {
+          listeners.delete(handler);
+        }
+        reject(new Error("Timeout waiting for tree response"));
+      }, 10000);
+    });
+  }
+
+  /**
+   * Get accessibility tree for a process by PID (LEGACY)
+   * ⚠️ Uses app element as root (includes all windows)
+   * Prefer getTreeByWindowId() for single-window trees
    * Returns hierarchical tree structure with children
    * All nodes have setValue() method attached for easy operations
    */
@@ -351,22 +416,42 @@ export class AXIO {
    * Attach operation methods to a node and its children recursively
    */
   private attachNodeMethods(node: AXNode): AXNode {
-    // Attach setValue method
+    // Attach setValue method - use element_id if available (Phase 3), fallback to path
     (node as any).setValue = async (text: string) => {
-      return this.write(node.pid, node.path, text);
+      if (node.element_id) {
+        return this.writeByElementId(node.element_id, text);
+      } else if (node.path) {
+        // Legacy fallback
+        return this.write(node.pid, node.path, text);
+      } else {
+        throw new Error("Node has neither element_id nor path");
+      }
     };
 
-    // Attach getChildren method
+    // Attach getChildren method - use element_id if available (Phase 3), fallback to path
     (node as any).getChildren = async (
       maxDepth: number = 1,
       maxChildren: number = 2000
     ) => {
-      const children = await this.getChildren(
-        node.pid,
-        node.path,
-        maxDepth,
-        maxChildren
-      );
+      let children: AXNode[];
+      if (node.element_id) {
+        children = await this.getChildrenByElementId(
+          node.pid,
+          node.element_id,
+          maxDepth,
+          maxChildren
+        );
+      } else if (node.path) {
+        // Legacy fallback
+        children = await this.getChildren(
+          node.pid,
+          node.path,
+          maxDepth,
+          maxChildren
+        );
+      } else {
+        throw new Error("Node has neither element_id nor path");
+      }
       // Attach methods to the newly loaded children
       return children.map((child) => this.attachNodeMethods(child));
     };
@@ -382,7 +467,65 @@ export class AXIO {
   }
 
   /**
-   * Get children of a specific node by path
+   * Get children of a specific node by element ID (PREFERRED - Phase 3)
+   * Returns immediate children with their children_count populated but not loaded
+   */
+  async getChildrenByElementId(
+    pid: number,
+    elementId: string,
+    maxDepth: number = 1,
+    maxChildren: number = 2000
+  ): Promise<AXNode[]> {
+    return new Promise((resolve, reject) => {
+      const handler = (data: any) => {
+        // Remove this specific handler
+        const listeners = this.listeners.get("get_children_response");
+        if (listeners) {
+          listeners.delete(handler);
+        }
+
+        if (data.success && data.children) {
+          resolve(data.children);
+        } else {
+          reject(new Error(data.error || "Failed to get children"));
+        }
+      };
+
+      // Add temporary handler
+      if (!this.listeners.has("get_children_response")) {
+        this.listeners.set("get_children_response", new Set());
+      }
+      this.listeners.get("get_children_response")!.add(handler);
+
+      // Send request
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(
+          JSON.stringify({
+            msg_type: "get_children",
+            pid,
+            element_id: elementId,
+            max_depth: maxDepth,
+            max_children_per_level: maxChildren,
+          })
+        );
+      } else {
+        reject(new Error("WebSocket not connected"));
+      }
+
+      // Timeout after 10s
+      setTimeout(() => {
+        const listeners = this.listeners.get("get_children_response");
+        if (listeners) {
+          listeners.delete(handler);
+        }
+        reject(new Error("Timeout waiting for children response"));
+      }, 10000);
+    });
+  }
+
+  /**
+   * LEGACY: Get children of a specific node by path
+   * ⚠️ DEPRECATED: Use getChildrenByElementId() instead
    * Returns immediate children with their children_count populated but not loaded
    */
   async getChildren(
@@ -439,7 +582,57 @@ export class AXIO {
   }
 
   /**
-   * Write text to an element using pid and path
+   * Write text to an element by element ID (PREFERRED - Phase 3)
+   */
+  async writeByElementId(elementId: string, text: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const handler = (data: any) => {
+        // Remove this specific handler
+        const listeners = this.listeners.get("accessibility_write_response");
+        if (listeners) {
+          listeners.delete(handler);
+        }
+
+        if (data.success) {
+          resolve();
+        } else {
+          reject(new Error(data.error || "Failed to write"));
+        }
+      };
+
+      // Add temporary handler
+      if (!this.listeners.has("accessibility_write_response")) {
+        this.listeners.set("accessibility_write_response", new Set());
+      }
+      this.listeners.get("accessibility_write_response")!.add(handler);
+
+      // Send request
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(
+          JSON.stringify({
+            msg_type: "write_to_element",
+            element_id: elementId,
+            text,
+          })
+        );
+      } else {
+        reject(new Error("WebSocket not connected"));
+      }
+
+      // Timeout after 5s
+      setTimeout(() => {
+        const listeners = this.listeners.get("accessibility_write_response");
+        if (listeners) {
+          listeners.delete(handler);
+        }
+        reject(new Error("Timeout waiting for write response"));
+      }, 5000);
+    });
+  }
+
+  /**
+   * LEGACY: Write text to an element using pid and path
+   * ⚠️ DEPRECATED: Use writeByElementId() instead
    */
   async write(pid: number, path: number[], text: string): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -537,7 +730,59 @@ export class AXIO {
   }
 
   /**
-   * Watch a node for changes (registers for AXObserver notifications)
+   * Watch a node for changes by element ID (PREFERRED - Phase 3)
+   * When the node changes, `onNodeUpdated` callbacks will fire
+   */
+  async watchNodeByElementId(
+    pid: number,
+    elementId: string,
+    nodeId: string
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const handler = (data: any) => {
+        const listeners = this.listeners.get("watch_node_response");
+        if (listeners) {
+          listeners.delete(handler);
+        }
+
+        if (data.success) {
+          resolve();
+        } else {
+          reject(new Error(data.error || "Failed to watch node"));
+        }
+      };
+
+      if (!this.listeners.has("watch_node_response")) {
+        this.listeners.set("watch_node_response", new Set());
+      }
+      this.listeners.get("watch_node_response")!.add(handler);
+
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(
+          JSON.stringify({
+            msg_type: "watch_node",
+            pid,
+            element_id: elementId,
+            node_id: nodeId,
+          })
+        );
+      } else {
+        reject(new Error("WebSocket not connected"));
+      }
+
+      setTimeout(() => {
+        const listeners = this.listeners.get("watch_node_response");
+        if (listeners) {
+          listeners.delete(handler);
+        }
+        reject(new Error("Timeout waiting for watch response"));
+      }, 5000);
+    });
+  }
+
+  /**
+   * LEGACY: Watch a node for changes (registers for AXObserver notifications)
+   * ⚠️ DEPRECATED: Use watchNodeByElementId() instead
    * When the node changes, `onNodeUpdated` callbacks will fire
    */
   async watchNode(pid: number, path: number[], nodeId: string): Promise<void> {
@@ -584,7 +829,53 @@ export class AXIO {
   }
 
   /**
-   * Stop watching a node for changes
+   * Stop watching a node by element ID (PREFERRED - Phase 3)
+   */
+  async unwatchNodeByElementId(pid: number, elementId: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const handler = (data: any) => {
+        const listeners = this.listeners.get("unwatch_node_response");
+        if (listeners) {
+          listeners.delete(handler);
+        }
+
+        if (data.success) {
+          resolve();
+        } else {
+          reject(new Error("Failed to unwatch node"));
+        }
+      };
+
+      if (!this.listeners.has("unwatch_node_response")) {
+        this.listeners.set("unwatch_node_response", new Set());
+      }
+      this.listeners.get("unwatch_node_response")!.add(handler);
+
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.send(
+          JSON.stringify({
+            msg_type: "unwatch_node",
+            pid,
+            element_id: elementId,
+          })
+        );
+      } else {
+        reject(new Error("WebSocket not connected"));
+      }
+
+      setTimeout(() => {
+        const listeners = this.listeners.get("unwatch_node_response");
+        if (listeners) {
+          listeners.delete(handler);
+        }
+        reject(new Error("Timeout waiting for unwatch response"));
+      }, 5000);
+    });
+  }
+
+  /**
+   * LEGACY: Stop watching a node for changes
+   * ⚠️ DEPRECATED: Use unwatchNodeByElementId() instead
    */
   async unwatchNode(pid: number, path: number[]): Promise<void> {
     return new Promise((resolve, reject) => {

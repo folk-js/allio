@@ -220,12 +220,14 @@ pub fn get_all_windows_with_focus() -> Option<Vec<WindowInfo>> {
 
 // WebSocket-only polling loop
 pub fn window_polling_loop(ws_state: WebSocketState) {
+    use crate::window_manager::WindowManager;
+
     let mut last_windows: Option<Vec<WindowInfo>> = None;
 
     loop {
         let loop_start = Instant::now();
 
-        // Get fresh data from system
+        // Get fresh data from system (lightweight - no AX elements)
         // Returns None if overlay window is not visible (switched to different view)
         let current_windows_opt = get_all_windows_with_focus();
 
@@ -235,6 +237,31 @@ pub fn window_polling_loop(ws_state: WebSocketState) {
         if let Some(current_windows) = current_windows_opt {
             // Broadcast window updates if something changed
             if last_windows.as_ref() != Some(&current_windows) {
+                // Update window manager (fetches AX elements only for new windows)
+                // Log new windows being added
+                for w in &current_windows {
+                    if last_windows
+                        .as_ref()
+                        .map_or(true, |last| !last.iter().any(|lw| lw.id == w.id))
+                    {
+                        println!(
+                            "🆕 New window detected by x-win: id='{}', title='{}', app='{}', pid={}, bounds=({},{},{}x{})",
+                            w.id, w.title, w.app_name, w.process_id, w.x, w.y, w.w, w.h
+                        );
+                    }
+                }
+
+                let (_managed_windows, added_ids, removed_ids) =
+                    WindowManager::update_windows(current_windows.clone());
+
+                // Log window additions/removals
+                if !added_ids.is_empty() {
+                    println!("➕ Windows added: {:?}", added_ids);
+                }
+                if !removed_ids.is_empty() {
+                    println!("➖ Windows removed: {:?}", removed_ids);
+                }
+
                 // Update WebSocket state and broadcast
                 let ws_state_clone = ws_state.clone();
                 let windows_clone = current_windows.clone();
