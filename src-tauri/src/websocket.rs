@@ -7,6 +7,7 @@ use axum::{
     routing::get,
     Router,
 };
+use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::{collections::HashSet, sync::Arc};
@@ -316,7 +317,7 @@ pub async fn start_websocket_server(ws_state: WebSocketState) {
         .await
         .expect("Failed to bind WebSocket server");
 
-    println!("🔌 WebSocket server running on ws://127.0.0.1:3030/ws");
+    println!("{}", "WebSocket server: ws://127.0.0.1:3030/ws".bright_black());
     axum::serve(listener, app)
         .await
         .expect("WebSocket server failed");
@@ -332,7 +333,7 @@ async fn websocket_handler(
 async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
     let mut rx = ws_state.sender.subscribe();
 
-    println!("🔗 Client session started");
+    println!("{}", "Client connected".bright_black());
 
     // Send initial window state immediately
     {
@@ -402,7 +403,7 @@ async fn handle_client_message(
     ws_state: &WebSocketState,
     socket: &mut WebSocket,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    println!("📨 Received WebSocket message: {}", message);
+    // Silently handle messages - no logging for normal operations
 
     // Try to parse as ClientIdentification first (doesn't have msg_type field)
     if let Ok(identification) = serde_json::from_str::<ClientIdentification>(message) {
@@ -628,10 +629,6 @@ async fn handle_client_message(
             let watch_req = serde_json::from_str::<WatchNodeRequest>(message)?;
 
             let result = if let Some(ref element_id) = watch_req.element_id {
-                println!(
-                    "👁️  Client requesting to watch node: element_id {} ID {}",
-                    element_id, watch_req.node_id
-                );
                 ws_state.node_watcher.watch_node_by_id(
                     watch_req.pid,
                     element_id.clone(),
@@ -642,12 +639,12 @@ async fn handle_client_message(
             };
 
             let (success, error) = match result {
-                Ok(_) => {
-                    println!("✅ Watch succeeded for node {}", watch_req.node_id);
-                    (true, None)
-                }
+                Ok(_) => (true, None),
                 Err(e) => {
-                    println!("❌ Watch failed for node {}: {}", watch_req.node_id, e);
+                    println!(
+                        "{}",
+                        format!("ERROR: Watch failed for {}: {}", watch_req.node_id, e).red()
+                    );
                     (false, Some(e))
                 }
             };

@@ -5,6 +5,7 @@
  * Only fetches AX elements when windows are added, not on every poll.
  */
 use accessibility::AXUIElement;
+use colored::Colorize;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -79,11 +80,14 @@ impl WindowManager {
                 // This handles the case where the AXWindow element wasn't in the children
                 // list when we first detected the window (timing issue with macOS AX API)
                 if existing.ax_element.is_none() {
-                    println!("🔄 Retrying AX element fetch for window '{}'", window_id);
                     let (ax_element, ax_window_id) =
                         Self::fetch_ax_element_for_window(&window_info);
                     if ax_element.is_some() {
-                        println!("✅ Successfully fetched AX element on retry!");
+                        println!(
+                            "{}",
+                            format!("Matched AX element for window '{}'", window_info.title)
+                                .green()
+                        );
                         existing.ax_element = ax_element;
                         existing.ax_window_id = ax_window_id;
                     }
@@ -127,23 +131,16 @@ impl WindowManager {
         use core_foundation::string::CFString;
 
         // Get all window elements for this PID
-        println!(
-            "🔎 Fetching AX element for window '{}' (PID: {}, x:{}, y:{}, w:{}, h:{})",
-            window.title, window.process_id, window.x, window.y, window.w, window.h
-        );
-
         let window_elements = match get_window_elements(window.process_id) {
-            Ok(elements) => {
-                println!(
-                    "   Retrieved {} window elements from get_window_elements",
-                    elements.len()
-                );
-                elements
-            }
+            Ok(elements) => elements,
             Err(e) => {
                 println!(
-                    "❌ Failed to get window elements for PID {} (window '{}'): {}",
-                    window.process_id, window.title, e
+                    "{}",
+                    format!(
+                        "ERROR: Failed to get window elements for PID {} (window '{}'): {}",
+                        window.process_id, window.title, e
+                    )
+                    .red()
                 );
                 return (None, None);
             }
@@ -151,8 +148,12 @@ impl WindowManager {
 
         if window_elements.is_empty() {
             println!(
-                "⚠️  No window elements found for PID {} (window '{}')",
-                window.process_id, window.title
+                "{}",
+                format!(
+                    "WARNING: No window elements found for PID {} (window '{}')",
+                    window.process_id, window.title
+                )
+                .yellow()
             );
             return (None, None);
         }
@@ -161,13 +162,7 @@ impl WindowManager {
         const POSITION_MARGIN: i32 = 2;
         const SIZE_MARGIN: i32 = 2;
 
-        for (i, element) in window_elements.iter().enumerate() {
-            println!(
-                "   🔍 Checking window element {} of {}",
-                i + 1,
-                window_elements.len()
-            );
-
+        for element in window_elements.iter() {
             // Get element position
             let position_attr = CFString::new(kAXPositionAttribute);
             let ax_position_attr = AXAttribute::new(&position_attr);
@@ -186,15 +181,6 @@ impl WindowManager {
                 extract_size(&s)
             });
 
-            println!(
-                "      Element bounds: pos={:?}, size={:?}",
-                element_pos, element_size
-            );
-            println!(
-                "      Target bounds:  pos=({},{}), size=({},{})",
-                window.x, window.y, window.w, window.h
-            );
-
             // Check if bounds match (within margin)
             if let (Some((ax_x, ax_y)), Some((ax_w, ax_h))) = (element_pos, element_size) {
                 let pos_diff_x = (ax_x as i32 - window.x).abs();
@@ -202,29 +188,13 @@ impl WindowManager {
                 let size_diff_w = (ax_w as i32 - window.w).abs();
                 let size_diff_h = (ax_h as i32 - window.h).abs();
 
-                println!(
-                    "      Differences: pos_x={}, pos_y={}, size_w={}, size_h={}",
-                    pos_diff_x, pos_diff_y, size_diff_w, size_diff_h
-                );
-
                 let position_matches =
                     pos_diff_x <= POSITION_MARGIN && pos_diff_y <= POSITION_MARGIN;
                 let size_matches = size_diff_w <= SIZE_MARGIN && size_diff_h <= SIZE_MARGIN;
 
-                println!(
-                    "      Match result: position={}, size={}",
-                    position_matches, size_matches
-                );
-
                 if position_matches && size_matches {
-                    println!(
-                        "✅ Matched AX element for '{}' by bounds (PID: {}, pos: ({},{}), size: {}x{})",
-                        window.title, window.process_id, ax_x, ax_y, ax_w, ax_h
-                    );
                     return (Some(element.clone()), None); // No longer return CGWindowID
                 }
-            } else {
-                println!("      ⚠️  Could not get bounds for this element");
             }
         }
 

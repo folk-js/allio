@@ -389,11 +389,6 @@ pub fn get_window_elements(pid: u32) -> Result<Vec<AXUIElement>, String> {
 
     let child_count = children_array.len();
 
-    println!(
-        "🔍 get_window_elements: PID {} has {} children",
-        pid, child_count
-    );
-
     let mut result = Vec::new();
 
     // Filter children by role = "AXWindow"
@@ -405,22 +400,13 @@ pub fn get_window_elements(pid: u32) -> Result<Vec<AXUIElement>, String> {
                     let cf_string = CFString::wrap_under_get_rule(role.as_CFTypeRef() as *const _);
                     cf_string.to_string()
                 };
-                println!("     Child {}: role = {}", i, role_str);
 
                 if role_str == "AXWindow" {
-                    println!("       ✅ Found window element");
                     result.push((*child_element).clone());
                 }
             }
         }
     }
-
-    println!(
-        "🔍 get_window_elements: PID {} returned {} window elements (filtered from {} children)",
-        pid,
-        result.len(),
-        child_count
-    );
 
     Ok(result)
 }

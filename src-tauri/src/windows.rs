@@ -133,11 +133,7 @@ fn get_bundle_id(pid: u32) -> Option<String> {
         .output()
         .ok()
         .and_then(|output| String::from_utf8(output.stdout).ok())
-        .and_then(|info| parse_bundle_id(&info))
-        .map(|id| {
-            println!("📋 PID {} has bundle ID: {}", pid, id);
-            id
-        });
+        .and_then(|info| parse_bundle_id(&info));
 
     // Store in cache
     BUNDLE_ID_CACHE
@@ -238,29 +234,10 @@ pub fn window_polling_loop(ws_state: WebSocketState) {
             // Broadcast window updates if something changed
             if last_windows.as_ref() != Some(&current_windows) {
                 // Update window manager (fetches AX elements only for new windows)
-                // Log new windows being added
-                for w in &current_windows {
-                    if last_windows
-                        .as_ref()
-                        .map_or(true, |last| !last.iter().any(|lw| lw.id == w.id))
-                    {
-                        println!(
-                            "🆕 New window detected by x-win: id='{}', title='{}', app='{}', pid={}, bounds=({},{},{}x{})",
-                            w.id, w.title, w.app_name, w.process_id, w.x, w.y, w.w, w.h
-                        );
-                    }
-                }
+                // Silently track new windows
 
-                let (_managed_windows, added_ids, removed_ids) =
+                let (_managed_windows, _added_ids, _removed_ids) =
                     WindowManager::update_windows(current_windows.clone());
-
-                // Log window additions/removals
-                if !added_ids.is_empty() {
-                    println!("➕ Windows added: {:?}", added_ids);
-                }
-                if !removed_ids.is_empty() {
-                    println!("➖ Windows removed: {:?}", removed_ids);
-                }
 
                 // Update WebSocket state and broadcast
                 let ws_state_clone = ws_state.clone();
