@@ -10,9 +10,6 @@
 pub mod macos;
 
 #[cfg(target_os = "macos")]
-pub mod ax_private;
-
-#[cfg(target_os = "macos")]
 pub use macos::*;
 
 // Future platform support

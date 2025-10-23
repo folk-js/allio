@@ -10,7 +10,6 @@ class AXTreeOverlay {
     node: AXNode;
     currentValue: string;
   } | null = null;
-  private currentTreeData: AXNode | null = null; // Store the current tree data for position lookups
   private renderedNodeCount: number = 0; // Track rendered DOM elements
   private hoverOutline: HTMLElement | null = null; // Visual outline for hovered elements
   private expandedNodes: Set<string> = new Set(); // Track which nodes are expanded
@@ -194,9 +193,6 @@ class AXTreeOverlay {
 
     this.windowContainer.appendChild(this.treeContainer);
     console.log(`✅ Displayed accessibility tree for ${window.title}`);
-
-    // Store the current tree data for position lookups
-    this.currentTreeData = tree;
   }
 
   private createTreeElement(node: AXNode, nodeId?: string): HTMLElement {
@@ -457,6 +453,18 @@ class AXTreeOverlay {
       // Store node element for later updates
       this.nodeElements.set(nodeId!, { element: nodeElement, node });
 
+      // Auto-watch leaf nodes (nodes with no children) since they can't be expanded
+      // This ensures text fields and other leaf elements get watched for changes
+      const isLeafNode = !hasLoadedChildren && !hasUnloadedChildren;
+      if (isLeafNode && nodeId && node.element_id) {
+        console.log(`👁️ Auto-watching leaf node: ${node.role}`);
+        this.axio
+          .watchNodeByElementId(node.pid, node.element_id, nodeId)
+          .catch((err) => {
+            console.error(`Failed to auto-watch leaf node ${nodeId}:`, err);
+          });
+      }
+
       this.renderedNodeCount++; // Increment counter for each node rendered
       return nodeElement;
     } catch (error) {
@@ -486,14 +494,14 @@ class AXTreeOverlay {
     ) {
       // Get the target element's position and size from when the panel was opened
       if (this.currentTargetElement) {
-        // Find the element in the current tree to get updated position
-        const elementPath = this.currentTargetElement.node.path || [];
+        const node = this.currentTargetElement.node;
 
-        const elementPosition = this.getElementPositionFromTree(elementPath);
-
-        if (elementPosition) {
-          const [x, y] = elementPosition.position;
-          const [width, height] = elementPosition.size;
+        // Use the node's bounds directly
+        if (node.bounds) {
+          const x = node.bounds.position.x;
+          const y = node.bounds.position.y;
+          const width = node.bounds.size.width;
+          const height = node.bounds.size.height;
 
           // Calculate new position (consistent with openRegexPanel)
           const panelX = Math.max(10, x + width / 2 - 140); // Center panel (280px wide / 2 = 140px offset)
@@ -511,39 +519,6 @@ class AXTreeOverlay {
         }
       }
     }
-  }
-
-  private getElementPositionFromTree(
-    elementPath: number[]
-  ): { position: [number, number]; size: [number, number] } | null {
-    if (!this.currentTreeData) {
-      return null;
-    }
-
-    // Traverse the tree following the element path
-    let currentNode = this.currentTreeData;
-
-    for (let i = 0; i < elementPath.length; i++) {
-      const pathIndex = elementPath[i];
-
-      if (!currentNode.children || pathIndex >= currentNode.children.length) {
-        return null;
-      }
-      currentNode = currentNode.children[pathIndex];
-    }
-
-    // Return position and size if available
-    if (currentNode.bounds) {
-      return {
-        position: [
-          currentNode.bounds.position.x,
-          currentNode.bounds.position.y,
-        ],
-        size: [currentNode.bounds.size.width, currentNode.bounds.size.height],
-      };
-    }
-
-    return null;
   }
 
   private clearAccessibilityTree() {
@@ -1081,21 +1056,11 @@ class AXTreeOverlay {
       // Unwatch this node (stop receiving updates)
       const stored = this.nodeElements.get(nodeId);
       if (stored) {
-        // Use element_id if available (Phase 3), fallback to path
-        if (stored.node.element_id) {
-          this.axio
-            .unwatchNodeByElementId(stored.node.pid, stored.node.element_id)
-            .catch((err) => {
-              console.error(`Failed to unwatch node ${nodeId}:`, err);
-            });
-        } else if (stored.node.path) {
-          // Legacy fallback
-          this.axio
-            .unwatchNode(stored.node.pid, stored.node.path)
-            .catch((err) => {
-              console.error(`Failed to unwatch node ${nodeId}:`, err);
-            });
-        }
+        this.axio
+          .unwatchNodeByElementId(stored.node.pid, stored.node.element_id)
+          .catch((err) => {
+            console.error(`Failed to unwatch node ${nodeId}:`, err);
+          });
       }
 
       // Update indicator
@@ -1112,25 +1077,11 @@ class AXTreeOverlay {
       // Watch this node (start receiving updates)
       const stored = this.nodeElements.get(nodeId);
       if (stored) {
-        // Use element_id if available (Phase 3), fallback to path
-        if (stored.node.element_id) {
-          this.axio
-            .watchNodeByElementId(
-              stored.node.pid,
-              stored.node.element_id,
-              nodeId
-            )
-            .catch((err) => {
-              console.error(`Failed to watch node ${nodeId}:`, err);
-            });
-        } else if (stored.node.path) {
-          // Legacy fallback
-          this.axio
-            .watchNode(stored.node.pid, stored.node.path, nodeId)
-            .catch((err) => {
-              console.error(`Failed to watch node ${nodeId}:`, err);
-            });
-        }
+        this.axio
+          .watchNodeByElementId(stored.node.pid, stored.node.element_id, nodeId)
+          .catch((err) => {
+            console.error(`Failed to watch node ${nodeId}:`, err);
+          });
       }
 
       // Update indicator
@@ -1194,19 +1145,11 @@ class AXTreeOverlay {
       this.expandedNodes.add(nodeId);
 
       // Watch this node for changes (now that it's expanded)
-      // Use element_id if available (Phase 3), fallback to path
-      if (node.element_id) {
-        this.axio
-          .watchNodeByElementId(node.pid, node.element_id, nodeId)
-          .catch((err) => {
-            console.error(`Failed to watch node ${nodeId}:`, err);
-          });
-      } else if (node.path) {
-        // Legacy fallback
-        this.axio.watchNode(node.pid, node.path, nodeId).catch((err) => {
+      this.axio
+        .watchNodeByElementId(node.pid, node.element_id, nodeId)
+        .catch((err) => {
           console.error(`Failed to watch node ${nodeId}:`, err);
         });
-      }
 
       // Update indicator
       if (indicator && indicator instanceof HTMLElement) {

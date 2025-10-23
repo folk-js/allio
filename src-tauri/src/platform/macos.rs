@@ -371,15 +371,14 @@ fn get_element_children(
 /// If `load_children` is false, returns only the root node with children_count populated.
 /// Get all window AXUIElements for a given PID
 ///
-/// Returns a vector of (AXUIElement, CGWindowID) tuples for each window.
-/// Uses the private _AXUIElementGetWindow API to get CGWindowIDs for matching.
-pub fn get_window_elements(pid: u32) -> Result<Vec<(AXUIElement, Option<u32>)>, String> {
-    use crate::platform::ax_private::get_window_id_from_element;
+/// Returns a vector of AXUIElements for each window (no CGWindowID).
+/// We match windows by bounds instead of using private APIs.
+pub fn get_window_elements(pid: u32) -> Result<Vec<AXUIElement>, String> {
     use core_foundation::string::CFString;
 
     let app_element = AXUIElement::application(pid as i32);
 
-    // Get children of the application element (using the same approach as get_element_children)
+    // Get children of the application element
     let children_array = match app_element.attribute(&AXAttribute::children()) {
         Ok(children) => children,
         Err(_) => {
@@ -409,13 +408,8 @@ pub fn get_window_elements(pid: u32) -> Result<Vec<(AXUIElement, Option<u32>)>, 
                 println!("     Child {}: role = {}", i, role_str);
 
                 if role_str == "AXWindow" {
-                    // Try to get the CGWindowID using private API
-                    let window_id = get_window_id_from_element(child_element.as_concrete_TypeRef());
-                    println!(
-                        "       ✅ Found window element, CGWindowID = {:?}",
-                        window_id
-                    );
-                    result.push(((*child_element).clone(), window_id));
+                    println!("       ✅ Found window element");
+                    result.push((*child_element).clone());
                 }
             }
         }

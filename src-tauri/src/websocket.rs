@@ -209,7 +209,7 @@ struct WatchNodeData {
 struct UnwatchNodeRequest {
     msg_type: String,
     pid: u32,
-    path: Vec<usize>,
+    element_id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -597,34 +597,14 @@ async fn handle_client_message(
 
         msg_types::SET_CLICKTHROUGH => {
             let clickthrough_req = serde_json::from_str::<SetClickthroughRequest>(message)?;
-            println!(
-                "🖱️ Client requesting clickthrough: {}",
-                clickthrough_req.enabled
-            );
 
             // Set clickthrough state
             let (success, error) = match ws_state.app_handle.get_webview_window("main") {
                 Some(window) => match window.set_ignore_cursor_events(clickthrough_req.enabled) {
-                    Ok(_) => {
-                        println!(
-                            "✅ Clickthrough {} for window",
-                            if clickthrough_req.enabled {
-                                "enabled"
-                            } else {
-                                "disabled"
-                            }
-                        );
-                        (true, None)
-                    }
-                    Err(e) => {
-                        println!("❌ Failed to set clickthrough: {}", e);
-                        (false, Some(e.to_string()))
-                    }
+                    Ok(_) => (true, None),
+                    Err(e) => (false, Some(e.to_string())),
                 },
-                None => {
-                    println!("❌ Main window not found");
-                    (false, Some("Main window not found".to_string()))
-                }
+                None => (false, Some("Main window not found".to_string())),
             };
 
             let response = WsResponse {
@@ -688,14 +668,14 @@ async fn handle_client_message(
         msg_types::UNWATCH_NODE => {
             let unwatch_req = serde_json::from_str::<UnwatchNodeRequest>(message)?;
             println!(
-                "🚫 Client requesting to unwatch node: PID {} path {:?}",
-                unwatch_req.pid, unwatch_req.path
+                "🚫 Client requesting to unwatch node: PID {} element_id {}",
+                unwatch_req.pid, unwatch_req.element_id
             );
 
             // Stop watching the node
             ws_state
                 .node_watcher
-                .unwatch_node(unwatch_req.pid, unwatch_req.path);
+                .unwatch_node_by_id(unwatch_req.pid, unwatch_req.element_id);
 
             let response = WsResponse {
                 msg_type: msg_types::UNWATCH_NODE_RESPONSE.to_string(),

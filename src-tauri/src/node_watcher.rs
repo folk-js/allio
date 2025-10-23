@@ -26,14 +26,10 @@ use tokio::sync::broadcast;
 use crate::axio::{AXValue, Bounds};
 
 /// Unique identifier for a node
-/// Phase 3: Now supports element_id (preferred) or path (legacy)
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub struct NodeIdentifier {
     pub pid: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub element_id: Option<String>, // NEW: Preferred (Phase 3)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<Vec<usize>>, // LEGACY: Fallback
+    pub element_id: String,
 }
 
 /// Context passed to observer callbacks
@@ -45,12 +41,8 @@ struct ObserverContext {
 /// Delta update for a node (only changed fields included)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeUpdate {
-    pub id: String, // Stable element_id for frontend to match
+    pub id: String, // Element ID from registry for frontend to match
     pub pid: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub element_id: Option<String>, // NEW: Element ID from registry
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<Vec<usize>>, // LEGACY: Deprecated
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<AXValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -81,7 +73,6 @@ impl NodeWatcher {
     }
 
     /// Watch a node for changes (registers for accessibility notifications)
-    /// Supports both element_id (Phase 3) and path (legacy) for backwards compatibility
     pub fn watch_node_by_id(
         &self,
         pid: u32,
@@ -97,8 +88,7 @@ impl NodeWatcher {
 
         let node_identifier = NodeIdentifier {
             pid,
-            element_id: Some(element_id.clone()),
-            path: None,
+            element_id: element_id.clone(),
         };
 
         // Get element from registry
@@ -106,6 +96,25 @@ impl NodeWatcher {
         let element = match ElementRegistry::get(&element_id) {
             Some(el) => {
                 println!("  ✅ Element found in registry");
+
+                // Verify the element is still valid
+                use accessibility::AXAttribute;
+                match el.attribute(&AXAttribute::role()) {
+                    Ok(role_attr) => {
+                        use core_foundation::base::TCFType;
+                        use core_foundation::string::CFString;
+                        let role = unsafe {
+                            let cf_string =
+                                CFString::wrap_under_get_rule(role_attr.as_CFTypeRef() as *const _);
+                            cf_string.to_string()
+                        };
+                        println!("  ✅ Element is valid, role: {}", role);
+                        println!("  📌 Element CFTypeRef: {:?}", el.as_concrete_TypeRef());
+                    }
+                    Err(e) => {
+                        println!("  ⚠️  Element may be invalid: {:?}", e);
+                    }
+                }
                 el
             }
             None => {
@@ -147,7 +156,7 @@ impl NodeWatcher {
 
                 println!("✅ Created AXObserver for PID {}", pid);
 
-                // Add observer to the MAIN run loop (not current, which might be a Tokio thread)
+                // Add observer to the MAIN run loop
                 unsafe {
                     let run_loop_source_ref = AXObserverGetRunLoopSource(observer_ref);
                     if run_loop_source_ref.is_null() {
@@ -157,11 +166,12 @@ impl NodeWatcher {
                     let run_loop_source =
                         CFRunLoopSource::wrap_under_get_rule(run_loop_source_ref as *mut _);
 
-                    // Use the main run loop instead of current
+                    // MUST use main run loop - that's where Tauri processes events
                     let main_run_loop = CFRunLoop::get_main();
                     main_run_loop.add_source(&run_loop_source, kCFRunLoopDefaultMode);
 
-                    println!("✅ Added observer to main run loop");
+                    println!("✅ Added observer to MAIN run loop");
+                    println!("🔍 Main RunLoop: {:?}", main_run_loop.as_concrete_TypeRef());
                 }
 
                 observers.insert(pid, observer_ref);
@@ -187,6 +197,10 @@ impl NodeWatcher {
         ];
 
         let element_ref = element.as_concrete_TypeRef() as AXUIElementRef;
+        println!(
+            "📍 Registering notifications for element ref: {:?}",
+            element_ref
+        );
 
         for notification in &notifications {
             let notif_cfstring = CFString::new(notification);
@@ -216,22 +230,16 @@ impl NodeWatcher {
         self.watched_nodes
             .lock()
             .unwrap()
-            .insert(node_identifier.clone(), (element, context_ptr));
-
-        let path_str = node_identifier
-            .path
-            .as_ref()
-            .map(|p| format!("{:?}", p))
-            .unwrap_or_else(|| "N/A".to_string());
-        let element_id_str = node_identifier
-            .element_id
-            .as_ref()
-            .map(|id| id.clone())
-            .unwrap_or_else(|| "N/A".to_string());
+            .insert(node_identifier.clone(), (element.clone(), context_ptr));
 
         println!(
-            "👁️  Successfully watching node: ID {} PID {} element_id: {} path: {}",
-            node_id, pid, element_id_str, path_str
+            "🔐 Stored element in watched_nodes: {:?}",
+            element.as_concrete_TypeRef()
+        );
+
+        println!(
+            "👁️  Successfully watching node: ID {} PID {} element_id: {}",
+            node_id, pid, &node_identifier.element_id
         );
 
         // Store the watch for debugging
@@ -243,12 +251,11 @@ impl NodeWatcher {
         Ok(())
     }
 
-    /// Stop watching a node
-    pub fn unwatch_node(&self, pid: u32, path: Vec<usize>) {
+    /// Stop watching a node by element ID
+    pub fn unwatch_node_by_id(&self, pid: u32, element_id: String) {
         let node_id = NodeIdentifier {
             pid,
-            element_id: None,
-            path: Some(path.clone()),
+            element_id: element_id.clone(),
         };
 
         // Remove from watch list
@@ -281,7 +288,10 @@ impl NodeWatcher {
                 let _ = Box::from_raw(context_ptr as *mut ObserverContext);
             }
 
-            println!("🚫 Stopped watching node: PID {} path {:?}", pid, path);
+            println!(
+                "🚫 Stopped watching node: PID {} element_id {}",
+                pid, element_id
+            );
         }
     }
 
@@ -295,10 +305,7 @@ impl NodeWatcher {
 
         // Unwatch each node
         for node_id in nodes {
-            if let Some(path) = node_id.path {
-                self.unwatch_node(node_id.pid, path);
-            }
-            // If element_id is present, we would use unwatch_node_by_id (future enhancement)
+            self.unwatch_node_by_id(node_id.pid, node_id.element_id);
         }
 
         // Clear observers (they should all be removed by now, but just in case)
@@ -315,7 +322,10 @@ unsafe extern "C" fn observer_callback(
     notification: CFStringRef,
     refcon: *mut c_void,
 ) {
+    println!("🔔 OBSERVER CALLBACK FIRED!");
+
     if refcon.is_null() {
+        println!("❌ refcon is null!");
         return;
     }
 
@@ -328,102 +338,16 @@ unsafe extern "C" fn observer_callback(
     let changed_element = AXUIElement::wrap_under_get_rule(element);
 
     println!(
-        "🔔 Notification: {} (PID: {}, registered watch: {:?})",
-        notification_name, context.node_id.pid, context.node_id.path
+        "🔔 Notification: {} (PID: {}, element_id: {})",
+        notification_name, context.node_id.pid, context.node_id.element_id
     );
 
     // Extract data directly from the changed element and broadcast it
     handle_notification_direct(context, &notification_name, &changed_element);
 }
 
-/// Generate a stable ID for an element
-/// Priority: kAXIdentifierAttribute > role:title:index composite
-fn generate_stable_id(element: &AXUIElement, pid: u32) -> String {
-    use accessibility::AXAttribute;
-    use core_foundation::base::TCFType;
-    use core_foundation::string::CFString;
-
-    // Try kAXIdentifierAttribute first (native stable ID)
-    if let Ok(identifier_attr) =
-        element.attribute(&AXAttribute::new(&CFString::new("AXIdentifier")))
-    {
-        if let Some(id_str) = unsafe {
-            let cf_string =
-                CFString::wrap_under_get_rule(identifier_attr.as_CFTypeRef() as *const _);
-            let s = cf_string.to_string();
-            if !s.is_empty() {
-                Some(s)
-            } else {
-                None
-            }
-        } {
-            return format!("{}::id:{}", pid, id_str);
-        }
-    }
-
-    // Fallback: role:title:index composite
-    let role: String = element
-        .attribute(&AXAttribute::role())
-        .ok()
-        .and_then(|r| unsafe {
-            let cf_string = CFString::wrap_under_get_rule(r.as_CFTypeRef() as *const _);
-            Some(cf_string.to_string())
-        })
-        .unwrap_or_else(|| "Unknown".to_string());
-
-    let title: String = element
-        .attribute(&AXAttribute::title())
-        .ok()
-        .and_then(|t| unsafe {
-            let cf_string = CFString::wrap_under_get_rule(t.as_CFTypeRef() as *const _);
-            let s = cf_string.to_string();
-            if !s.is_empty() {
-                Some(s)
-            } else {
-                None
-            }
-        })
-        .unwrap_or_else(|| "".to_string());
-
-    // Get index among siblings (if we can find parent)
-    let index_str = if let Ok(parent) = element.attribute(&AXAttribute::parent()) {
-        if let Ok(children) = parent.attribute(&AXAttribute::children()) {
-            let element_ref = element.as_concrete_TypeRef();
-            let mut found_index = None;
-            for i in 0..children.len() {
-                if let Some(sibling) = children.get(i) {
-                    if std::ptr::eq(
-                        element_ref as *const _,
-                        sibling.as_concrete_TypeRef() as *const _,
-                    ) {
-                        found_index = Some(i);
-                        break;
-                    }
-                }
-            }
-            found_index.map(|i| format!(":{}", i)).unwrap_or_default()
-        } else {
-            String::new()
-        }
-    } else {
-        String::new()
-    };
-
-    if title.is_empty() {
-        format!("{}::{}:{}{}", pid, role, "untitled", index_str)
-    } else {
-        // Sanitize title for use in ID
-        let safe_title = title
-            .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
-            .take(30)
-            .collect::<String>();
-        format!("{}::{}:{}{}", pid, role, safe_title, index_str)
-    }
-}
-
-/// Handle notification by extracting data directly from the changed element (NEW APPROACH)
-/// This avoids path lookups entirely - we work with the element macOS gives us
+/// Handle notification by extracting data directly from the changed element
+/// Uses the element_id from the registry to identify the element
 fn handle_notification_direct(
     context: &ObserverContext,
     notification: &str,
@@ -433,8 +357,8 @@ fn handle_notification_direct(
     use core_foundation::base::TCFType;
     use core_foundation::string::CFString;
 
-    // Generate stable ID for this element
-    let stable_id = generate_stable_id(element, context.node_id.pid);
+    // Use the element_id from context (which is from the registry)
+    let element_id = &context.node_id.element_id;
 
     // Extract element's role for context
     let role: String = element
@@ -447,16 +371,14 @@ fn handle_notification_direct(
         .unwrap_or_else(|| "Unknown".to_string());
 
     println!(
-        "  📍 Changed element: {} (Frontend ID: {})",
-        role, stable_id
+        "  📍 Changed element: {} (Element ID: {})",
+        role, element_id
     );
 
     // Build update based on notification type
     let mut update = NodeUpdate {
-        id: stable_id.clone(),
+        id: element_id.clone(), // Use element_id so frontend can match it
         pid: context.node_id.pid,
-        element_id: context.node_id.element_id.clone(),
-        path: context.node_id.path.clone(),
         value: None,
         bounds: None,
         focused: None,
@@ -504,7 +426,7 @@ fn handle_notification_direct(
             }
         }
         "AXUIElementDestroyed" => {
-            println!("🗑️  Element destroyed: {}", stable_id);
+            println!("🗑️  Element destroyed: {}", element_id);
             // TODO: Send a "node destroyed" event
             return;
         }
@@ -526,6 +448,6 @@ fn handle_notification_direct(
 
     if let Ok(json) = serde_json::to_string(&message) {
         let _ = context.sender.send(json);
-        println!("📤 Broadcasted update for element {}", stable_id);
+        println!("📤 Broadcasted update for element {}", element_id);
     }
 }

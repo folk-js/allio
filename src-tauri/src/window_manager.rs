@@ -158,11 +158,10 @@ impl WindowManager {
         }
 
         // Match windows by bounds (position + size) with 2px margin
-        // This is necessary because _AXUIElementGetWindow private API doesn't work
         const POSITION_MARGIN: i32 = 2;
         const SIZE_MARGIN: i32 = 2;
 
-        for (i, (element, cg_window_id)) in window_elements.iter().enumerate() {
+        for (i, element) in window_elements.iter().enumerate() {
             println!(
                 "   🔍 Checking window element {} of {}",
                 i + 1,
@@ -222,7 +221,7 @@ impl WindowManager {
                         "✅ Matched AX element for '{}' by bounds (PID: {}, pos: ({},{}), size: {}x{})",
                         window.title, window.process_id, ax_x, ax_y, ax_w, ax_h
                     );
-                    return (Some(element.clone()), *cg_window_id);
+                    return (Some(element.clone()), None); // No longer return CGWindowID
                 }
             } else {
                 println!("      ⚠️  Could not get bounds for this element");
@@ -231,12 +230,12 @@ impl WindowManager {
 
         // Fallback: If only 1 window element exists, use it
         if window_elements.len() == 1 {
-            let (element, cg_window_id) = &window_elements[0];
+            let element = &window_elements[0];
             println!(
                 "⚠️  Using only available window element for '{}' (PID: {})",
                 window.title, window.process_id
             );
-            return (Some(element.clone()), *cg_window_id);
+            return (Some(element.clone()), None);
         }
 
         println!(
