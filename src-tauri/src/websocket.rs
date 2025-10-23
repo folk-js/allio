@@ -9,7 +9,6 @@ use axum::{
 };
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
-use serde_json;
 use std::{collections::HashSet, sync::Arc};
 use tauri::Manager; // For get_webview_window
 use tokio::sync::{broadcast, RwLock};
@@ -25,11 +24,6 @@ use crate::windows::{WindowInfo, WindowUpdatePayload};
 // ============================================================================
 
 pub mod msg_types {
-    // Server -> Client event types
-    pub const WINDOW_FOCUSED: &str = "window_focused";
-    pub const TREE_CHANGED: &str = "tree_changed";
-    pub const VALUE_CHANGED: &str = "value_changed";
-
     // Client -> Server request types
     pub const GET_ACCESSIBILITY_TREE: &str = "get_accessibility_tree";
     pub const GET_CHILDREN: &str = "get_children";

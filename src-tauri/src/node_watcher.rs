@@ -409,11 +409,11 @@ fn handle_notification_direct(
                         Some(cf_string.to_string())
                     });
 
-            if let Some(typed_value) =
-                crate::platform::macos::extract_value(&value_attr, role.as_deref())
-            {
-                update.value = Some(typed_value.clone());
-                has_changes = true;
+                if let Some(typed_value) =
+                    crate::platform::macos::extract_value(&value_attr, role.as_deref())
+                {
+                    update.value = Some(typed_value.clone());
+                    has_changes = true;
 
                     // Only log text changes
                     if matches!(typed_value, crate::axio::AXValue::String(_)) {
@@ -438,7 +438,9 @@ fn handle_notification_direct(
                     if let Ok(size_attr) =
                         element.attribute(&AXAttribute::new(&CFString::new("AXSize")))
                     {
-                        if let Some((width, height)) = crate::platform::macos::extract_size(&size_attr) {
+                        if let Some((width, height)) =
+                            crate::platform::macos::extract_size(&size_attr)
+                        {
                             update.bounds = Some(crate::axio::Bounds {
                                 position: crate::axio::Position { x, y },
                                 size: crate::axio::Size { width, height },

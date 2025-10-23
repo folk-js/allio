@@ -1,4 +1,3 @@
-use accessibility::AXAttribute;
 /**
  * Element Registry - Reference-based AX Element Management
  *
@@ -58,27 +57,5 @@ impl ElementRegistry {
     pub fn get_pid(id: &str) -> Option<u32> {
         let registry = ELEMENT_REGISTRY.lock().unwrap();
         registry.elements.get(id).map(|(_element, pid)| *pid)
-    }
-
-    /// Remove an element from the registry (when no longer needed)
-    pub fn unregister(id: &str) -> bool {
-        let mut registry = ELEMENT_REGISTRY.lock().unwrap();
-        registry.elements.remove(id).is_some()
-    }
-
-    /// Check if an element is still valid (operations succeed)
-    pub fn is_valid(id: &str) -> bool {
-        if let Some(element) = Self::get(id) {
-            // Try to get a basic attribute to check validity
-            element.attribute(&AXAttribute::role()).is_ok()
-        } else {
-            false
-        }
-    }
-
-    /// Clear all elements (useful for cleanup/reset)
-    pub fn clear() {
-        let mut registry = ELEMENT_REGISTRY.lock().unwrap();
-        registry.elements.clear();
     }
 }

@@ -5,7 +5,6 @@
  * Each platform (macOS, Windows, Linux) implements the conversion from its
  * native accessibility API to the common AXIO format.
  */
-
 #[cfg(target_os = "macos")]
 pub mod macos;
 

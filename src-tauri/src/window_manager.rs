@@ -221,18 +221,6 @@ impl WindowManager {
         let cache = WINDOW_CACHE.lock().unwrap();
         cache.windows.get(window_id).cloned()
     }
-
-    /// Get all current managed windows
-    pub fn get_all_windows() -> Vec<ManagedWindow> {
-        let cache = WINDOW_CACHE.lock().unwrap();
-        cache.windows.values().cloned().collect()
-    }
-
-    /// Clear the cache (for cleanup/reset)
-    pub fn clear() {
-        let mut cache = WINDOW_CACHE.lock().unwrap();
-        cache.windows.clear();
-    }
 }
 
 // Manual Send/Sync implementation (AXUIElement is thread-safe behind Mutex)
