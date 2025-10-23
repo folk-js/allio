@@ -234,7 +234,8 @@ fn should_filter_process(_pid: u32) -> bool {
 }
 
 // Combined function to get all windows with focused state in single call
-pub fn get_all_windows_with_focus() -> Vec<WindowInfo> {
+// Returns None if overlay window is not present (indicating we should keep previous window list)
+pub fn get_all_windows_with_focus() -> Option<Vec<WindowInfo>> {
     let current_pid = std::process::id();
 
     // Get all windows and active window in parallel
@@ -244,18 +245,32 @@ pub fn get_all_windows_with_focus() -> Vec<WindowInfo> {
     let (all_windows, active_window_id) = match (all_windows_result, active_window_result) {
         (Ok(Ok(windows)), Ok(Ok(active))) => (windows, Some(active.id)),
         (Ok(Ok(windows)), _) => (windows, None),
-        _ => return Vec::new(),
+        _ => return Some(Vec::new()),
     };
 
-    // Find overlay offset
-    let overlay_offset = all_windows
+    // Check if overlay window is present in results
+    // If not, we've switched to a different view and should pause updates
+    let overlay_window = all_windows
         .iter()
-        .find(|w| w.info.process_id == current_pid)
+        .find(|w| w.info.process_id == current_pid);
+
+    if overlay_window.is_none() {
+        return None; // Overlay not found, pause updates
+    }
+
+    // Find overlay offset
+    let overlay_offset = overlay_window
         .map(|w| (w.position.x, w.position.y))
         .unwrap_or((0, 0));
 
+    // Get screen dimensions for filtering
+    #[cfg(target_os = "macos")]
+    let (screen_width, _) = get_main_screen_dimensions();
+    #[cfg(not(target_os = "macos"))]
+    let screen_width = f64::MAX;
+
     // Convert all windows, excluding our overlay, filtered apps, and fullscreen windows
-    all_windows
+    let windows = all_windows
         .iter()
         .filter(|w| w.info.process_id != current_pid && !should_filter_process(w.info.process_id))
         .map(|w| {
@@ -263,7 +278,10 @@ pub fn get_all_windows_with_focus() -> Vec<WindowInfo> {
             WindowInfo::from_x_win(w, focused).with_offset(overlay_offset.0, overlay_offset.1)
         })
         .filter(|w| !w.is_fullscreen()) // Also filter out fullscreen windows
-        .collect()
+        .filter(|w| w.x <= (screen_width as i32 + 1)) // Filter out windows beyond screen width
+        .collect();
+
+    Some(windows)
 }
 
 // WebSocket-only polling loop
@@ -274,32 +292,37 @@ pub fn window_polling_loop(ws_state: WebSocketState) {
         let loop_start = Instant::now();
 
         // Get fresh data from system
-        let current_windows = get_all_windows_with_focus();
+        // Returns None if overlay window is not visible (switched to different view)
+        let current_windows_opt = get_all_windows_with_focus();
 
         // No longer auto-push tree on focus change - let overlays request what they need
 
-        // Broadcast window updates if something changed
-        if last_windows.as_ref() != Some(&current_windows) {
-            // Convert windows to AXNodes (filter out any that fail to convert)
-            let window_nodes: Vec<AXNode> = current_windows
-                .iter()
-                .filter_map(|w| w.to_ax_node())
-                .collect();
+        // Only update if we got a result (overlay window is visible)
+        if let Some(current_windows) = current_windows_opt {
+            // Broadcast window updates if something changed
+            if last_windows.as_ref() != Some(&current_windows) {
+                // Convert windows to AXNodes (filter out any that fail to convert)
+                let window_nodes: Vec<AXNode> = current_windows
+                    .iter()
+                    .filter_map(|w| w.to_ax_node())
+                    .collect();
 
-            // Update WebSocket state and broadcast
-            let ws_state_clone = ws_state.clone();
-            let windows_clone = current_windows.clone();
+                // Update WebSocket state and broadcast
+                let ws_state_clone = ws_state.clone();
+                let windows_clone = current_windows.clone();
 
-            tokio::spawn(async move {
-                ws_state_clone.update_windows(&windows_clone).await;
-            });
+                tokio::spawn(async move {
+                    ws_state_clone.update_windows(&windows_clone).await;
+                });
 
-            ws_state.broadcast(&WindowUpdatePayload {
-                windows: window_nodes,
-            });
+                ws_state.broadcast(&WindowUpdatePayload {
+                    windows: window_nodes,
+                });
 
-            last_windows = Some(current_windows);
+                last_windows = Some(current_windows);
+            }
         }
+        // If current_windows_opt is None, we keep last_windows unchanged (pause updates)
 
         // Precise interval handling
         let elapsed = loop_start.elapsed();

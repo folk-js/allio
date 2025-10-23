@@ -245,7 +245,10 @@ fn main() {
                 // Update WebSocket state with initial windows
                 let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
                 rt.block_on(async move {
-                    ws_state.update_windows(&current_windows).await;
+                    // Only update if we got a valid window list (overlay is visible)
+                    if let Some(windows) = current_windows {
+                        ws_state.update_windows(&windows).await;
+                    }
 
                     // Start the WebSocket server
                     tokio::spawn(async move {
