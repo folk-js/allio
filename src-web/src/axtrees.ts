@@ -456,13 +456,11 @@ class AXTreeOverlay {
       // Auto-watch leaf nodes (nodes with no children) since they can't be expanded
       // This ensures text fields and other leaf elements get watched for changes
       const isLeafNode = !hasLoadedChildren && !hasUnloadedChildren;
-      if (isLeafNode && nodeId && node.element_id) {
+      if (isLeafNode && nodeId && node.id) {
         console.log(`👁️ Auto-watching leaf node: ${node.role}`);
-        this.axio
-          .watchNodeByElementId(node.pid, node.element_id, nodeId)
-          .catch((err) => {
-            console.error(`Failed to auto-watch leaf node ${nodeId}:`, err);
-          });
+        this.axio.watchNodeByElementId(node.id, nodeId).catch((err) => {
+          console.error(`Failed to auto-watch leaf node ${nodeId}:`, err);
+        });
       }
 
       this.renderedNodeCount++; // Increment counter for each node rendered
@@ -1056,11 +1054,9 @@ class AXTreeOverlay {
       // Unwatch this node (stop receiving updates)
       const stored = this.nodeElements.get(nodeId);
       if (stored) {
-        this.axio
-          .unwatchNodeByElementId(stored.node.pid, stored.node.element_id)
-          .catch((err) => {
-            console.error(`Failed to unwatch node ${nodeId}:`, err);
-          });
+        this.axio.unwatchNodeByElementId(stored.node.id).catch((err) => {
+          console.error(`Failed to unwatch node ${nodeId}:`, err);
+        });
       }
 
       // Update indicator
@@ -1077,11 +1073,9 @@ class AXTreeOverlay {
       // Watch this node (start receiving updates)
       const stored = this.nodeElements.get(nodeId);
       if (stored) {
-        this.axio
-          .watchNodeByElementId(stored.node.pid, stored.node.element_id, nodeId)
-          .catch((err) => {
-            console.error(`Failed to watch node ${nodeId}:`, err);
-          });
+        this.axio.watchNodeByElementId(stored.node.id, nodeId).catch((err) => {
+          console.error(`Failed to watch node ${nodeId}:`, err);
+        });
       }
 
       // Update indicator
@@ -1145,11 +1139,9 @@ class AXTreeOverlay {
       this.expandedNodes.add(nodeId);
 
       // Watch this node for changes (now that it's expanded)
-      this.axio
-        .watchNodeByElementId(node.pid, node.element_id, nodeId)
-        .catch((err) => {
-          console.error(`Failed to watch node ${nodeId}:`, err);
-        });
+      this.axio.watchNodeByElementId(node.id, nodeId).catch((err) => {
+        console.error(`Failed to watch node ${nodeId}:`, err);
+      });
 
       // Update indicator
       if (indicator && indicator instanceof HTMLElement) {

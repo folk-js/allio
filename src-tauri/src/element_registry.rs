@@ -18,8 +18,10 @@ static ELEMENT_REGISTRY: Lazy<Mutex<ElementRegistry>> =
     Lazy::new(|| Mutex::new(ElementRegistry::new()));
 
 pub struct ElementRegistry {
-    /// Map of element ID -> AXUIElement
-    elements: HashMap<String, AXUIElement>,
+    /// Map of element ID -> (AXUIElement, PID)
+    /// PID is stored for internal backend operations (watch/unwatch)
+    /// This will be removed in Phase 3.1 when windows own their elements
+    elements: HashMap<String, (AXUIElement, u32)>,
 }
 
 // Manual implementation - AXUIElement is actually thread-safe behind Mutex
@@ -33,18 +35,29 @@ impl ElementRegistry {
         }
     }
 
-    /// Register an element and return a unique ID for it
-    pub fn register(element: AXUIElement) -> String {
+    /// Register an element with its PID and return a unique ID for it
+    /// PID is stored for internal backend operations (watch/unwatch need it for AXObserver)
+    pub fn register(element: AXUIElement, pid: u32) -> String {
         let id = Uuid::new_v4().to_string();
         let mut registry = ELEMENT_REGISTRY.lock().unwrap();
-        registry.elements.insert(id.clone(), element);
+        registry.elements.insert(id.clone(), (element, pid));
         id
     }
 
     /// Get an element by its ID
     pub fn get(id: &str) -> Option<AXUIElement> {
         let registry = ELEMENT_REGISTRY.lock().unwrap();
-        registry.elements.get(id).cloned()
+        registry
+            .elements
+            .get(id)
+            .map(|(element, _pid)| element.clone())
+    }
+
+    /// Get the PID associated with an element ID
+    /// Used internally by watch/unwatch operations
+    pub fn get_pid(id: &str) -> Option<u32> {
+        let registry = ELEMENT_REGISTRY.lock().unwrap();
+        registry.elements.get(id).map(|(_element, pid)| *pid)
     }
 
     /// Remove an element from the registry (when no longer needed)

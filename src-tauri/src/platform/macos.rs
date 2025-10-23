@@ -9,90 +9,7 @@ use accessibility_sys::{kAXPositionAttribute, kAXSizeAttribute};
 use core_foundation::base::TCFType;
 use core_foundation::string::CFString;
 
-use crate::ax_value::{extract_position, extract_size, extract_value};
-use crate::axio::{AXNode, AXRole, Bounds, Position, Size};
-
-/// Generate a stable ID for an element
-/// Priority: kAXIdentifierAttribute > role:title:index composite
-fn generate_stable_element_id(element: &AXUIElement, pid: u32) -> String {
-    // Try kAXIdentifierAttribute first (native stable ID)
-    if let Ok(identifier_attr) =
-        element.attribute(&AXAttribute::new(&CFString::new("AXIdentifier")))
-    {
-        if let Some(id_str) = unsafe {
-            let cf_string =
-                CFString::wrap_under_get_rule(identifier_attr.as_CFTypeRef() as *const _);
-            let s = cf_string.to_string();
-            if !s.is_empty() {
-                Some(s)
-            } else {
-                None
-            }
-        } {
-            return format!("{}::id:{}", pid, id_str);
-        }
-    }
-
-    // Fallback: role:title:index composite
-    let role: String = element
-        .attribute(&AXAttribute::role())
-        .ok()
-        .and_then(|r| unsafe {
-            let cf_string = CFString::wrap_under_get_rule(r.as_CFTypeRef() as *const _);
-            Some(cf_string.to_string())
-        })
-        .unwrap_or_else(|| "Unknown".to_string());
-
-    let title: String = element
-        .attribute(&AXAttribute::title())
-        .ok()
-        .and_then(|t| unsafe {
-            let cf_string = CFString::wrap_under_get_rule(t.as_CFTypeRef() as *const _);
-            let s = cf_string.to_string();
-            if !s.is_empty() {
-                Some(s)
-            } else {
-                None
-            }
-        })
-        .unwrap_or_else(|| "".to_string());
-
-    // Get index among siblings (if we can find parent)
-    let index_str = if let Ok(parent) = element.attribute(&AXAttribute::parent()) {
-        if let Ok(children) = parent.attribute(&AXAttribute::children()) {
-            let element_ref = element.as_concrete_TypeRef();
-            let mut found_index = None;
-            for i in 0..children.len() {
-                if let Some(sibling) = children.get(i) {
-                    if std::ptr::eq(
-                        element_ref as *const _,
-                        sibling.as_concrete_TypeRef() as *const _,
-                    ) {
-                        found_index = Some(i);
-                        break;
-                    }
-                }
-            }
-            found_index.map(|i| format!(":{}", i)).unwrap_or_default()
-        } else {
-            String::new()
-        }
-    } else {
-        String::new()
-    };
-
-    if title.is_empty() {
-        format!("{}::{}:{}{}", pid, role, "untitled", index_str)
-    } else {
-        // Sanitize title for use in ID
-        let safe_title = title
-            .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
-            .take(30)
-            .collect::<String>();
-        format!("{}::{}:{}{}", pid, role, safe_title, index_str)
-    }
-}
+use crate::axio::{AXNode, AXRole, AXValue, Bounds, Position, Size};
 
 /// Convert macOS AXUIElement to AXIO AXNode
 ///
@@ -120,7 +37,7 @@ pub fn element_to_axnode(
     }
 
     // Register this element and get its UUID
-    let element_id = ElementRegistry::register(element.clone());
+    let element_id = ElementRegistry::register(element.clone(), pid);
 
     // Get role and convert to AXIO format
     let platform_role = element
@@ -228,11 +145,8 @@ pub fn element_to_axnode(
     };
 
     Some(AXNode {
-        pid,
-        element_id: element_id.clone(),
+        id: element_id, // UUID from ElementRegistry
         parent_id,
-        path: None,     // Legacy field, no longer used
-        id: element_id, // Use element_id as the node ID
         role,
         subrole,
         title,
@@ -464,12 +378,11 @@ pub fn get_ax_tree_by_window_id(
     )
 }
 
-/// Get children of a specific node by element ID (NEW - Phase 3)
+/// Get children of a specific node by element ID
 ///
 /// Returns the children of the node, with their own children_count populated
 /// but not their children (unless max_depth > 1).
 pub fn get_children_by_element_id(
-    pid: u32,
     element_id: &str,
     max_depth: usize,
     max_children_per_level: usize,
@@ -479,6 +392,10 @@ pub fn get_children_by_element_id(
     // Get the element from the registry
     let target_element = ElementRegistry::get(element_id)
         .ok_or_else(|| format!("Element {} not found in registry", element_id))?;
+
+    // Get the PID from the registry (needed for child element registration)
+    let pid = ElementRegistry::get_pid(element_id)
+        .ok_or_else(|| format!("PID not found for element {}", element_id))?;
 
     // Get children of this node
     // Depth = 0 means we're getting immediate children with their counts, but not grandchildren
@@ -529,4 +446,185 @@ fn is_writable_role(role: &str) -> bool {
         role,
         "AXTextField" | "AXTextArea" | "AXComboBox" | "AXSecureTextField" | "AXSearchField"
     )
+}
+
+// ============================================================================
+// AXValue Extraction (merged from ax_value.rs)
+// ============================================================================
+//
+// FFI bindings for AXValue to properly extract CGPoint and CGSize from
+// accessibility attributes. This provides safe wrappers around the macOS
+// Accessibility API's AXValue functions which are not exposed by the
+// `accessibility` crate.
+
+use core_foundation::base::{CFType, CFTypeRef};
+use core_foundation::boolean::CFBoolean;
+use core_foundation::number::CFNumber;
+use std::os::raw::c_void;
+
+// CGPoint and CGSize structs matching macOS CoreGraphics definitions
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+struct CGPoint {
+    x: f64,
+    y: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+struct CGSize {
+    width: f64,
+    height: f64,
+}
+
+// AXValueType enum values
+#[allow(non_upper_case_globals)]
+const kAXValueTypeCGPoint: i32 = 1;
+#[allow(non_upper_case_globals)]
+const kAXValueTypeCGSize: i32 = 2;
+
+// AXValue type (it's actually just a CFTypeRef under the hood)
+type AXValueRef = CFTypeRef;
+
+// External declarations for AXValue functions
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn AXValueGetType(value: AXValueRef) -> i32;
+    fn AXValueGetValue(value: AXValueRef, value_type: i32, value_ptr: *mut c_void) -> bool;
+}
+
+/// Safely extract a CGPoint from a CFType that should be an AXValue
+pub fn extract_position(cf_value: &impl TCFType) -> Option<(f64, f64)> {
+    unsafe {
+        let ax_value: AXValueRef = cf_value.as_CFTypeRef();
+
+        // Check if this is a CGPoint type
+        let value_type = AXValueGetType(ax_value);
+        if value_type != kAXValueTypeCGPoint {
+            return None;
+        }
+
+        // Extract the CGPoint
+        let mut point = CGPoint { x: 0.0, y: 0.0 };
+        let success = AXValueGetValue(
+            ax_value,
+            kAXValueTypeCGPoint,
+            &mut point as *mut CGPoint as *mut c_void,
+        );
+
+        if success {
+            Some((point.x, point.y))
+        } else {
+            None
+        }
+    }
+}
+
+/// Safely extract a CGSize from a CFType that should be an AXValue
+pub fn extract_size(cf_value: &impl TCFType) -> Option<(f64, f64)> {
+    unsafe {
+        let ax_value: AXValueRef = cf_value.as_CFTypeRef();
+
+        // Check if this is a CGSize type
+        let value_type = AXValueGetType(ax_value);
+        if value_type != kAXValueTypeCGSize {
+            return None;
+        }
+
+        // Extract the CGSize
+        let mut size = CGSize {
+            width: 0.0,
+            height: 0.0,
+        };
+        let success = AXValueGetValue(
+            ax_value,
+            kAXValueTypeCGSize,
+            &mut size as *mut CGSize as *mut c_void,
+        );
+
+        if success {
+            Some((size.width, size.height))
+        } else {
+            None
+        }
+    }
+}
+
+/// Properly extract a typed value from a CFType
+/// Handles CFString, CFNumber, CFBoolean, and returns the appropriate typed value
+///
+/// For certain roles (toggles, checkboxes, radio buttons), 0/1 integers are converted to booleans
+pub fn extract_value(cf_value: &impl TCFType, role: Option<&str>) -> Option<AXValue> {
+    unsafe {
+        let type_ref = cf_value.as_CFTypeRef();
+        let cf_type = CFType::wrap_under_get_rule(type_ref);
+        let type_id = cf_type.type_of();
+
+        // Try CFString first (most common for values)
+        if type_id == CFString::type_id() {
+            let cf_string = CFString::wrap_under_get_rule(type_ref as *const _);
+            let s = cf_string.to_string();
+            // Filter out empty strings
+            return if s.is_empty() {
+                None
+            } else {
+                Some(AXValue::String(s))
+            };
+        }
+
+        // Try CFNumber
+        if type_id == CFNumber::type_id() {
+            let cf_number = CFNumber::wrap_under_get_rule(type_ref as *const _);
+
+            // For toggle-like elements, convert 0/1 integers to booleans
+            if let Some(r) = role {
+                if r == "AXToggle"
+                    || r == "AXCheckBox"
+                    || r == "AXRadioButton"
+                    || r.contains("Toggle")
+                    || r.contains("CheckBox")
+                    || r.contains("RadioButton")
+                {
+                    if let Some(int_val) = cf_number.to_i64() {
+                        return Some(AXValue::Boolean(int_val != 0));
+                    }
+                }
+            }
+
+            // Try to get as i64 first, then f64 if that fails
+            if let Some(int_val) = cf_number.to_i64() {
+                return Some(AXValue::Integer(int_val));
+            } else if let Some(float_val) = cf_number.to_f64() {
+                return Some(AXValue::Float(float_val));
+            }
+        }
+
+        // Try CFBoolean
+        if type_id == CFBoolean::type_id() {
+            let cf_bool = CFBoolean::wrap_under_get_rule(type_ref as *const _);
+            // CFBoolean can be converted to bool via Into trait
+            let bool_val: bool = cf_bool.into();
+            return Some(AXValue::Boolean(bool_val));
+        }
+
+        // For other types, we can't reliably extract them
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cgpoint_size() {
+        // Verify that CGPoint has the expected layout
+        assert_eq!(std::mem::size_of::<CGPoint>(), 16); // 2 * f64
+    }
+
+    #[test]
+    fn test_cgsize_size() {
+        // Verify that CGSize has the expected layout
+        assert_eq!(std::mem::size_of::<CGSize>(), 16); // 2 * f64
+    }
 }

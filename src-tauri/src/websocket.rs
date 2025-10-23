@@ -60,20 +60,19 @@ pub struct WindowFocusedEvent {
 }
 
 /// Sent when the accessibility tree structure changes for the focused window
+/// NOTE: Currently unused - frontend requests trees explicitly
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TreeChangedEvent {
     pub event_type: String, // "tree_changed"
-    pub pid: u32,
     pub tree: AXNode,
 }
 
 /// Sent when a specific value changes in the tree (future: for fine-grained updates)
+/// NOTE: Currently unused - node_watcher.rs uses NodeUpdate instead
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ValueChangedEvent {
     pub event_type: String, // "value_changed"
-    pub pid: u32,
-    pub path: Vec<usize>,
-    pub new_value: String, // TODO: Use AXValue when we add incremental updates
+    pub new_value: String,  // TODO: Use AXValue when we add incremental updates
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -114,11 +113,7 @@ fn default_max_children_per_level() -> usize {
 #[serde(deny_unknown_fields)]
 struct GetChildrenRequest {
     msg_type: String,
-    pid: u32,
-    #[serde(default)]
-    element_id: Option<String>, // NEW: Preferred (uses ElementRegistry)
-    #[serde(default)]
-    path: Option<Vec<usize>>, // LEGACY: Fallback (navigates by path)
+    element_id: Option<String>, // Element ID (UUID from ElementRegistry)
     #[serde(default = "default_max_depth")]
     max_depth: usize,
     #[serde(default = "default_max_children_per_level")]
@@ -131,10 +126,7 @@ struct AccessibilityWriteRequest {
     msg_type: String,
     #[serde(default)]
     pid: Option<u32>, // Optional for backwards compatibility
-    #[serde(default)]
-    element_id: Option<String>, // NEW: Preferred (uses ElementRegistry)
-    #[serde(default)]
-    element_path: Option<Vec<usize>>, // LEGACY: Fallback (navigates by path)
+    element_id: Option<String>, // Element ID (UUID from ElementRegistry)
     text: String,
 }
 
@@ -155,22 +147,18 @@ struct IdentificationData {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AccessibilityTreeData {
-    pid: u32,
     tree: Option<AXNode>,
     error: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct GetChildrenData {
-    pid: u32,
-    path: Vec<usize>,
     children: Option<Vec<AXNode>>,
     error: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct AccessibilityWriteData {
-    pid: u32,
     message: String,
     error: Option<String>,
 }
@@ -192,10 +180,7 @@ struct SetClickthroughData {
 #[serde(deny_unknown_fields)]
 struct WatchNodeRequest {
     msg_type: String,
-    pid: u32,
-    element_id: Option<String>, // NEW: Preferred
-    #[serde(default)]
-    path: Option<Vec<usize>>, // LEGACY: Deprecated
+    element_id: Option<String>, // Element ID (UUID from ElementRegistry)
     node_id: String,
 }
 
@@ -209,8 +194,7 @@ struct WatchNodeData {
 #[serde(deny_unknown_fields)]
 struct UnwatchNodeRequest {
     msg_type: String,
-    pid: u32,
-    element_id: String,
+    element_id: String, // Element ID (UUID from ElementRegistry)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -487,11 +471,7 @@ async fn handle_client_message(
             let response = WsResponse {
                 msg_type: msg_types::ACCESSIBILITY_WRITE_RESPONSE.to_string(),
                 success,
-                data: AccessibilityWriteData {
-                    pid: write_request.pid.unwrap_or(0),
-                    message,
-                    error,
-                },
+                data: AccessibilityWriteData { message, error },
             };
 
             let response_json = serde_json::to_string(&response)?;
@@ -511,7 +491,6 @@ async fn handle_client_message(
                 );
 
                 match get_children_by_element_id(
-                    get_children_req.pid,
                     element_id,
                     get_children_req.max_depth,
                     get_children_req.max_children_per_level,
@@ -526,12 +505,7 @@ async fn handle_client_message(
             let response = WsResponse {
                 msg_type: msg_types::GET_CHILDREN_RESPONSE.to_string(),
                 success,
-                data: GetChildrenData {
-                    pid: get_children_req.pid,
-                    path: get_children_req.path.unwrap_or_default(),
-                    children,
-                    error,
-                },
+                data: GetChildrenData { children, error },
             };
 
             let response_json = serde_json::to_string(&response)?;
@@ -549,7 +523,7 @@ async fn handle_client_message(
             println!("🌳 Parsed as AccessibilityTreeRequest: {:?}", ax_request);
 
             // Get accessibility tree by window_id (uses cached window element)
-            let (success, tree, error, pid) = if let Some(ref window_id) = ax_request.window_id {
+            let (success, tree, error) = if let Some(ref window_id) = ax_request.window_id {
                 println!(
                     "🌳 Client requesting tree for window_id: {} (max_depth: {}, max_children: {})",
                     window_id, ax_request.max_depth, ax_request.max_children_per_level
@@ -562,21 +536,17 @@ async fn handle_client_message(
                     ax_request.max_children_per_level,
                     true, // Load full tree
                 ) {
-                    Ok(ax_tree) => {
-                        let pid = ax_tree.pid;
-                        (true, Some(ax_tree), None, pid)
-                    }
-                    Err(e) => (false, None, Some(e), 0),
+                    Ok(ax_tree) => (true, Some(ax_tree), None),
+                    Err(e) => (false, None, Some(e)),
                 }
             } else {
-                (false, None, Some("window_id not provided".to_string()), 0)
+                (false, None, Some("window_id not provided".to_string()))
             };
 
             let response = WsResponse {
                 msg_type: msg_types::ACCESSIBILITY_TREE_RESPONSE.to_string(),
                 success,
                 data: AccessibilityTreeData {
-                    pid,
                     tree,
                     error: error.clone(),
                 },
@@ -586,14 +556,10 @@ async fn handle_client_message(
             socket.send(Message::Text(response_json)).await.ok();
 
             if success {
-                if ax_request.window_id.is_some() {
-                    println!(
-                        "✅ Sent accessibility tree for window_id: {:?}",
-                        ax_request.window_id
-                    );
-                } else {
-                    println!("✅ Sent accessibility tree for PID {}", pid);
-                }
+                println!(
+                    "✅ Sent accessibility tree for window_id: {:?}",
+                    ax_request.window_id
+                );
             } else {
                 println!("❌ Failed to get accessibility tree: {:?}", error);
             }
@@ -632,11 +598,17 @@ async fn handle_client_message(
             let watch_req = serde_json::from_str::<WatchNodeRequest>(message)?;
 
             let result = if let Some(ref element_id) = watch_req.element_id {
-                ws_state.node_watcher.watch_node_by_id(
-                    watch_req.pid,
-                    element_id.clone(),
-                    watch_req.node_id.clone(),
-                )
+                // Look up PID from ElementRegistry
+                use crate::element_registry::ElementRegistry;
+                if let Some(pid) = ElementRegistry::get_pid(element_id) {
+                    ws_state.node_watcher.watch_node_by_id(
+                        pid,
+                        element_id.clone(),
+                        watch_req.node_id.clone(),
+                    )
+                } else {
+                    Err(format!("Element ID {} not found in registry", element_id))
+                }
             } else {
                 Err("element_id not provided".to_string())
             };
@@ -668,14 +640,18 @@ async fn handle_client_message(
         msg_types::UNWATCH_NODE => {
             let unwatch_req = serde_json::from_str::<UnwatchNodeRequest>(message)?;
             println!(
-                "🚫 Client requesting to unwatch node: PID {} element_id {}",
-                unwatch_req.pid, unwatch_req.element_id
+                "🚫 Client requesting to unwatch element_id: {}",
+                unwatch_req.element_id
             );
 
-            // Stop watching the node
+            // Look up PID from ElementRegistry
+            use crate::element_registry::ElementRegistry;
+            let pid = ElementRegistry::get_pid(&unwatch_req.element_id).unwrap_or(0);
+
+            // Stop watching the node (pid is not critical for unwatch, just for observer lookup)
             ws_state
                 .node_watcher
-                .unwatch_node_by_id(unwatch_req.pid, unwatch_req.element_id);
+                .unwatch_node_by_id(pid, unwatch_req.element_id);
 
             let response = WsResponse {
                 msg_type: msg_types::UNWATCH_NODE_RESPONSE.to_string(),

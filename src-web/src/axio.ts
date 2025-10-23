@@ -120,18 +120,15 @@ export interface Window {
 /**
  * Core accessibility node
  *
- * Nodes know their location (pid + element_id) so they can perform operations on themselves.
- * Forms a tree structure via the children field.
- * Phase 3: Switched to element ID-based operations (direct registry lookup, no re-navigation).
+ * Each node has a unique ID (UUID from ElementRegistry) for direct access.
+ * Forms a tree structure via the children field and parent_id.
  */
 export interface AXNode {
-  // Location (for operations - nodes know where they are)
-  readonly pid: number;
-  readonly element_id: string; // UUID from ElementRegistry
+  // Identity - UUID from ElementRegistry (for direct lookup)
+  readonly id: string; // UUID from ElementRegistry
   readonly parent_id?: string; // UUID of parent element (None for root)
 
-  // Identity
-  readonly id: string; // Same as element_id
+  // Role information
   readonly role: AXRole;
   readonly subrole?: string; // Platform-specific subtype (or native name for unknown roles)
 
@@ -355,7 +352,7 @@ export class AXIO {
   private attachNodeMethods(node: AXNode): AXNode {
     // Attach setValue method
     (node as any).setValue = async (text: string) => {
-      return this.writeByElementId(node.element_id, text);
+      return this.writeByElementId(node.id, text);
     };
 
     // Attach getChildren method
@@ -364,8 +361,7 @@ export class AXIO {
       maxChildren: number = 2000
     ) => {
       const children = await this.getChildrenByElementId(
-        node.pid,
-        node.element_id,
+        node.id,
         maxDepth,
         maxChildren
       );
@@ -388,7 +384,6 @@ export class AXIO {
    * Returns immediate children with their children_count populated but not loaded
    */
   async getChildrenByElementId(
-    pid: number,
     elementId: string,
     maxDepth: number = 1,
     maxChildren: number = 2000
@@ -419,7 +414,6 @@ export class AXIO {
         this.ws.send(
           JSON.stringify({
             msg_type: "get_children",
-            pid,
             element_id: elementId,
             max_depth: maxDepth,
             max_children_per_level: maxChildren,
@@ -541,11 +535,7 @@ export class AXIO {
    * Watch a node for changes by element ID
    * When the node changes, `onNodeUpdated` callbacks will fire
    */
-  async watchNodeByElementId(
-    pid: number,
-    elementId: string,
-    nodeId: string
-  ): Promise<void> {
+  async watchNodeByElementId(elementId: string, nodeId: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const handler = (data: any) => {
         const listeners = this.listeners.get("watch_node_response");
@@ -569,7 +559,6 @@ export class AXIO {
         this.ws.send(
           JSON.stringify({
             msg_type: "watch_node",
-            pid,
             element_id: elementId,
             node_id: nodeId,
           })
@@ -591,7 +580,7 @@ export class AXIO {
   /**
    * Stop watching a node by element ID
    */
-  async unwatchNodeByElementId(pid: number, elementId: string): Promise<void> {
+  async unwatchNodeByElementId(elementId: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const handler = (data: any) => {
         const listeners = this.listeners.get("unwatch_node_response");
@@ -615,7 +604,6 @@ export class AXIO {
         this.ws.send(
           JSON.stringify({
             msg_type: "unwatch_node",
-            pid,
             element_id: elementId,
           })
         );

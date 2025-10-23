@@ -168,7 +168,7 @@ impl WindowManager {
             let ax_position_attr = AXAttribute::new(&position_attr);
 
             let element_pos = element.attribute(&ax_position_attr).ok().and_then(|p| {
-                use crate::ax_value::extract_position;
+                use crate::platform::macos::extract_position;
                 extract_position(&p)
             });
 
@@ -177,7 +177,7 @@ impl WindowManager {
             let ax_size_attr = AXAttribute::new(&size_attr);
 
             let element_size = element.attribute(&ax_size_attr).ok().and_then(|s| {
-                use crate::ax_value::extract_size;
+                use crate::platform::macos::extract_size;
                 extract_size(&s)
             });
 

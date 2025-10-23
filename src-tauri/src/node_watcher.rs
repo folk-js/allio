@@ -75,11 +75,10 @@ fn get_notifications_for_role(role: &str) -> Vec<&'static str> {
     }
 }
 
-/// Unique identifier for a node
+/// Unique identifier for a node (just the element ID/UUID)
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub struct NodeIdentifier {
-    pub pid: u32,
-    pub element_id: String,
+    pub id: String, // Element ID (UUID from ElementRegistry)
 }
 
 /// Context passed to observer callbacks
@@ -91,8 +90,7 @@ struct ObserverContext {
 /// Delta update for a node (only changed fields included)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeUpdate {
-    pub id: String, // Element ID from registry for frontend to match
-    pub pid: u32,
+    pub id: String, // Element ID (UUID) for frontend to match
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<AXValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -123,6 +121,8 @@ impl NodeWatcher {
     }
 
     /// Watch a node for changes (registers for accessibility notifications)
+    /// Note: pid is still needed for creating AXObserver (macOS platform requirement)
+    /// This will be removed in Phase 3.1 when windows own their elements
     pub fn watch_node_by_id(
         &self,
         pid: u32,
@@ -132,8 +132,7 @@ impl NodeWatcher {
         use crate::element_registry::ElementRegistry;
 
         let node_identifier = NodeIdentifier {
-            pid,
-            element_id: element_id.clone(),
+            id: element_id.clone(),
         };
 
         // Get element from registry
@@ -145,18 +144,18 @@ impl NodeWatcher {
             }
         };
 
-        self.watch_element_internal(node_identifier, element, node_id)
+        self.watch_element_internal(node_identifier, element, node_id, pid)
     }
 
-    /// Internal method to watch an element (used by both path and element_id versions)
+    /// Internal method to watch an element
+    /// pid is passed explicitly since it's needed for AXObserver (macOS platform requirement)
     fn watch_element_internal(
         &self,
         node_identifier: NodeIdentifier,
         element: AXUIElement,
         node_id: String,
+        pid: u32,
     ) -> Result<(), String> {
-        let pid = node_identifier.pid;
-
         // Get or create observer for this PID
         let observer = {
             let mut observers = self.observers.lock().unwrap();
@@ -287,8 +286,7 @@ impl NodeWatcher {
     /// Stop watching a node by element ID
     pub fn unwatch_node_by_id(&self, pid: u32, element_id: String) {
         let node_id = NodeIdentifier {
-            pid,
-            element_id: element_id.clone(),
+            id: element_id.clone(),
         };
 
         // Remove from watch list
@@ -341,7 +339,7 @@ impl NodeWatcher {
 
         // Unwatch each node
         for node_id in nodes {
-            self.unwatch_node_by_id(node_id.pid, node_id.element_id);
+            self.unwatch_node_by_id(0, node_id.id); // pid unused in unwatch
         }
 
         // Clear observers
@@ -384,13 +382,12 @@ fn handle_notification_direct(
     use core_foundation::base::TCFType;
     use core_foundation::string::CFString;
 
-    // Use the element_id from context (which is from the registry)
-    let element_id = &context.node_id.element_id;
+    // Use the element ID from context (UUID from registry)
+    let element_id = &context.node_id.id;
 
     // Build update based on notification type
     let mut update = NodeUpdate {
-        id: element_id.clone(), // Use element_id so frontend can match it
-        pid: context.node_id.pid,
+        id: element_id.clone(), // Element ID for frontend to match
         value: None,
         bounds: None,
         focused: None,
@@ -412,11 +409,11 @@ fn handle_notification_direct(
                         Some(cf_string.to_string())
                     });
 
-                if let Some(typed_value) =
-                    crate::ax_value::extract_value(&value_attr, role.as_deref())
-                {
-                    update.value = Some(typed_value.clone());
-                    has_changes = true;
+            if let Some(typed_value) =
+                crate::platform::macos::extract_value(&value_attr, role.as_deref())
+            {
+                update.value = Some(typed_value.clone());
+                has_changes = true;
 
                     // Only log text changes
                     if matches!(typed_value, crate::axio::AXValue::String(_)) {
@@ -437,11 +434,11 @@ fn handle_notification_direct(
             // Extract bounds directly from element
             if let Ok(pos_attr) = element.attribute(&AXAttribute::new(&CFString::new("AXPosition")))
             {
-                if let Some((x, y)) = crate::ax_value::extract_position(&pos_attr) {
+                if let Some((x, y)) = crate::platform::macos::extract_position(&pos_attr) {
                     if let Ok(size_attr) =
                         element.attribute(&AXAttribute::new(&CFString::new("AXSize")))
                     {
-                        if let Some((width, height)) = crate::ax_value::extract_size(&size_attr) {
+                        if let Some((width, height)) = crate::platform::macos::extract_size(&size_attr) {
                             update.bounds = Some(crate::axio::Bounds {
                                 position: crate::axio::Position { x, y },
                                 size: crate::axio::Size { width, height },

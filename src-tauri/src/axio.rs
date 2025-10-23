@@ -7,10 +7,18 @@
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
-// Re-export AXValue from ax_value module
+// Value Types
 // ============================================================================
 
-pub use crate::ax_value::AXValue;
+/// Represents a properly typed accessibility value
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", content = "value")]
+pub enum AXValue {
+    String(String),
+    Integer(i64),
+    Float(f64),
+    Boolean(bool),
+}
 
 // ============================================================================
 // Geometry Types
@@ -92,26 +100,16 @@ pub enum AXRole {
 /// Core accessibility node
 ///
 /// Represents a single element in the accessibility tree.
-/// Nodes know their location (pid + element_id) so they can perform operations on themselves.
-/// Forms a tree structure via the children field.
-///
-/// Phase 3: Switched from path-based navigation to element ID-based lookup.
-/// Elements are registered in ElementRegistry when tree is built, enabling direct access.
+/// Each node has a unique ID (UUID from ElementRegistry) for direct access.
+/// Forms a tree structure via the children field and parent_id.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AXNode {
-    // Location (for operations - nodes know where they are)
-    pub pid: u32,
-    pub element_id: String, // UUID from ElementRegistry
+    // Identity - UUID from ElementRegistry (for direct lookup)
+    pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>, // UUID of parent element (None for root)
 
-    // Legacy path field for backwards compatibility during transition
-    // TODO: Remove this once all operations are migrated to element_id
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub path: Option<Vec<usize>>,
-
-    // Identity
-    pub id: String, // Same as element_id (kept for frontend compatibility)
+    // Role information
     pub role: AXRole,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subrole: Option<String>,
