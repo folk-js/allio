@@ -321,15 +321,6 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
 
     println!("🔗 Client session started");
 
-    // Send overlay PID to frontend so it can filter itself out
-    let overlay_pid_msg = serde_json::json!({
-        "overlay_pid": std::process::id()
-    });
-    if let Ok(msg_json) = serde_json::to_string(&overlay_pid_msg) {
-        let _ = socket.send(Message::Text(msg_json)).await;
-        println!("📡 Sent overlay PID {} to client", std::process::id());
-    }
-
     // Send initial window state immediately
     {
         let current_windows = ws_state.current_windows.read().await;

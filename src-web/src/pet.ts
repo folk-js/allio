@@ -1470,7 +1470,6 @@ class PetApp {
   #windows: WindowGeometry[] = [];
   #navmesh = new Navmesh();
   #navmeshBuilder = new NavmeshBuilder();
-  #overlayPid: number | null = null;
   #gizmos: Gizmos;
   #character: Character | null = null;
   #physicsWorld: PhysicsWorld | null = null;
@@ -1530,22 +1529,16 @@ class PetApp {
       await this.#axio.connect();
       console.log("[NavDemo] Connected to AXIO");
 
-      this.#axio.onOverlayPid((pid: number) => {
-        this.#overlayPid = pid;
-        console.log(`[NavDemo] Overlay PID: ${pid}`);
-      });
-
       this.#axio.onWindowUpdate((windows: Window[]) => {
         // Convert Window objects to our geometry format
-        this.#windows = windows
-          .filter((w) => w.process_id !== this.#overlayPid)
-          .map((w) => ({
-            id: w.id, // Use actual OS window ID for stability
-            x: w.x,
-            y: w.y,
-            width: w.w,
-            height: w.h,
-          }));
+        // (overlay window is already filtered out by backend)
+        this.#windows = windows.map((w) => ({
+          id: w.id, // Use actual OS window ID for stability
+          x: w.x,
+          y: w.y,
+          width: w.w,
+          height: w.h,
+        }));
 
         // UPDATE PHYSICS FIRST before anything else!
         if (this.#physicsWorld) {

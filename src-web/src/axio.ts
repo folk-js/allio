@@ -255,20 +255,6 @@ export class AXIO {
   }
 
   /**
-   * Register callback for overlay PID (sent once on connect)
-   */
-  onOverlayPid(callback: (pid: number) => void): void {
-    if (!this.listeners.has("overlay_pid")) {
-      this.listeners.set("overlay_pid", new Set());
-    }
-    this.listeners.get("overlay_pid")!.add((data: any) => {
-      if (data.overlay_pid !== undefined) {
-        callback(data.overlay_pid);
-      }
-    });
-  }
-
-  /**
    * Register callback for global mouse position updates
    * Mouse position is tracked system-wide, even when window is not focused
    */
@@ -675,11 +661,6 @@ export class AXIO {
         const windows = message.windows as Window[];
         this.windows = windows;
         this.focused = windows.find((w: Window) => w.focused) || null;
-      }
-
-      // Special case: overlay_pid (has 'overlay_pid' field but no explicit type)
-      if (!event && message.overlay_pid !== undefined) {
-        event = "overlay_pid";
       }
 
       if (event) {

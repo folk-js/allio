@@ -5,8 +5,7 @@ class AXTreeOverlay {
   private axio: AXIO;
   private focusedWindow: Window | null = null;
   private treeContainer: HTMLElement | null = null;
-  private overlayProcessId: number | null = null;
-  private lastNonOverlayWindow: Window | null = null;
+  private lastFocusedWindow: Window | null = null;
   private regexPanel: HTMLElement | null = null;
   private currentTargetElement: {
     node: AXNode;
@@ -96,12 +95,6 @@ class AXTreeOverlay {
         this.updateWindows(windows);
       });
 
-      // Set up overlay PID handler
-      this.axio.onOverlayPid((pid) => {
-        this.overlayProcessId = pid;
-        console.log(`🎯 Received overlay PID: ${pid}`);
-      });
-
       // Set up node update handler (receives AXObserver notifications)
       this.axio.onNodeUpdated((update) => {
         console.log("🔄 Node updated:", update);
@@ -120,83 +113,26 @@ class AXTreeOverlay {
   private updateWindows(windows: Window[]) {
     const newFocusedWindow = windows.find((w) => w.focused);
 
-    // Overlay is filtered out of windows list by backend, so this is expected
-    // (Removed spam logging since we know overlay won't be in the list)
-
-    // Check if the newly focused window is the overlay itself
-    // Since the overlay is filtered out of the windows list, we detect overlay focus
-    // when no window is marked as focused (overlay focus = no focused window in list)
-    let isOverlayFocused = false;
-
-    if (!newFocusedWindow && this.overlayProcessId) {
-      // No focused window found - this likely means overlay is focused
-      isOverlayFocused = true;
-      console.log(`🖱️ No focused window found - assuming overlay is focused`);
-    } else if (newFocusedWindow && this.overlayProcessId) {
-      isOverlayFocused = newFocusedWindow.process_id === this.overlayProcessId;
-
-      // Only log on actual focus changes
-      if (
-        !this.focusedWindow ||
-        this.focusedWindow.id !== newFocusedWindow.id
-      ) {
-        console.log(
-          `🔍 Focus change: "${newFocusedWindow.title || "(empty)"}" (PID: ${
-            newFocusedWindow.process_id
-          }) - Is overlay: ${isOverlayFocused} (overlay PID: ${
-            this.overlayProcessId
-          })`
-        );
-      }
-    } else if (newFocusedWindow && !this.overlayProcessId) {
-      console.log(
-        `🔍 Focus change but no overlay PID yet: "${
-          newFocusedWindow.title || "(empty)"
-        }" (PID: ${newFocusedWindow.process_id})`
-      );
-    }
-
-    if (isOverlayFocused) {
-      // Overlay is focused - keep the existing tree visible for interaction
-      console.log("🖱️ Overlay focused - preserving existing tree");
-
-      if (this.treeContainer && this.lastNonOverlayWindow) {
+    // No focused window in the list means either:
+    // - The overlay itself is focused (most common)
+    // - Desktop or other non-application window is focused
+    // In either case, preserve the last tree for interaction
+    if (!newFocusedWindow) {
+      if (this.treeContainer && this.lastFocusedWindow) {
+        console.log("🖱️ No focused window - preserving last tree");
         this.updateTreePosition();
-        console.log("✅ Tree ready for interaction");
-      } else if (!this.treeContainer) {
-        console.log("ℹ️ No tree to interact with");
       }
       return; // Early return to prevent tree changes
     }
 
-    // Store non-overlay focused windows for later reference
-    if (newFocusedWindow && !isOverlayFocused) {
-      // Only update if it's actually a different window
-      if (
-        !this.lastNonOverlayWindow ||
-        this.lastNonOverlayWindow.id !== newFocusedWindow.id
-      ) {
-        this.lastNonOverlayWindow = newFocusedWindow;
-        console.log(
-          `📌 Stored non-overlay window: "${
-            newFocusedWindow.title || "(empty)"
-          }"`
-        );
-      } else {
-        this.lastNonOverlayWindow = newFocusedWindow; // Update position but don't log
-      }
-    }
-
-    // Update focused window state and fetch tree on demand
-    if (
-      newFocusedWindow &&
-      (!this.focusedWindow || newFocusedWindow.id !== this.focusedWindow.id)
-    ) {
-      this.focusedWindow = newFocusedWindow;
+    // New window focused - fetch its tree
+    if (!this.focusedWindow || newFocusedWindow.id !== this.focusedWindow.id) {
       console.log(
-        `🎯 Focus changed to ${newFocusedWindow.title}, fetching accessibility tree`
+        `🎯 Focus changed to "${newFocusedWindow.title}", fetching tree`
       );
-      // Fetch the actual accessibility tree for this window's process
+      this.focusedWindow = newFocusedWindow;
+      this.lastFocusedWindow = newFocusedWindow;
+
       this.axio
         .getTree(newFocusedWindow.process_id, 3, 100)
         .then((tree) => {
@@ -205,21 +141,9 @@ class AXTreeOverlay {
         .catch((err) => {
           console.error("Failed to get accessibility tree:", err);
         });
-    } else if (!newFocusedWindow) {
-      // No focused window, clear the tree
-      this.focusedWindow = null;
-      this.clearAccessibilityTree();
-    } else if (
-      newFocusedWindow &&
-      this.focusedWindow &&
-      newFocusedWindow.id === this.focusedWindow.id
-    ) {
-      // Same focused window but potentially moved - update position
+    } else if (newFocusedWindow.id === this.focusedWindow.id) {
+      // Same window still focused - just update position in case window moved
       this.focusedWindow = newFocusedWindow;
-      // Update lastNonOverlayWindow if this is not an overlay
-      if (!isOverlayFocused) {
-        this.lastNonOverlayWindow = newFocusedWindow;
-      }
       this.updateTreePosition();
     }
   }
@@ -542,8 +466,8 @@ class AXTreeOverlay {
 
   private updateTreePosition() {
     if (this.treeContainer) {
-      // Use the last non-overlay window if available, otherwise fall back to focused window
-      const referenceWindow = this.lastNonOverlayWindow || this.focusedWindow;
+      // Use the last focused window for positioning
+      const referenceWindow = this.lastFocusedWindow || this.focusedWindow;
       if (referenceWindow) {
         const rightX = referenceWindow.x + referenceWindow.w + 10;
         this.treeContainer.style.left = `${rightX}px`;
@@ -565,7 +489,7 @@ class AXTreeOverlay {
       this.regexPanel.classList.contains("positioned-relative")
     ) {
       // Use the last non-overlay window if available, otherwise fall back to focused window
-      const referenceWindow = this.lastNonOverlayWindow || this.focusedWindow;
+      const referenceWindow = this.lastFocusedWindow || this.focusedWindow;
       if (referenceWindow) {
         // Get the target element's position and size from when the panel was opened
         if (this.currentTargetElement) {
