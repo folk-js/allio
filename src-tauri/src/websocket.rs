@@ -317,7 +317,10 @@ pub async fn start_websocket_server(ws_state: WebSocketState) {
         .await
         .expect("Failed to bind WebSocket server");
 
-    println!("{}", "WebSocket server: ws://127.0.0.1:3030/ws".bright_black());
+    println!(
+        "{}",
+        "WebSocket server: ws://127.0.0.1:3030/ws".bright_black()
+    );
     axum::serve(listener, app)
         .await
         .expect("WebSocket server failed");
