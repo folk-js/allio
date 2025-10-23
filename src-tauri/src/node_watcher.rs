@@ -25,6 +25,55 @@ use tokio::sync::broadcast;
 
 use crate::axio::{AXValue, Bounds};
 
+/// Determines which notifications to register for a given element role
+/// Currently focused on TEXT ELEMENTS ONLY - watching value changes
+fn get_notifications_for_role(role: &str) -> Vec<&'static str> {
+    match role {
+        // TEXT INPUT ELEMENTS - our primary focus!
+        "AXTextField" | "AXTextArea" | "AXComboBox" | "AXSearchField" => {
+            vec![kAXValueChangedNotification]
+        }
+
+        // STATIC TEXT - labels that might update
+        "AXStaticText" => {
+            vec![kAXValueChangedNotification]
+        }
+
+        // Future: Interactive elements
+        // "AXPopUpButton" | "AXButton" | "AXMenuButton" | "AXRadioButton" => {
+        //     vec![kAXValueChangedNotification]
+        // }
+
+        // Future: CheckBoxes
+        // "AXCheckBox" => {
+        //     vec![kAXValueChangedNotification]
+        // }
+
+        // Future: Sliders, scrollbars
+        // "AXSlider" | "AXScrollBar" | "AXIncrementor" | "AXValueIndicator" => {
+        //     vec![kAXValueChangedNotification]
+        // }
+
+        // Future: Containers
+        // "AXScrollArea" | "AXGroup" | "AXSplitGroup" => {
+        //     vec![kAXValueChangedNotification]
+        // }
+
+        // Future: Windows - for position/size tracking
+        // "AXWindow" | "AXSheet" | "AXDrawer" => {
+        //     vec![
+        //         kAXMovedNotification,
+        //         kAXResizedNotification,
+        //     ]
+        // }
+
+        // Everything else - don't subscribe
+        _ => {
+            vec![] // Only watching text elements right now
+        }
+    }
+}
+
 /// Unique identifier for a node
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub struct NodeIdentifier {
@@ -181,6 +230,39 @@ impl NodeWatcher {
             }
         };
 
+        // Get element's role to determine which notifications to register
+        let role = match element.attribute(&accessibility::AXAttribute::role()) {
+            Ok(role_attr) => {
+                use core_foundation::string::CFString;
+                let role = unsafe {
+                    let cf_string =
+                        CFString::wrap_under_get_rule(role_attr.as_CFTypeRef() as *const _);
+                    cf_string.to_string()
+                };
+                role
+            }
+            Err(_) => "Unknown".to_string(),
+        };
+
+        // Get notifications appropriate for this element type
+        let notifications = get_notifications_for_role(&role);
+
+        // Skip watching if element doesn't support any notifications
+        if notifications.is_empty() {
+            println!(
+                "⏭️  Skipping {} (role: {}) - decorative element with no relevant notifications",
+                node_id, role
+            );
+            return Ok(());
+        }
+
+        println!(
+            "📍 Watching {} (role: {}) with {} notification(s)",
+            node_id,
+            role,
+            notifications.len()
+        );
+
         // Create context for this specific node
         let context = Box::new(ObserverContext {
             node_id: node_identifier.clone(),
@@ -188,20 +270,9 @@ impl NodeWatcher {
         });
         let context_ptr = Box::into_raw(context) as *mut c_void;
 
-        // Register for notifications
-        let notifications = vec![
-            kAXValueChangedNotification,
-            kAXMovedNotification,
-            kAXResizedNotification,
-            kAXUIElementDestroyedNotification,
-        ];
-
         let element_ref = element.as_concrete_TypeRef() as AXUIElementRef;
-        println!(
-            "📍 Registering notifications for element ref: {:?}",
-            element_ref
-        );
 
+        let mut registered_count = 0;
         for notification in &notifications {
             let notif_cfstring = CFString::new(notification);
             let result = unsafe {
@@ -214,16 +285,27 @@ impl NodeWatcher {
             };
 
             if result != 0 {
+                // We shouldn't get -25207 anymore since we pre-filter by role
+                // But if we do, or get other errors, log them
                 println!(
-                    "⚠️  Failed to add notification {} for node {}: error code {}",
-                    notification, node_id, result
+                    "⚠️  Failed to add notification {} for {} (role: {}): error code {}",
+                    notification, node_id, role, result
                 );
             } else {
-                println!(
-                    "✅ Registered notification {} for node {}",
-                    notification, node_id
-                );
+                registered_count += 1;
             }
+        }
+
+        if registered_count > 0 {
+            println!(
+                "✅ Registered {} notification(s) for {} (role: {})",
+                registered_count, node_id, role
+            );
+        } else {
+            println!(
+                "⚠️  Failed to register any notifications for {} (role: {})",
+                node_id, role
+            );
         }
 
         // Store element and context pointer
