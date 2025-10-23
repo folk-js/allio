@@ -3,7 +3,6 @@ import { AXIO, AXNode, Window } from "./axio.ts";
 class AXTreeOverlay {
   private windowContainer: HTMLElement;
   private axio: AXIO;
-  private focusedWindow: Window | null = null;
   private treeContainer: HTMLElement | null = null;
   private lastFocusedWindow: Window | null = null;
   private regexPanel: HTMLElement | null = null;
@@ -126,11 +125,13 @@ class AXTreeOverlay {
     }
 
     // New window focused - fetch its tree
-    if (!this.focusedWindow || newFocusedWindow.id !== this.focusedWindow.id) {
+    if (
+      !this.lastFocusedWindow ||
+      newFocusedWindow.id !== this.lastFocusedWindow.id
+    ) {
       console.log(
         `🎯 Focus changed to "${newFocusedWindow.title}", fetching tree`
       );
-      this.focusedWindow = newFocusedWindow;
       this.lastFocusedWindow = newFocusedWindow;
 
       this.axio
@@ -141,9 +142,9 @@ class AXTreeOverlay {
         .catch((err) => {
           console.error("Failed to get accessibility tree:", err);
         });
-    } else if (newFocusedWindow.id === this.focusedWindow.id) {
+    } else {
       // Same window still focused - just update position in case window moved
-      this.focusedWindow = newFocusedWindow;
+      this.lastFocusedWindow = newFocusedWindow;
       this.updateTreePosition();
     }
   }
@@ -465,18 +466,12 @@ class AXTreeOverlay {
   }
 
   private updateTreePosition() {
-    if (this.treeContainer) {
-      // Use the last focused window for positioning
-      const referenceWindow = this.lastFocusedWindow || this.focusedWindow;
-      if (referenceWindow) {
-        const rightX = referenceWindow.x + referenceWindow.w + 10;
-        this.treeContainer.style.left = `${rightX}px`;
-        this.treeContainer.style.top = `${referenceWindow.y}px`;
-        // Set height to match window height exactly
-        this.treeContainer.style.height = `${referenceWindow.h}px`;
-      } else {
-        console.warn("⚠️ No reference window available for positioning tree");
-      }
+    if (this.treeContainer && this.lastFocusedWindow) {
+      const rightX = this.lastFocusedWindow.x + this.lastFocusedWindow.w + 10;
+      this.treeContainer.style.left = `${rightX}px`;
+      this.treeContainer.style.top = `${this.lastFocusedWindow.y}px`;
+      // Set height to match window height exactly
+      this.treeContainer.style.height = `${this.lastFocusedWindow.h}px`;
     }
 
     // Also update regex panel position if it's open
@@ -486,36 +481,33 @@ class AXTreeOverlay {
   private updateRegexPanelPosition() {
     if (
       this.regexPanel &&
-      this.regexPanel.classList.contains("positioned-relative")
+      this.regexPanel.classList.contains("positioned-relative") &&
+      this.lastFocusedWindow
     ) {
-      // Use the last non-overlay window if available, otherwise fall back to focused window
-      const referenceWindow = this.lastFocusedWindow || this.focusedWindow;
-      if (referenceWindow) {
-        // Get the target element's position and size from when the panel was opened
-        if (this.currentTargetElement) {
-          // Find the element in the current tree to get updated position
-          const elementPath = this.currentTargetElement.node.path;
+      // Get the target element's position and size from when the panel was opened
+      if (this.currentTargetElement) {
+        // Find the element in the current tree to get updated position
+        const elementPath = this.currentTargetElement.node.path;
 
-          const elementPosition = this.getElementPositionFromTree(elementPath);
+        const elementPosition = this.getElementPositionFromTree(elementPath);
 
-          if (elementPosition) {
-            const [x, y] = elementPosition.position;
-            const [width, height] = elementPosition.size;
+        if (elementPosition) {
+          const [x, y] = elementPosition.position;
+          const [width, height] = elementPosition.size;
 
-            // Calculate new position (consistent with openRegexPanel)
-            const panelX = Math.max(10, x + width / 2 - 140); // Center panel (280px wide / 2 = 140px offset)
-            const panelY = y + height + 6; // 6px below the element
+          // Calculate new position (consistent with openRegexPanel)
+          const panelX = Math.max(10, x + width / 2 - 140); // Center panel (280px wide / 2 = 140px offset)
+          const panelY = y + height + 6; // 6px below the element
 
-            // Ensure panel doesn't go off-screen
-            const maxX = window.screen.width - 300; // Panel width + margin
-            const maxY = window.screen.height - 180; // Estimated panel height + margin
+          // Ensure panel doesn't go off-screen
+          const maxX = window.screen.width - 300; // Panel width + margin
+          const maxY = window.screen.height - 180; // Estimated panel height + margin
 
-            const finalX = Math.min(panelX, maxX);
-            const finalY = Math.min(panelY, maxY);
+          const finalX = Math.min(panelX, maxX);
+          const finalY = Math.min(panelY, maxY);
 
-            this.regexPanel.style.left = `${finalX}px`;
-            this.regexPanel.style.top = `${finalY}px`;
-          }
+          this.regexPanel.style.left = `${finalX}px`;
+          this.regexPanel.style.top = `${finalY}px`;
         }
       }
     }
