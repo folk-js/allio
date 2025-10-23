@@ -333,13 +333,8 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
     // Send initial window state immediately
     {
         let current_windows = ws_state.current_windows.read().await;
-        // Convert WindowInfo to AXNode (filter out any that fail to convert)
-        let window_nodes: Vec<AXNode> = current_windows
-            .iter()
-            .filter_map(|w| w.to_ax_node())
-            .collect();
         let window_update = WindowUpdatePayload {
-            windows: window_nodes,
+            windows: current_windows.clone(),
         };
         if let Ok(msg_json) = serde_json::to_string(&window_update) {
             let _ = socket.send(Message::Text(msg_json)).await;

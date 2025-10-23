@@ -92,6 +92,28 @@ export type AXRole =
   | "unknown";
 
 // ============================================================================
+// Window Structure
+// ============================================================================
+
+/**
+ * Window information
+ *
+ * Represents a system window with its metadata and geometry.
+ * Windows are the entry point to accessibility trees via their process_id.
+ */
+export interface Window {
+  readonly id: string; // System window ID
+  readonly title: string; // Window title
+  readonly app_name: string; // Application name
+  readonly x: number; // X position
+  readonly y: number; // Y position
+  readonly w: number; // Width
+  readonly h: number; // Height
+  readonly focused: boolean; // Is this window focused?
+  readonly process_id: number; // PID for accessing accessibility tree
+}
+
+// ============================================================================
 // Node Structure
 // ============================================================================
 
@@ -155,9 +177,8 @@ export class AXIO {
   private readonly reconnectDelay = 1000;
 
   // Window state (always up-to-date)
-  // Windows are just AXNodes with role="window", empty children, and bounds populated
-  public windows: readonly AXNode[] = [];
-  public focused: AXNode | null = null;
+  public windows: readonly Window[] = [];
+  public focused: Window | null = null;
 
   constructor(private readonly wsUrl: string = "ws://localhost:3030/ws") {}
 
@@ -215,24 +236,20 @@ export class AXIO {
    * Register callback for window updates
    * Also updates axio.windows and axio.focused automatically
    */
-  onWindowUpdate(callback: (windows: AXNode[]) => void): void {
+  onWindowUpdate(callback: (windows: Window[]) => void): void {
     if (!this.listeners.has("window_update")) {
       this.listeners.set("window_update", new Set());
     }
     this.listeners.get("window_update")!.add((data: any) => {
       if (data.windows) {
-        // Attach methods to all window nodes
-        const windowsWithMethods = data.windows.map((w: AXNode) =>
-          this.attachNodeMethods(w)
-        );
+        const windows = data.windows as Window[];
 
         // Update internal state
-        this.windows = windowsWithMethods;
-        this.focused =
-          windowsWithMethods.find((w: AXNode) => w.focused) || null;
+        this.windows = windows;
+        this.focused = windows.find((w: Window) => w.focused) || null;
 
         // Notify listeners
-        callback(windowsWithMethods);
+        callback(windows);
       }
     });
   }
@@ -655,13 +672,9 @@ export class AXIO {
       if (!event && message.windows) {
         event = "window_update";
         // Always update internal window state, even if no listeners
-        // Attach methods to window nodes so they can lazy-load children
-        const windowsWithMethods = message.windows.map((w: AXNode) =>
-          this.attachNodeMethods(w)
-        );
-        this.windows = windowsWithMethods;
-        this.focused =
-          windowsWithMethods.find((w: AXNode) => w.focused) || null;
+        const windows = message.windows as Window[];
+        this.windows = windows;
+        this.focused = windows.find((w: Window) => w.focused) || null;
       }
 
       // Special case: overlay_pid (has 'overlay_pid' field but no explicit type)

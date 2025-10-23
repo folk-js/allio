@@ -1,12 +1,12 @@
-import { AXIO, AXNode } from "./axio.ts";
+import { AXIO, AXNode, Window } from "./axio.ts";
 
 class AXTreeOverlay {
   private windowContainer: HTMLElement;
   private axio: AXIO;
-  private focusedWindow: AXNode | null = null;
+  private focusedWindow: Window | null = null;
   private treeContainer: HTMLElement | null = null;
   private overlayProcessId: number | null = null;
-  private lastNonOverlayWindow: AXNode | null = null;
+  private lastNonOverlayWindow: Window | null = null;
   private regexPanel: HTMLElement | null = null;
   private currentTargetElement: {
     node: AXNode;
@@ -117,7 +117,7 @@ class AXTreeOverlay {
     }
   }
 
-  private updateWindows(windows: AXNode[]) {
+  private updateWindows(windows: Window[]) {
     const newFocusedWindow = windows.find((w) => w.focused);
 
     // Overlay is filtered out of windows list by backend, so this is expected
@@ -133,7 +133,7 @@ class AXTreeOverlay {
       isOverlayFocused = true;
       console.log(`🖱️ No focused window found - assuming overlay is focused`);
     } else if (newFocusedWindow && this.overlayProcessId) {
-      isOverlayFocused = newFocusedWindow.pid === this.overlayProcessId;
+      isOverlayFocused = newFocusedWindow.process_id === this.overlayProcessId;
 
       // Only log on actual focus changes
       if (
@@ -142,7 +142,7 @@ class AXTreeOverlay {
       ) {
         console.log(
           `🔍 Focus change: "${newFocusedWindow.title || "(empty)"}" (PID: ${
-            newFocusedWindow.pid
+            newFocusedWindow.process_id
           }) - Is overlay: ${isOverlayFocused} (overlay PID: ${
             this.overlayProcessId
           })`
@@ -152,7 +152,7 @@ class AXTreeOverlay {
       console.log(
         `🔍 Focus change but no overlay PID yet: "${
           newFocusedWindow.title || "(empty)"
-        }" (PID: ${newFocusedWindow.pid})`
+        }" (PID: ${newFocusedWindow.process_id})`
       );
     }
 
@@ -194,10 +194,17 @@ class AXTreeOverlay {
     ) {
       this.focusedWindow = newFocusedWindow;
       console.log(
-        `🎯 Focus changed to ${newFocusedWindow.title}, displaying window node`
+        `🎯 Focus changed to ${newFocusedWindow.title}, fetching accessibility tree`
       );
-      // Display the window node itself (which has children_count but no children loaded)
-      this.displayAccessibilityTree(newFocusedWindow, newFocusedWindow);
+      // Fetch the actual accessibility tree for this window's process
+      this.axio
+        .getTree(newFocusedWindow.process_id, 3, 100)
+        .then((tree) => {
+          this.displayAccessibilityTree(tree, newFocusedWindow);
+        })
+        .catch((err) => {
+          console.error("Failed to get accessibility tree:", err);
+        });
     } else if (!newFocusedWindow) {
       // No focused window, clear the tree
       this.focusedWindow = null;
@@ -217,7 +224,7 @@ class AXTreeOverlay {
     }
   }
 
-  private displayAccessibilityTree(tree: AXNode, window: AXNode) {
+  private displayAccessibilityTree(tree: AXNode, window: Window) {
     // Clear existing tree and reset state
     this.clearAccessibilityTree();
 
@@ -225,14 +232,12 @@ class AXTreeOverlay {
     this.treeContainer = document.createElement("div");
     this.treeContainer.className = "accessibility-tree";
 
-    // Position to the right of the window (skip if no bounds)
-    if (window.bounds) {
-      const rightX = window.bounds.position.x + window.bounds.size.width + 10; // 10px margin
-      this.treeContainer.style.left = `${rightX}px`;
-      this.treeContainer.style.top = `${window.bounds.position.y}px`;
-      // Set height to match window height exactly
-      this.treeContainer.style.height = `${window.bounds.size.height}px`;
-    }
+    // Position to the right of the window
+    const rightX = window.x + window.w + 10; // 10px margin
+    this.treeContainer.style.left = `${rightX}px`;
+    this.treeContainer.style.top = `${window.y}px`;
+    // Set height to match window height exactly
+    this.treeContainer.style.height = `${window.h}px`;
 
     // Add color key legend
     const legend = document.createElement("div");
@@ -539,15 +544,12 @@ class AXTreeOverlay {
     if (this.treeContainer) {
       // Use the last non-overlay window if available, otherwise fall back to focused window
       const referenceWindow = this.lastNonOverlayWindow || this.focusedWindow;
-      if (referenceWindow && referenceWindow.bounds) {
-        const rightX =
-          referenceWindow.bounds.position.x +
-          referenceWindow.bounds.size.width +
-          10;
+      if (referenceWindow) {
+        const rightX = referenceWindow.x + referenceWindow.w + 10;
         this.treeContainer.style.left = `${rightX}px`;
-        this.treeContainer.style.top = `${referenceWindow.bounds.position.y}px`;
+        this.treeContainer.style.top = `${referenceWindow.y}px`;
         // Set height to match window height exactly
-        this.treeContainer.style.height = `${referenceWindow.bounds.size.height}px`;
+        this.treeContainer.style.height = `${referenceWindow.h}px`;
       } else {
         console.warn("⚠️ No reference window available for positioning tree");
       }

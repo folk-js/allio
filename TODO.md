@@ -1,7 +1,26 @@
-- Automatically toggle cursor transparency on mouse move. If cursor is over an element which contains a 'data-solid' attribute in its ancestry, make non-transparent, else it should be transparent.
-- setup the macOS window as a panel, with NSNonactivatingPanelMask, so you can interact with it without changing it to focused. https://forum.juce.com/t/making-a-floating-window-that-doesnt-bring-the-application-to-the-front/36963
-- figure out why there are 'ghosts' in the frontend, like semitransparent imprints of DIVs or the edges of the sand sim particles.
-- fix panic: thread '<unnamed>' panicked at /Users/orion/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-app-kit-0.3.1/src/generated/NSRunningApplication.rs:93:5:
-  messsaging isActive to nil
+## Architecture
 
-- filter out screenshot app
+- [ ] Separate AXIO from Overlay concerns
+
+  - AXIO: window polling, accessibility trees, WebSocket server
+  - Overlay: HTML loading, transparent window rendering, Tauri window management
+  - Keep them in separate modules/files despite coupling
+
+- [ ] Consolidate duplicate ID generation functions
+  - `generate_stable_element_id()` exists in both platform/macos.rs and node_watcher.rs
+  - Move to single location in platform/macos.rs
+
+## Cleanup
+
+- [ ] Remove unused `push_tree_for_window()` in WebSocketState (marked dead_code)
+- [ ] Consider removing `NodeUpdate.path` field (comment says "not used for identification")
+- [ ] Refactor WebSocket message handler chain (300+ lines of if-else)
+  - Use match statement or dispatch table
+- [ ] Use string constants/enums for message type strings instead of literals
+- [ ] Create generic `Response<T>` type to reduce duplication across response structs
+- [ ] Consider `lazy_static` or `once_cell` for bundle ID cache initialization
+
+## Current Work
+
+- [ ] setup the macOS window as a panel, with NSNonactivatingPanelMask, so you can interact with it without changing it to focused. https://forum.juce.com/t/making-a-floating-window-that-doesnt-bring-the-application-to-the-front/36963
+- [ ] figure out why there are 'ghosts' in the frontend, like semitransparent imprints of DIVs or the edges of the sand sim particles.

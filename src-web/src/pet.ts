@@ -1,4 +1,4 @@
-import { AXIO, AXNode } from "./axio.js";
+import { AXIO, Window } from "./axio.js";
 import { Gizmos } from "./gizmos.js";
 
 // ============================================================================
@@ -1535,16 +1535,16 @@ class PetApp {
         console.log(`[NavDemo] Overlay PID: ${pid}`);
       });
 
-      this.#axio.onWindowUpdate((axWindows: AXNode[]) => {
-        // Convert AXNode windows to our geometry format
-        this.#windows = axWindows
-          .filter((w) => w.pid !== this.#overlayPid && w.bounds)
+      this.#axio.onWindowUpdate((windows: Window[]) => {
+        // Convert Window objects to our geometry format
+        this.#windows = windows
+          .filter((w) => w.process_id !== this.#overlayPid)
           .map((w) => ({
             id: w.id, // Use actual OS window ID for stability
-            x: w.bounds!.position.x,
-            y: w.bounds!.position.y,
-            width: w.bounds!.size.width,
-            height: w.bounds!.size.height,
+            x: w.x,
+            y: w.y,
+            width: w.w,
+            height: w.h,
           }));
 
         // UPDATE PHYSICS FIRST before anything else!

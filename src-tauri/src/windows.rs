@@ -15,7 +15,6 @@ use core_graphics::display::{
     CGDirectDisplayID, CGDisplayPixelsHigh, CGDisplayPixelsWide, CGMainDisplayID,
 };
 
-use crate::axio::{AXNode, AXRole, Bounds, Position, Size};
 use crate::websocket::WebSocketState;
 
 // Constants - optimized polling rate
@@ -78,62 +77,12 @@ impl WindowInfo {
         self.y -= offset_y;
         self
     }
-
-    /// Convert WindowInfo to AXNode
-    /// Windows are just root-level accessibility nodes with no children loaded
-    /// Returns None if we can't get the actual children count from the accessibility API
-    pub fn to_ax_node(&self) -> Option<AXNode> {
-        use accessibility::*;
-
-        // Get the actual app element to query children count
-        let app_element = AXUIElement::application(self.process_id as i32);
-
-        // Get actual children count from accessibility API
-        let children_count = app_element
-            .attribute(&AXAttribute::children())
-            .ok()
-            .map(|children_array| children_array.len() as usize)
-            .unwrap_or(0);
-
-        Some(AXNode {
-            pid: self.process_id,
-            path: vec![], // Windows are root nodes (empty path)
-            id: self.id.clone(),
-            role: AXRole::Window,
-            subrole: None,
-            title: if !self.title.is_empty() {
-                Some(self.title.clone())
-            } else if !self.app_name.is_empty() {
-                Some(self.app_name.clone())
-            } else {
-                None
-            },
-            value: None,
-            description: None,
-            placeholder: None,
-            focused: self.focused,
-            enabled: true, // Windows are always enabled
-            selected: None,
-            bounds: Some(Bounds {
-                position: Position {
-                    x: self.x as f64,
-                    y: self.y as f64,
-                },
-                size: Size {
-                    width: self.w as f64,
-                    height: self.h as f64,
-                },
-            }),
-            children_count,   // Actual count from accessibility API
-            children: vec![], // No children loaded initially
-        })
-    }
 }
 
 // Event payload structures
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct WindowUpdatePayload {
-    pub windows: Vec<AXNode>,
+    pub windows: Vec<WindowInfo>,
 }
 
 #[cfg(target_os = "macos")]
@@ -301,12 +250,6 @@ pub fn window_polling_loop(ws_state: WebSocketState) {
         if let Some(current_windows) = current_windows_opt {
             // Broadcast window updates if something changed
             if last_windows.as_ref() != Some(&current_windows) {
-                // Convert windows to AXNodes (filter out any that fail to convert)
-                let window_nodes: Vec<AXNode> = current_windows
-                    .iter()
-                    .filter_map(|w| w.to_ax_node())
-                    .collect();
-
                 // Update WebSocket state and broadcast
                 let ws_state_clone = ws_state.clone();
                 let windows_clone = current_windows.clone();
@@ -316,7 +259,7 @@ pub fn window_polling_loop(ws_state: WebSocketState) {
                 });
 
                 ws_state.broadcast(&WindowUpdatePayload {
-                    windows: window_nodes,
+                    windows: current_windows.clone(),
                 });
 
                 last_windows = Some(current_windows);

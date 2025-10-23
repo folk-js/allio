@@ -1,4 +1,4 @@
-import { AXIO, AXNode } from "./axio.ts";
+import { AXIO, Window } from "./axio.ts";
 
 interface Rectangle {
   x: number;
@@ -59,11 +59,9 @@ class WindowOverlay {
     }
   }
 
-  private updateWindowRectangles(windows: AXNode[]) {
-    // Filter out very small windows (only include those with bounds)
-    const visibleWindows = windows.filter(
-      (w) => w.bounds && w.bounds.size.width >= 50 && w.bounds.size.height >= 50
-    );
+  private updateWindowRectangles(windows: Window[]) {
+    // Filter out very small windows
+    const visibleWindows = windows.filter((w) => w.w >= 50 && w.h >= 50);
 
     // Keep track of current window IDs
     const currentWindowIds = new Set(visibleWindows.map((w) => w.id));
@@ -85,9 +83,7 @@ class WindowOverlay {
     this.updateUnifiedBorders(visibleWindows);
   }
 
-  private updateWindowLabel(window: AXNode) {
-    if (!window.bounds) return; // Skip if no bounds
-
+  private updateWindowLabel(window: Window) {
     let labelElement = this.windowElements.get(window.id);
 
     // Create new label element if it doesn't exist
@@ -120,14 +116,14 @@ class WindowOverlay {
 
     // Position the label
     labelElement.style.position = "absolute";
-    labelElement.style.left = `${window.bounds.position.x}px`;
-    labelElement.style.top = `${window.bounds.position.y - 24}px`;
+    labelElement.style.left = `${window.x}px`;
+    labelElement.style.top = `${window.y - 24}px`;
 
     // Ensure label is visible by default (visibility will be adjusted later if needed)
     labelElement.style.display = "block";
   }
 
-  private updateUnifiedBorders(windows: AXNode[]) {
+  private updateUnifiedBorders(windows: Window[]) {
     // Clear existing border groups
     this.borderGroups.forEach((path) => path.remove());
     this.borderGroups.clear();
@@ -141,18 +137,12 @@ class WindowOverlay {
 
     // Create unified borders for each group and update label visibility
     overlappingGroups.forEach((group, index) => {
-      const rectangles = group
-        .map((w) =>
-          w.bounds
-            ? {
-                x: w.bounds.position.x,
-                y: w.bounds.position.y,
-                w: w.bounds.size.width,
-                h: w.bounds.size.height,
-              }
-            : null
-        )
-        .filter((r) => r !== null) as Rectangle[];
+      const rectangles = group.map((w) => ({
+        x: w.x,
+        y: w.y,
+        w: w.w,
+        h: w.h,
+      }));
       const unionPolygon = this.computeRectangleUnion(rectangles);
       const borderStyle = this.getBorderStyleForGroup(group);
 
@@ -175,14 +165,14 @@ class WindowOverlay {
     });
   }
 
-  private updateLabelVisibility(windows: AXNode[], polygon: Point[]) {
+  private updateLabelVisibility(windows: Window[], polygon: Point[]) {
     for (const window of windows) {
       const labelElement = this.windowElements.get(window.id);
       if (!labelElement) continue;
 
       // Check if the label position is inside the polygon
-      const labelX = window.bounds?.position.x ?? 0;
-      const labelY = (window.bounds?.position.y ?? 0) - 24; // Label is positioned above the window
+      const labelX = window.x;
+      const labelY = window.y - 24; // Label is positioned above the window
       const isInside = this.isPointInPolygon({ x: labelX, y: labelY }, polygon);
 
       // Show label if: it's outside the polygon OR the window is focused
@@ -213,8 +203,8 @@ class WindowOverlay {
     return inside;
   }
 
-  private groupOverlappingWindows(windows: AXNode[]): AXNode[][] {
-    const groups: AXNode[][] = [];
+  private groupOverlappingWindows(windows: Window[]): Window[][] {
+    const groups: Window[][] = [];
     const visited = new Set<string>();
 
     for (const window of windows) {
@@ -248,13 +238,12 @@ class WindowOverlay {
     return groups;
   }
 
-  private doWindowsOverlap(a: AXNode, b: AXNode): boolean {
-    if (!a.bounds || !b.bounds) return false;
+  private doWindowsOverlap(a: Window, b: Window): boolean {
     return !(
-      a.bounds.position.x + a.bounds.size.width <= b.bounds.position.x ||
-      b.bounds.position.x + b.bounds.size.width <= a.bounds.position.x ||
-      a.bounds.position.y + a.bounds.size.height <= b.bounds.position.y ||
-      b.bounds.position.y + b.bounds.size.height <= a.bounds.position.y
+      a.x + a.w <= b.x ||
+      b.x + b.w <= a.x ||
+      a.y + a.h <= b.y ||
+      b.y + b.h <= a.y
     );
   }
 
@@ -522,7 +511,7 @@ class WindowOverlay {
     return false;
   }
 
-  private getBorderStyleForGroup(windows: AXNode[]): string {
+  private getBorderStyleForGroup(windows: Window[]): string {
     // Priority: focused > has-client > default
     if (windows.some((w) => w.focused)) {
       return "focused";

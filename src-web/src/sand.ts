@@ -934,13 +934,10 @@ export class FolkSand extends HTMLElement {
 
     // Use AXIO windows (always up-to-date)
     this.#axio.windows.forEach((win) => {
-      // Skip if window has no bounds
-      if (!win.bounds) return;
-
-      const x = win.bounds.position.x;
-      const y = win.bounds.position.y;
-      const w = win.bounds.size.width;
-      const h = win.bounds.size.height;
+      const x = win.x;
+      const y = win.y;
+      const w = win.w;
+      const h = win.h;
 
       // Convert window coordinates to buffer coordinates
       const bufferPoints = [
@@ -1039,14 +1036,11 @@ export class FolkSand extends HTMLElement {
    */
   #isPointInWindow(x: number, y: number): boolean {
     for (const win of this.#axio.windows) {
-      if (!win.bounds) continue;
-
-      const { position, size } = win.bounds;
       if (
-        x >= position.x &&
-        x <= position.x + size.width &&
-        y >= position.y &&
-        y <= position.y + size.height
+        x >= win.x &&
+        x <= win.x + win.w &&
+        y >= win.y &&
+        y <= win.y + win.h
       ) {
         return true;
       }
