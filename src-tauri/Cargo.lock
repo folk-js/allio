@@ -2114,6 +2114,7 @@ dependencies = [
  "axum",
  "core-foundation 0.10.1",
  "core-graphics 0.23.2",
+ "once_cell",
  "serde",
  "serde_json",
  "tauri",

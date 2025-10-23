@@ -1,3 +1,4 @@
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -8,7 +9,9 @@ use std::{
 };
 
 // Cache for bundle ID lookups (PID -> Bundle ID)
-static BUNDLE_ID_CACHE: Mutex<Option<HashMap<u32, Option<String>>>> = Mutex::new(None);
+// Using once_cell::Lazy to avoid Option wrapper and simplify initialization
+static BUNDLE_ID_CACHE: Lazy<Mutex<HashMap<u32, Option<String>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 #[cfg(target_os = "macos")]
 use core_graphics::display::{
@@ -111,10 +114,8 @@ fn get_bundle_id(pid: u32) -> Option<String> {
     // Check cache first
     {
         let cache = BUNDLE_ID_CACHE.lock().unwrap();
-        if let Some(ref map) = *cache {
-            if let Some(cached) = map.get(&pid) {
-                return cached.clone();
-            }
+        if let Some(cached) = cache.get(&pid) {
+            return cached.clone();
         }
     }
 
@@ -154,10 +155,7 @@ fn get_bundle_id(pid: u32) -> Option<String> {
     // Store in cache
     {
         let mut cache = BUNDLE_ID_CACHE.lock().unwrap();
-        if cache.is_none() {
-            *cache = Some(HashMap::new());
-        }
-        cache.as_mut().unwrap().insert(pid, bundle_id.clone());
+        cache.insert(pid, bundle_id.clone());
     }
 
     bundle_id

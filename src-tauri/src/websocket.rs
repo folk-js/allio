@@ -20,6 +20,34 @@ use crate::platform::{get_ax_tree_by_pid, write_to_element};
 use crate::windows::{WindowInfo, WindowUpdatePayload};
 
 // ============================================================================
+// Message Type Constants
+// ============================================================================
+
+pub mod msg_types {
+    // Server -> Client event types
+    pub const WINDOW_FOCUSED: &str = "window_focused";
+    pub const TREE_CHANGED: &str = "tree_changed";
+    pub const VALUE_CHANGED: &str = "value_changed";
+
+    // Client -> Server request types
+    pub const GET_ACCESSIBILITY_TREE: &str = "get_accessibility_tree";
+    pub const GET_CHILDREN: &str = "get_children";
+    pub const WRITE_TO_ELEMENT: &str = "write_to_element";
+    pub const SET_CLICKTHROUGH: &str = "set_clickthrough";
+    pub const WATCH_NODE: &str = "watch_node";
+    pub const UNWATCH_NODE: &str = "unwatch_node";
+
+    // Server -> Client response types
+    pub const IDENTIFICATION_RECEIVED: &str = "identification_received";
+    pub const ACCESSIBILITY_TREE_RESPONSE: &str = "accessibility_tree_response";
+    pub const GET_CHILDREN_RESPONSE: &str = "get_children_response";
+    pub const ACCESSIBILITY_WRITE_RESPONSE: &str = "accessibility_write_response";
+    pub const SET_CLICKTHROUGH_RESPONSE: &str = "set_clickthrough_response";
+    pub const WATCH_NODE_RESPONSE: &str = "watch_node_response";
+    pub const UNWATCH_NODE_RESPONSE: &str = "unwatch_node_response";
+}
+
+// ============================================================================
 // Server Event Types (Push notifications from backend)
 // ============================================================================
 
@@ -52,6 +80,11 @@ struct ClientIdentification {
     bottom_left_x: i32,
     bottom_left_y: i32,
     window_width: i32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct MessageType {
+    msg_type: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -94,38 +127,39 @@ struct AccessibilityWriteRequest {
     text: String,
 }
 
+/// Generic WebSocket response wrapper with common fields
 #[derive(Debug, Serialize, Deserialize)]
-struct ServerResponse {
+struct WsResponse<T> {
     msg_type: String,
-    window_id: Option<String>,
     success: bool,
+    #[serde(flatten)]
+    data: T,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct IdentificationData {
+    window_id: Option<String>,
     message: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct AccessibilityTreeResponse {
-    msg_type: String,
+struct AccessibilityTreeData {
     pid: u32,
-    success: bool,
     tree: Option<AXNode>,
     error: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct GetChildrenResponse {
-    msg_type: String,
+struct GetChildrenData {
     pid: u32,
     path: Vec<usize>,
-    success: bool,
     children: Option<Vec<AXNode>>,
     error: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct AccessibilityWriteResponse {
-    msg_type: String,
+struct AccessibilityWriteData {
     pid: u32,
-    success: bool,
     message: String,
     error: Option<String>,
 }
@@ -138,9 +172,7 @@ struct SetClickthroughRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct SetClickthroughResponse {
-    msg_type: String,
-    success: bool,
+struct SetClickthroughData {
     enabled: bool,
     error: Option<String>,
 }
@@ -155,9 +187,7 @@ struct WatchNodeRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct WatchNodeResponse {
-    msg_type: String,
-    success: bool,
+struct WatchNodeData {
     node_id: String,
     error: Option<String>,
 }
@@ -171,10 +201,7 @@ struct UnwatchNodeRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct UnwatchNodeResponse {
-    msg_type: String,
-    success: bool,
-}
+struct UnwatchNodeData {}
 
 // WebSocket state for broadcasting to clients
 #[derive(Clone)]
@@ -200,32 +227,6 @@ impl WebSocketState {
             current_windows: Arc::new(RwLock::new(Vec::new())),
             app_handle,
             node_watcher,
-        }
-    }
-
-    /// Automatically push accessibility tree for a window when it gains focus
-    /// NOTE: This is currently unused - trees are fetched on-demand by the frontend
-    #[allow(dead_code)]
-    pub fn push_tree_for_window(&self, pid: u32) {
-        // Get tree with default limits, fully loaded
-        let tree_result = get_ax_tree_by_pid(pid, 100, 5000, true);
-
-        match tree_result {
-            Ok(tree) => {
-                let event = TreeChangedEvent {
-                    event_type: "tree_changed".to_string(),
-                    pid,
-                    tree,
-                };
-
-                if let Ok(json) = serde_json::to_string(&event) {
-                    let _ = self.sender.send(json);
-                    println!("📤 Pushed tree for PID {}", pid);
-                }
-            }
-            Err(e) => {
-                println!("❌ Failed to get tree for PID {}: {}", pid, e);
-            }
         }
     }
 
@@ -390,18 +391,8 @@ async fn handle_client_message(
     socket: &mut WebSocket,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("📨 Received WebSocket message: {}", message);
-    println!("🔄 Starting handler chain...");
 
-    // Debug: Try to parse as WatchNodeRequest to see the error
-    if message.contains("watch_node") {
-        println!("🔍 Message contains 'watch_node', attempting parse...");
-        match serde_json::from_str::<WatchNodeRequest>(message) {
-            Ok(req) => println!("  ✅ Parsed successfully: {:?}", req),
-            Err(e) => println!("  ❌ Parse failed: {}", e),
-        }
-    }
-
-    // Try to parse as ClientIdentification first
+    // Try to parse as ClientIdentification first (doesn't have msg_type field)
     if let Ok(identification) = serde_json::from_str::<ClientIdentification>(message) {
         println!(
             "🎯 Client requesting identification at ({}, {}) width: {}px",
@@ -427,28 +418,35 @@ async fn handle_client_message(
             println!("❌ No match found for client");
         }
 
-        let response = ServerResponse {
-            msg_type: "identification_received".to_string(),
-            window_id: window_id.clone(),
+        let response = WsResponse {
+            msg_type: msg_types::IDENTIFICATION_RECEIVED.to_string(),
             success: window_id.is_some(),
-            message: if window_id.is_some() {
-                format!("✅ Window matched!")
-            } else {
-                format!("❌ No matching window found")
+            data: IdentificationData {
+                window_id: window_id.clone(),
+                message: if window_id.is_some() {
+                    format!("✅ Window matched!")
+                } else {
+                    format!("❌ No matching window found")
+                },
             },
         };
 
         let response_json = serde_json::to_string(&response)?;
         socket.send(Message::Text(response_json)).await.ok();
+        return Ok(());
     }
-    // Try to parse as AccessibilityWriteRequest FIRST (more specific)
-    else if let Ok(write_request) = serde_json::from_str::<AccessibilityWriteRequest>(message) {
-        println!(
-            "✅ Successfully parsed as AccessibilityWriteRequest: {:?}",
-            write_request
-        );
-        if write_request.msg_type == "write_to_element" {
-            // Reduced logging for live updates to avoid spam
+
+    // Extract msg_type for dispatching
+    let msg_type_parsed = serde_json::from_str::<MessageType>(message)?;
+    let msg_type = msg_type_parsed.msg_type.as_deref().unwrap_or("");
+
+    match msg_type {
+        msg_types::WRITE_TO_ELEMENT => {
+            let write_request = serde_json::from_str::<AccessibilityWriteRequest>(message)?;
+            println!(
+                "✅ Successfully parsed as AccessibilityWriteRequest: {:?}",
+                write_request
+            );
 
             // Attempt to write to the element
             let (success, message, error) = match write_to_element(
@@ -464,23 +462,22 @@ async fn handle_client_message(
                 Err(e) => (false, "Failed to write to element".to_string(), Some(e)),
             };
 
-            let response = AccessibilityWriteResponse {
-                msg_type: "accessibility_write_response".to_string(),
-                pid: write_request.pid,
+            let response = WsResponse {
+                msg_type: msg_types::ACCESSIBILITY_WRITE_RESPONSE.to_string(),
                 success,
-                message,
-                error,
+                data: AccessibilityWriteData {
+                    pid: write_request.pid,
+                    message,
+                    error,
+                },
             };
 
             let response_json = serde_json::to_string(&response)?;
             socket.send(Message::Text(response_json)).await.ok();
-
-            // Reduced logging for live updates
         }
-    }
-    // Try to parse as GetChildrenRequest
-    else if let Ok(get_children_req) = serde_json::from_str::<GetChildrenRequest>(message) {
-        if get_children_req.msg_type == "get_children" {
+
+        msg_types::GET_CHILDREN => {
+            let get_children_req = serde_json::from_str::<GetChildrenRequest>(message)?;
             println!(
                 "👶 Client requesting children for PID: {} path: {:?}",
                 get_children_req.pid, get_children_req.path
@@ -497,13 +494,15 @@ async fn handle_client_message(
                 Err(e) => (false, None, Some(e)),
             };
 
-            let response = GetChildrenResponse {
-                msg_type: "get_children_response".to_string(),
-                pid: get_children_req.pid,
-                path: get_children_req.path,
+            let response = WsResponse {
+                msg_type: msg_types::GET_CHILDREN_RESPONSE.to_string(),
                 success,
-                children,
-                error,
+                data: GetChildrenData {
+                    pid: get_children_req.pid,
+                    path: get_children_req.path,
+                    children,
+                    error,
+                },
             };
 
             let response_json = serde_json::to_string(&response)?;
@@ -515,11 +514,10 @@ async fn handle_client_message(
                 println!("❌ Failed to get children for PID {}", get_children_req.pid);
             }
         }
-    }
-    // Try to parse as AccessibilityTreeRequest (less specific)
-    else if let Ok(ax_request) = serde_json::from_str::<AccessibilityTreeRequest>(message) {
-        println!("🌳 Parsed as AccessibilityTreeRequest: {:?}", ax_request);
-        if ax_request.msg_type == "get_accessibility_tree" {
+
+        msg_types::GET_ACCESSIBILITY_TREE => {
+            let ax_request = serde_json::from_str::<AccessibilityTreeRequest>(message)?;
+            println!("🌳 Parsed as AccessibilityTreeRequest: {:?}", ax_request);
             println!(
                 "🌳 Client requesting accessibility tree for PID: {} (max_depth: {}, max_children: {})",
                 ax_request.pid, ax_request.max_depth, ax_request.max_children_per_level
@@ -537,12 +535,14 @@ async fn handle_client_message(
                 Err(e) => (false, None, Some(e)),
             };
 
-            let response = AccessibilityTreeResponse {
-                msg_type: "accessibility_tree_response".to_string(),
-                pid: ax_request.pid,
+            let response = WsResponse {
+                msg_type: msg_types::ACCESSIBILITY_TREE_RESPONSE.to_string(),
                 success,
-                tree,
-                error,
+                data: AccessibilityTreeData {
+                    pid: ax_request.pid,
+                    tree,
+                    error,
+                },
             };
 
             let response_json = serde_json::to_string(&response)?;
@@ -556,16 +556,10 @@ async fn handle_client_message(
                     ax_request.pid
                 );
             }
-        } else {
-            println!(
-                "🤔 AccessibilityTreeRequest with unexpected type: {}",
-                ax_request.msg_type
-            );
         }
-    }
-    // Try to parse as SetClickthroughRequest
-    else if let Ok(clickthrough_req) = serde_json::from_str::<SetClickthroughRequest>(message) {
-        if clickthrough_req.msg_type == "set_clickthrough" {
+
+        msg_types::SET_CLICKTHROUGH => {
+            let clickthrough_req = serde_json::from_str::<SetClickthroughRequest>(message)?;
             println!(
                 "🖱️ Client requesting clickthrough: {}",
                 clickthrough_req.enabled
@@ -596,28 +590,25 @@ async fn handle_client_message(
                 }
             };
 
-            let response = SetClickthroughResponse {
-                msg_type: "set_clickthrough_response".to_string(),
+            let response = WsResponse {
+                msg_type: msg_types::SET_CLICKTHROUGH_RESPONSE.to_string(),
                 success,
-                enabled: if success {
-                    clickthrough_req.enabled
-                } else {
-                    false
+                data: SetClickthroughData {
+                    enabled: if success {
+                        clickthrough_req.enabled
+                    } else {
+                        false
+                    },
+                    error,
                 },
-                error,
             };
 
             let response_json = serde_json::to_string(&response)?;
             socket.send(Message::Text(response_json)).await.ok();
         }
-    }
-    // Try to parse as WatchNodeRequest
-    else if let Ok(watch_req) = serde_json::from_str::<WatchNodeRequest>(message) {
-        println!(
-            "🔍 Parsed as WatchNodeRequest: msg_type={}",
-            watch_req.msg_type
-        );
-        if watch_req.msg_type == "watch_node" {
+
+        msg_types::WATCH_NODE => {
+            let watch_req = serde_json::from_str::<WatchNodeRequest>(message)?;
             println!(
                 "👁️  Client requesting to watch node: PID {} path {:?} ID {}",
                 watch_req.pid, watch_req.path, watch_req.node_id
@@ -641,20 +632,21 @@ async fn handle_client_message(
                 }
             };
 
-            let response = WatchNodeResponse {
-                msg_type: "watch_node_response".to_string(),
+            let response = WsResponse {
+                msg_type: msg_types::WATCH_NODE_RESPONSE.to_string(),
                 success,
-                node_id: watch_req.node_id,
-                error,
+                data: WatchNodeData {
+                    node_id: watch_req.node_id,
+                    error,
+                },
             };
 
             let response_json = serde_json::to_string(&response)?;
             socket.send(Message::Text(response_json)).await.ok();
         }
-    }
-    // Try to parse as UnwatchNodeRequest
-    else if let Ok(unwatch_req) = serde_json::from_str::<UnwatchNodeRequest>(message) {
-        if unwatch_req.msg_type == "unwatch_node" {
+
+        msg_types::UNWATCH_NODE => {
+            let unwatch_req = serde_json::from_str::<UnwatchNodeRequest>(message)?;
             println!(
                 "🚫 Client requesting to unwatch node: PID {} path {:?}",
                 unwatch_req.pid, unwatch_req.path
@@ -665,18 +657,19 @@ async fn handle_client_message(
                 .node_watcher
                 .unwatch_node(unwatch_req.pid, unwatch_req.path);
 
-            let response = UnwatchNodeResponse {
-                msg_type: "unwatch_node_response".to_string(),
+            let response = WsResponse {
+                msg_type: msg_types::UNWATCH_NODE_RESPONSE.to_string(),
                 success: true,
+                data: UnwatchNodeData {},
             };
 
             let response_json = serde_json::to_string(&response)?;
             socket.send(Message::Text(response_json)).await.ok();
         }
-    }
-    // Catch-all for unrecognized messages
-    else {
-        println!("❓ Unrecognized message format: {}", message);
+
+        _ => {
+            println!("❓ Unrecognized message type: {}", msg_type);
+        }
     }
 
     Ok(())
