@@ -62,9 +62,12 @@ impl WindowManager {
             }
         }
 
-        // Remove old windows from cache
+        // Remove old windows from cache and clean up their elements
         for id in &removed_ids {
             cache.windows.remove(id);
+
+            // Clean up all accessibility elements associated with this window
+            crate::element_registry::ElementRegistry::remove_window_elements(id);
         }
 
         // Process new/updated windows

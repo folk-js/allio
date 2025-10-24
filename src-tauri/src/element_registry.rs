@@ -18,6 +18,20 @@ use uuid::Uuid;
 
 use crate::ui_element::UIElement;
 
+/// Check if two AXUIElements refer to the same UI element using CFEqual
+fn ax_elements_equal(
+    elem1: &accessibility::AXUIElement,
+    elem2: &accessibility::AXUIElement,
+) -> bool {
+    use accessibility_sys::AXUIElementRef;
+    use core_foundation::base::{CFEqual, TCFType};
+
+    let ref1 = elem1.as_concrete_TypeRef() as AXUIElementRef;
+    let ref2 = elem2.as_concrete_TypeRef() as AXUIElementRef;
+
+    unsafe { CFEqual(ref1 as _, ref2 as _) != 0 }
+}
+
 /// Global registry managing all UI elements
 /// Note: This is a global singleton for now, but could be moved to app state
 static ELEMENT_REGISTRY: Lazy<Mutex<Option<ElementRegistry>>> = Lazy::new(|| Mutex::new(None));
@@ -80,8 +94,11 @@ impl ElementRegistry {
 
     /// Register a new element and return its unique ID
     ///
+    /// If an equivalent element already exists for this window (determined via CFEqual),
+    /// returns the existing element's ID instead of creating a new one.
+    /// This ensures stable IDs across multiple tree queries.
+    ///
     /// Called by platform/macos.rs during tree building.
-    /// Creates a UIElement and associates it with a window.
     pub fn register(
         ax_element: accessibility::AXUIElement,
         window_id: String,
@@ -90,6 +107,19 @@ impl ElementRegistry {
         role: String,
     ) -> String {
         Self::with(|registry| {
+            // Check if an equivalent element already exists for this window
+            if let Some(window_elements) = registry.window_to_elements.get(&window_id) {
+                for element_id in window_elements {
+                    if let Some(existing) = registry.elements.get(element_id) {
+                        if ax_elements_equal(existing.ax_element(), &ax_element) {
+                            println!("🔄 Reusing existing element ID: {}", element_id);
+                            return element_id.clone();
+                        }
+                    }
+                }
+            }
+
+            // No equivalent element found - create new one
             let id = Uuid::new_v4().to_string();
 
             let ui_element = UIElement::new(
@@ -111,6 +141,7 @@ impl ElementRegistry {
                 .or_insert_with(HashSet::new)
                 .insert(id.clone());
 
+            println!("✨ Created new element ID: {}", id);
             id
         })
     }
@@ -178,6 +209,28 @@ impl ElementRegistry {
     // ============================================================================
     // Lifecycle - THE KEY FEATURE!
     // ============================================================================
+
+    /// Remove a single element (e.g., when it's destroyed)
+    pub fn remove_element(element_id: &str) {
+        Self::with(|registry| {
+            if let Some(element) = registry.elements.remove(element_id) {
+                let window_id = element.window_id().to_string();
+
+                // Unwatch if observer exists
+                if let Some(&observer) = registry.observers.get(&window_id) {
+                    let mut elem = element;
+                    elem.unwatch(observer);
+                }
+
+                // Remove from window index
+                if let Some(window_elements) = registry.window_to_elements.get_mut(&window_id) {
+                    window_elements.remove(element_id);
+                }
+
+                println!("🗑️  Removed destroyed element: {}", element_id);
+            }
+        });
+    }
 
     /// Remove all elements associated with a window
     ///
@@ -343,25 +396,21 @@ unsafe extern "C" fn observer_callback(
     );
 }
 
-/// Handle a notification by extracting data and broadcasting
+/// Handle a notification by extracting data and broadcasting typed updates
 fn handle_notification(
     element_id: &str,
     notification: &str,
     element: &accessibility::AXUIElement,
     sender: &Arc<broadcast::Sender<String>>,
 ) {
+    use crate::axio::ElementUpdate;
     use accessibility::AXAttribute;
     use core_foundation::base::TCFType;
     use core_foundation::string::CFString;
     use serde_json::json;
 
-    let mut update = json!({
-        "id": element_id,
-    });
-
-    let mut has_changes = false;
-
-    match notification {
+    // Convert notification to typed update
+    let update = match notification {
         "AXValueChanged" => {
             // Extract value
             if let Ok(value_attr) = element.attribute(&AXAttribute::value()) {
@@ -373,30 +422,63 @@ fn handle_notification(
                         Some(cf_string.to_string())
                     });
 
-                if let Some(typed_value) =
+                if let Some(value) =
                     crate::platform::macos::extract_value(&value_attr, role.as_deref())
                 {
-                    update["value"] = json!(typed_value);
-                    has_changes = true;
+                    Some(ElementUpdate::ValueChanged {
+                        element_id: element_id.to_string(),
+                        value,
+                    })
+                } else {
+                    None
                 }
+            } else {
+                None
             }
         }
-        _ => {
-            return; // Unhandled notification type
+
+        "AXTitleChanged" => {
+            // Extract title
+            if let Ok(title_attr) = element.attribute(&AXAttribute::title()) {
+                let title = title_attr.to_string();
+                if !title.is_empty() {
+                    Some(ElementUpdate::TitleChanged {
+                        element_id: element_id.to_string(),
+                        title,
+                    })
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         }
-    }
 
-    if !has_changes {
-        return;
-    }
+        "AXUIElementDestroyed" => {
+            // Element destroyed - remove from registry
+            ElementRegistry::remove_element(element_id);
 
-    // Broadcast update
-    let message = json!({
-        "event_type": "node_updated",
-        "update": update,
-    });
+            Some(ElementUpdate::ElementDestroyed {
+                element_id: element_id.to_string(),
+            })
+        }
 
-    if let Ok(json_str) = serde_json::to_string(&message) {
-        let _ = sender.send(json_str);
+        _ => {
+            // Unhandled notification type
+            println!("⚠️  Unhandled notification: {}", notification);
+            None
+        }
+    };
+
+    // Broadcast typed update
+    if let Some(update) = update {
+        let message = json!({
+            "event_type": "element_update",
+            "update": update,
+        });
+
+        if let Ok(json_str) = serde_json::to_string(&message) {
+            let _ = sender.send(json_str);
+        }
     }
 }

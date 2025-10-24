@@ -234,8 +234,7 @@ pub fn window_polling_loop(ws_state: WebSocketState) {
             // Broadcast window updates if something changed
             if last_windows.as_ref() != Some(&current_windows) {
                 // Update window manager (fetches AX elements only for new windows)
-                // Silently track new windows
-
+                // WindowManager handles all lifecycle including cleanup
                 let (_managed_windows, _added_ids, _removed_ids) =
                     WindowManager::update_windows(current_windows.clone());
 

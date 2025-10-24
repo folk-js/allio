@@ -320,24 +320,31 @@ impl UIElement {
     }
 
     /// Determines which notifications to register for a given element role
-    /// Currently focused on TEXT ELEMENTS ONLY - watching value changes
+    /// Conservative approach: only subscribe to essential notifications
     fn get_notifications_for_role(role: &str) -> Vec<&'static str> {
+        // Note: Using string literals since not all constants are in accessibility_sys
+        // kAXValueChangedNotification is available, others we use strings
         use accessibility_sys::kAXValueChangedNotification;
 
         match role {
-            // TEXT INPUT ELEMENTS - our primary focus!
+            // TEXT INPUT ELEMENTS - watch value changes
             "AXTextField" | "AXTextArea" | "AXComboBox" | "AXSearchField" => {
-                vec![kAXValueChangedNotification]
+                vec![
+                    kAXValueChangedNotification,
+                    "AXUIElementDestroyed", // Know when element is destroyed
+                ]
             }
 
-            // STATIC TEXT - labels that might update
-            "AXStaticText" => {
-                vec![kAXValueChangedNotification]
+            // WINDOWS - watch title changes
+            "AXWindow" => {
+                vec!["AXTitleChanged", "AXUIElementDestroyed"]
             }
 
-            // Everything else - don't subscribe
+            // Everything else - no subscriptions
+            // Note: AXStaticText does NOT reliably emit value changed notifications
+            // (apps must manually post them, which most don't do)
             _ => {
-                vec![] // Only watching text elements right now
+                vec![] // Conservative: only reliable elements
             }
         }
     }

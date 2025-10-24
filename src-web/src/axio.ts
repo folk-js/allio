@@ -156,6 +156,19 @@ export interface AXNode {
 }
 
 // ============================================================================
+// Element Update Types
+// ============================================================================
+
+/**
+ * Typed update events for accessibility elements
+ * Matches Rust ElementUpdate enum exactly
+ */
+export type ElementUpdate =
+  | { update_type: "ValueChanged"; element_id: string; value: AXValue }
+  | { update_type: "TitleChanged"; element_id: string; title: string }
+  | { update_type: "ElementDestroyed"; element_id: string };
+
+// ============================================================================
 // AXIO Client Class
 // ============================================================================
 
@@ -177,6 +190,9 @@ export class AXIO {
   // Window state (always up-to-date)
   public windows: readonly Window[] = [];
   public focused: Window | null = null;
+
+  // Tree cache - holds trees per window for stable state across focus changes
+  private treeCache: Map<string, AXNode> = new Map();
 
   constructor(private readonly wsUrl: string = "ws://localhost:3030/ws") {}
 
@@ -233,6 +249,7 @@ export class AXIO {
   /**
    * Register callback for window updates
    * Also updates axio.windows and axio.focused automatically
+   * Cleans up cache for closed windows
    */
   onWindowUpdate(callback: (windows: Window[]) => void): void {
     if (!this.listeners.has("window_update")) {
@@ -241,6 +258,18 @@ export class AXIO {
     this.listeners.get("window_update")!.add((data: any) => {
       if (data.windows) {
         const windows = data.windows as Window[];
+
+        // Track which windows were removed
+        const oldWindowIds = new Set(this.windows.map((w) => w.id));
+        const newWindowIds = new Set(windows.map((w: Window) => w.id));
+
+        // Clean up cache for closed windows
+        for (const oldId of oldWindowIds) {
+          if (!newWindowIds.has(oldId)) {
+            this.treeCache.delete(oldId);
+            console.log(`🗑️ Removed cached tree for closed window ${oldId}`);
+          }
+        }
 
         // Update internal state
         this.windows = windows;
@@ -289,8 +318,8 @@ export class AXIO {
 
   /**
    * Get accessibility tree for a window by window ID
-   * Uses cached window element as root - faster and more accurate
-   * Returns hierarchical tree structure with children
+   * Uses tree cache - if tree already fetched, returns cached version with stable IDs
+   * Otherwise fetches from backend and caches result
    * All nodes have setValue() and getChildren() methods attached for easy operations
    */
   async getTreeByWindowId(
@@ -298,6 +327,15 @@ export class AXIO {
     maxDepth: number = 50,
     maxChildrenPerLevel: number = 2000
   ): Promise<AXNode> {
+    // Check cache first
+    const cached = this.treeCache.get(windowId);
+    if (cached) {
+      console.log(`📦 Returning cached tree for window ${windowId}`);
+      return Promise.resolve(cached);
+    }
+
+    // Not cached - fetch from backend
+    console.log(`🌐 Fetching tree from backend for window ${windowId}`);
     return new Promise((resolve, reject) => {
       const handler = (data: any) => {
         // Remove this specific handler
@@ -309,6 +347,11 @@ export class AXIO {
         if (data.success && data.tree) {
           // Attach methods to all nodes in the tree
           const tree = this.attachNodeMethods(data.tree);
+
+          // Cache the tree for this window
+          this.treeCache.set(windowId, tree);
+          console.log(`💾 Cached tree for window ${windowId}`);
+
           resolve(tree);
         } else {
           reject(new Error(data.error || "Failed to get tree"));
@@ -622,18 +665,90 @@ export class AXIO {
   }
 
   /**
-   * Register callback for node updates (pushed from backend via AXObserver)
-   * Called when a watched node's value, bounds, or state changes
+   * Register callback for element updates (pushed from backend via AXObserver)
+   * Called when a watched element's value, title, or other properties change
+   * Also updates cached trees to keep them fresh
    */
-  onNodeUpdated(callback: (update: any) => void): void {
-    if (!this.listeners.has("node_updated")) {
-      this.listeners.set("node_updated", new Set());
+  onElementUpdate(callback: (update: ElementUpdate) => void): void {
+    if (!this.listeners.has("element_update")) {
+      this.listeners.set("element_update", new Set());
     }
-    this.listeners.get("node_updated")!.add((data: any) => {
+    this.listeners.get("element_update")!.add((data: any) => {
       if (data.update) {
-        callback(data.update);
+        const update = data.update as ElementUpdate;
+
+        // Apply update to cached trees
+        this.applyCachedTreeUpdate(update);
+
+        // Notify listeners
+        callback(update);
       }
     });
+  }
+
+  /**
+   * Apply element update to cached trees
+   * Keeps trees fresh without refetching
+   */
+  private applyCachedTreeUpdate(update: ElementUpdate): void {
+    // Search all cached trees for the element
+    for (const tree of this.treeCache.values()) {
+      const node = this.findNodeInTree(tree, update.element_id);
+      if (node) {
+        // Found the node - apply update
+        switch (update.update_type) {
+          case "ValueChanged":
+            (node as any).value = update.value;
+            break;
+          case "TitleChanged":
+            (node as any).title = update.title;
+            break;
+          case "ElementDestroyed":
+            // Note: For destruction, we'd need to remove from parent's children
+            // This is complex, so for now we just mark it
+            // Frontend can handle this by removing from DOM
+            console.log(
+              `⚠️ Element ${update.element_id} destroyed in cached tree`
+            );
+            break;
+        }
+        break; // Found and updated, stop searching
+      }
+    }
+  }
+
+  /**
+   * Recursively search tree for node with given ID
+   */
+  private findNodeInTree(node: AXNode, elementId: string): AXNode | null {
+    if (node.id === elementId) {
+      return node;
+    }
+
+    for (const child of node.children) {
+      const found = this.findNodeInTree(child, elementId);
+      if (found) return found;
+    }
+
+    return null;
+  }
+
+  /**
+   * Clear cached tree for a specific window
+   * Next request will fetch fresh tree from backend
+   */
+  clearTreeCache(windowId: string): void {
+    this.treeCache.delete(windowId);
+    console.log(`🗑️ Cleared tree cache for window ${windowId}`);
+  }
+
+  /**
+   * Clear all cached trees
+   * Useful for debugging or forced refresh
+   */
+  clearAllTreeCache(): void {
+    this.treeCache.clear();
+    console.log(`🗑️ Cleared all tree cache`);
   }
 
   // ============================================================================

@@ -1,4 +1,4 @@
-import { AXIO, AXNode, Window } from "./axio.ts";
+import { AXIO, AXNode, Window, ElementUpdate } from "./axio.ts";
 
 class AXTreeOverlay {
   private windowContainer: HTMLElement;
@@ -93,10 +93,10 @@ class AXTreeOverlay {
         this.updateWindows(windows);
       });
 
-      // Set up node update handler (receives AXObserver notifications)
-      this.axio.onNodeUpdated((update) => {
-        console.log("🔄 Node updated:", update);
-        this.handleNodeUpdate(update);
+      // Set up element update handler (receives AXObserver notifications)
+      this.axio.onElementUpdate((update) => {
+        console.log("🔄 Element updated:", update);
+        this.handleElementUpdate(update);
       });
 
       // Connect to websocket
@@ -964,36 +964,34 @@ class AXTreeOverlay {
   }
 
   /**
-   * Toggle expansion of a node's children
+   * Handle typed element update from AXObserver (backend push notification)
+   * Updates the node data and DOM elements based on the update type
    */
-  /**
-   * Handle node update from AXObserver (backend push notification)
-   * Patches the node data and updates only the changed DOM elements (preserves tree structure)
-   */
-  private handleNodeUpdate(update: any) {
-    const nodeId = update.id;
-    const stored = this.nodeElements.get(nodeId);
+  private handleElementUpdate(update: ElementUpdate) {
+    const stored = this.nodeElements.get(update.element_id);
 
     if (!stored) {
-      console.warn(`Node ${nodeId} not found in rendered nodes`);
+      console.warn(`Element ${update.element_id} not found in rendered nodes`);
       return;
     }
 
     const { element, node } = stored;
 
-    // Patch the node object in-place (keeps JS references alive)
-    if (update.value !== undefined) {
-      (node as any).value = update.value;
-      console.log(`  ✏️  Updated value for ${nodeId}:`, update.value);
+    switch (update.update_type) {
+      case "ValueChanged":
+        // Update the node's value
+        (node as any).value = update.value;
+        console.log(
+          `  ✏️  Value changed for ${update.element_id}:`,
+          update.value
+        );
 
-      // Update the value display in the DOM (without rebuilding entire node)
-      const nodeInfo = element.querySelector(
-        ".tree-node-content .tree-value-string, .tree-node-content .tree-value-number, .tree-node-content .tree-value-boolean"
-      );
-      if (nodeInfo) {
-        // Find or create the value span
-        const valueSpan = nodeInfo as HTMLElement;
-        if (update.value) {
+        // Update the value display in the DOM
+        const valueSpan = element.querySelector(
+          ".tree-node-content .tree-value-string, .tree-node-content .tree-value-number, .tree-node-content .tree-value-boolean"
+        ) as HTMLElement;
+
+        if (valueSpan) {
           switch (update.value.type) {
             case "String":
               valueSpan.className = "tree-value-string";
@@ -1010,33 +1008,43 @@ class AXTreeOverlay {
               break;
           }
         }
-      }
 
-      // Also update input fields if present
-      const inputField = element.querySelector(
-        ".tree-value-input"
-      ) as HTMLInputElement;
-      if (inputField && update.value) {
-        inputField.value = String(update.value.value);
-      }
-    }
+        // Also update input fields if present
+        const inputField = element.querySelector(
+          ".tree-text-input"
+        ) as HTMLInputElement;
+        if (inputField) {
+          inputField.value = String(update.value.value);
+        }
+        break;
 
-    if (update.bounds !== undefined) {
-      (node as any).bounds = update.bounds;
-      console.log(`  📐 Updated bounds for ${nodeId}:`, update.bounds);
-      // Bounds don't need DOM update (only affects hover outline)
-    }
+      case "TitleChanged":
+        // Update the node's title
+        (node as any).title = update.title;
+        console.log(
+          `  🏷️  Title changed for ${update.element_id}:`,
+          update.title
+        );
 
-    if (update.focused !== undefined) {
-      (node as any).focused = update.focused;
-      // TODO: Update focused indicator in DOM if needed
-    }
+        // Update title in DOM
+        const titleSpan = element.querySelector(".tree-title") as HTMLElement;
+        if (titleSpan) {
+          titleSpan.textContent = ` "${update.title}"`;
+        }
+        break;
 
-    if (update.enabled !== undefined) {
-      (node as any).enabled = update.enabled;
-      // TODO: Update enabled/disabled indicator in DOM if needed
+      case "ElementDestroyed":
+        // Remove element from DOM and tracking
+        console.log(`  💀 Element destroyed: ${update.element_id}`);
+        element.remove();
+        this.nodeElements.delete(update.element_id);
+        break;
     }
   }
+
+  /**
+   * Toggle expansion of a node's children
+   */
 
   private toggleNodeExpansion(nodeId: string, nodeElement: HTMLElement) {
     const childrenContainer = nodeElement.querySelector(
