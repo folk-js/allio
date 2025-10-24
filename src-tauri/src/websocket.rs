@@ -15,7 +15,6 @@ use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::axio::AXNode;
-use crate::node_watcher::NodeWatcher;
 use crate::platform::{get_children_by_element_id, write_to_element_by_id};
 use crate::windows::{WindowInfo, WindowUpdatePayload};
 
@@ -201,7 +200,6 @@ pub struct WebSocketState {
     pub connected_windows: Arc<RwLock<HashSet<String>>>, // Set of window IDs with connected clients
     pub current_windows: Arc<RwLock<Vec<WindowInfo>>>,
     pub app_handle: tauri::AppHandle,
-    pub node_watcher: Arc<NodeWatcher>,
 }
 
 impl WebSocketState {
@@ -209,15 +207,11 @@ impl WebSocketState {
         let (sender, _) = broadcast::channel(1000);
         let sender_arc = Arc::new(sender);
 
-        // Create node watcher with the sender
-        let node_watcher = NodeWatcher::new(sender_arc.clone());
-
         Self {
             sender: sender_arc,
             connected_windows: Arc::new(RwLock::new(HashSet::new())),
             current_windows: Arc::new(RwLock::new(Vec::new())),
             app_handle,
-            node_watcher,
         }
     }
 
@@ -225,6 +219,11 @@ impl WebSocketState {
         if let Ok(json) = serde_json::to_string(data) {
             let _ = self.sender.send(json);
         }
+    }
+    
+    /// Get the broadcast sender (for ElementRegistry initialization)
+    pub fn sender(&self) -> Arc<broadcast::Sender<String>> {
+        self.sender.clone()
     }
 
     // Store current windows for immediate matching
@@ -365,8 +364,8 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
         }
     }
 
-    // Clear all node watches to prevent stale observers on reconnect
-    ws_state.node_watcher.clear_all();
+    // Note: Element watches are now managed by ElementRegistry per window
+    // They will be cleaned up automatically when windows close
 
     // Remove client from tracking if it was identified
     if let Some(window_id) = current_window_id {
@@ -592,17 +591,9 @@ async fn handle_client_message(
             let watch_req = serde_json::from_str::<WatchNodeRequest>(message)?;
 
             let result = if let Some(ref element_id) = watch_req.element_id {
-                // Look up PID from ElementRegistry
+                // Use new ElementRegistry watch API
                 use crate::element_registry::ElementRegistry;
-                if let Some(pid) = ElementRegistry::get_pid(element_id) {
-                    ws_state.node_watcher.watch_node_by_id(
-                        pid,
-                        element_id.clone(),
-                        watch_req.node_id.clone(),
-                    )
-                } else {
-                    Err(format!("Element ID {} not found in registry", element_id))
-                }
+                ElementRegistry::watch(element_id)
             } else {
                 Err("element_id not provided".to_string())
             };
@@ -638,14 +629,9 @@ async fn handle_client_message(
                 unwatch_req.element_id
             );
 
-            // Look up PID from ElementRegistry
+            // Use new ElementRegistry unwatch API
             use crate::element_registry::ElementRegistry;
-            let pid = ElementRegistry::get_pid(&unwatch_req.element_id).unwrap_or(0);
-
-            // Stop watching the node (pid is not critical for unwatch, just for observer lookup)
-            ws_state
-                .node_watcher
-                .unwatch_node_by_id(pid, unwatch_req.element_id);
+            ElementRegistry::unwatch(&unwatch_req.element_id);
 
             let response = WsResponse {
                 msg_type: msg_types::UNWATCH_NODE_RESPONSE.to_string(),

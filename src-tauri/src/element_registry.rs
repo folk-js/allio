@@ -1,61 +1,402 @@
 /**
- * Element Registry - Reference-based AX Element Management
+ * Element Registry - Lifecycle Management for UI Elements
  *
- * Replaces path-based navigation with a stable reference system.
- * Maps unique IDs to AXUIElement pointers for stable node identity.
+ * Manages the lifecycle of UIElement instances, including:
+ * - Registration and lookup
+ * - Window-to-element association
+ * - AXObserver management for watching
+ * - Automatic cleanup when windows close
  */
-use accessibility::AXUIElement;
+use accessibility_sys::{AXObserverCreate, AXObserverGetRunLoopSource, AXObserverRef};
+use core_foundation::base::TCFType;
+use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopSource};
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
-use std::sync::Mutex;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
-/// Global registry mapping element IDs to AXUIElement references
-/// Note: AXUIElement doesn't implement Send/Sync directly, but operations are thread-safe
-/// when protected by Mutex
-static ELEMENT_REGISTRY: Lazy<Mutex<ElementRegistry>> =
-    Lazy::new(|| Mutex::new(ElementRegistry::new()));
+use crate::ui_element::UIElement;
+
+/// Global registry managing all UI elements
+/// Note: This is a global singleton for now, but could be moved to app state
+static ELEMENT_REGISTRY: Lazy<Mutex<Option<ElementRegistry>>> = Lazy::new(|| Mutex::new(None));
 
 pub struct ElementRegistry {
-    /// Map of element ID -> (AXUIElement, PID)
-    /// PID is stored for internal backend operations (watch/unwatch)
-    /// This will be removed in Phase 3.1 when windows own their elements
-    elements: HashMap<String, (AXUIElement, u32)>,
+    // ============================================================================
+    // Primary Storage
+    // ============================================================================
+    /// Map of element_id -> UIElement
+    elements: HashMap<String, UIElement>,
+
+    // ============================================================================
+    // Indices for Fast Lookup
+    // ============================================================================
+    /// Map of window_id -> Set<element_id>
+    /// Used to find all elements in a window and for cleanup
+    window_to_elements: HashMap<String, HashSet<String>>,
+
+    // ============================================================================
+    // AXObservers for Watching
+    // ============================================================================
+    /// Map of window_id -> AXObserverRef
+    /// One observer per window (keyed by window_id, not PID, for consistency)
+    observers: HashMap<String, AXObserverRef>,
+
+    /// Broadcast sender for notifications (shared across all watches)
+    sender: Arc<broadcast::Sender<String>>,
 }
 
-// Manual implementation - AXUIElement is actually thread-safe behind Mutex
+// Manual implementation - operations are thread-safe behind Mutex
 unsafe impl Send for ElementRegistry {}
 unsafe impl Sync for ElementRegistry {}
 
 impl ElementRegistry {
-    fn new() -> Self {
-        Self {
+    /// Initialize the global registry
+    /// Must be called once at startup with the broadcast sender
+    pub fn initialize(sender: Arc<broadcast::Sender<String>>) {
+        let mut registry = ELEMENT_REGISTRY.lock().unwrap();
+        *registry = Some(ElementRegistry {
             elements: HashMap::new(),
+            window_to_elements: HashMap::new(),
+            observers: HashMap::new(),
+            sender,
+        });
+    }
+
+    /// Get a reference to the global registry
+    fn with<F, R>(f: F) -> R
+    where
+        F: FnOnce(&mut ElementRegistry) -> R,
+    {
+        let mut guard = ELEMENT_REGISTRY.lock().unwrap();
+        let registry = guard.as_mut().expect("ElementRegistry not initialized");
+        f(registry)
+    }
+
+    // ============================================================================
+    // Registration
+    // ============================================================================
+
+    /// Register a new element and return its unique ID
+    ///
+    /// Called by platform/macos.rs during tree building.
+    /// Creates a UIElement and associates it with a window.
+    pub fn register(
+        ax_element: accessibility::AXUIElement,
+        window_id: String,
+        pid: u32,
+        parent_id: Option<String>,
+        role: String,
+    ) -> String {
+        Self::with(|registry| {
+            let id = Uuid::new_v4().to_string();
+
+            let ui_element = UIElement::new(
+                id.clone(),
+                window_id.clone(),
+                parent_id,
+                ax_element,
+                pid,
+                role,
+            );
+
+            // Store element
+            registry.elements.insert(id.clone(), ui_element);
+
+            // Update window-to-elements index
+            registry
+                .window_to_elements
+                .entry(window_id)
+                .or_insert_with(HashSet::new)
+                .insert(id.clone());
+
+            id
+        })
+    }
+
+    // ============================================================================
+    // Lookup
+    // ============================================================================
+
+    /// Get an element by its ID (immutable)
+    pub fn get(element_id: &str) -> Option<String> {
+        // Returns element_id if it exists (for checking existence)
+        Self::with(|registry| {
+            if registry.elements.contains_key(element_id) {
+                Some(element_id.to_string())
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Execute an operation with an element (immutable access)
+    pub fn with_element<F, R>(element_id: &str, f: F) -> Result<R, String>
+    where
+        F: FnOnce(&UIElement) -> R,
+    {
+        Self::with(|registry| {
+            registry
+                .elements
+                .get(element_id)
+                .map(f)
+                .ok_or_else(|| format!("Element {} not found", element_id))
+        })
+    }
+
+    /// Execute an operation with an element (mutable access)
+    pub fn with_element_mut<F, R>(element_id: &str, f: F) -> Result<R, String>
+    where
+        F: FnOnce(&mut UIElement) -> R,
+    {
+        Self::with(|registry| {
+            registry
+                .elements
+                .get_mut(element_id)
+                .map(f)
+                .ok_or_else(|| format!("Element {} not found", element_id))
+        })
+    }
+
+    /// Find all elements belonging to a window
+    pub fn find_by_window(window_id: &str) -> Vec<String> {
+        Self::with(|registry| {
+            registry
+                .window_to_elements
+                .get(window_id)
+                .map(|set| set.iter().cloned().collect())
+                .unwrap_or_default()
+        })
+    }
+
+    /// Check if an element exists
+    pub fn contains(element_id: &str) -> bool {
+        Self::with(|registry| registry.elements.contains_key(element_id))
+    }
+
+    // ============================================================================
+    // Lifecycle - THE KEY FEATURE!
+    // ============================================================================
+
+    /// Remove all elements associated with a window
+    ///
+    /// Called when a window closes. This ensures:
+    /// - Elements are unwatched (notifications removed)
+    /// - Observer is cleaned up
+    /// - Memory is freed
+    pub fn remove_window_elements(window_id: &str) {
+        Self::with(|registry| {
+            // Get all element IDs for this window
+            if let Some(element_ids) = registry.window_to_elements.remove(window_id) {
+                // Get the observer for this window (if exists)
+                let observer = registry.observers.get(window_id).copied();
+
+                // Unwatch and remove each element
+                for element_id in element_ids {
+                    if let Some(mut element) = registry.elements.remove(&element_id) {
+                        // Unwatch if observer exists
+                        if let Some(obs) = observer {
+                            element.unwatch(obs);
+                        }
+                    }
+                }
+
+                // Remove observer
+                registry.observers.remove(window_id);
+
+                println!("🗑️  Cleaned up elements for window {}", window_id);
+            }
+        });
+    }
+
+    // ============================================================================
+    // Operations (Delegate to UIElement)
+    // ============================================================================
+
+    /// Write text to an element
+    pub fn write(element_id: &str, text: &str) -> Result<(), String> {
+        Self::with_element(element_id, |element| element.set_value(text))?
+    }
+
+    /// Watch an element for changes
+    pub fn watch(element_id: &str) -> Result<(), String> {
+        Self::with(|registry| {
+            let element = registry
+                .elements
+                .get(element_id)
+                .ok_or_else(|| format!("Element {} not found", element_id))?;
+
+            let window_id = element.window_id().to_string();
+            let pid = element.pid();
+
+            // Get or create observer for this window
+            let observer = if let Some(&obs) = registry.observers.get(&window_id) {
+                obs
+            } else {
+                // Create new observer
+                let mut observer_ref: AXObserverRef = std::ptr::null_mut();
+
+                let result = unsafe {
+                    AXObserverCreate(
+                        pid as i32,
+                        observer_callback as _,
+                        &mut observer_ref as *mut _,
+                    )
+                };
+
+                if result != 0 {
+                    return Err(format!("Failed to create observer: error code {}", result));
+                }
+
+                // Add observer to the MAIN run loop
+                unsafe {
+                    let run_loop_source_ref = AXObserverGetRunLoopSource(observer_ref);
+                    if run_loop_source_ref.is_null() {
+                        return Err("Failed to get run loop source from observer".to_string());
+                    }
+
+                    let run_loop_source =
+                        CFRunLoopSource::wrap_under_get_rule(run_loop_source_ref as *mut _);
+
+                    let main_run_loop = CFRunLoop::get_main();
+                    main_run_loop.add_source(&run_loop_source, kCFRunLoopDefaultMode);
+                }
+
+                registry.observers.insert(window_id.clone(), observer_ref);
+                observer_ref
+            };
+
+            // Watch the element
+            let element = registry
+                .elements
+                .get_mut(element_id)
+                .ok_or_else(|| format!("Element {} not found", element_id))?;
+
+            element.watch(observer, registry.sender.clone())
+        })
+    }
+
+    /// Unwatch an element
+    pub fn unwatch(element_id: &str) {
+        Self::with(|registry| {
+            if let Some(element) = registry.elements.get(element_id) {
+                let window_id = element.window_id();
+                if let Some(&observer) = registry.observers.get(window_id) {
+                    if let Some(element) = registry.elements.get_mut(element_id) {
+                        element.unwatch(observer);
+                    }
+                }
+            }
+        });
+    }
+
+    /// Get children of an element (builds tree)
+    pub fn get_children(
+        element_id: &str,
+        max_depth: usize,
+        max_children: usize,
+    ) -> Result<Vec<crate::axio::AXNode>, String> {
+        Self::with_element(element_id, |_element| {
+            crate::platform::macos::get_children_by_element_id(element_id, max_depth, max_children)
+        })?
+    }
+}
+
+/// C callback for AXObserver notifications
+/// This is called by macOS when an element changes
+unsafe extern "C" fn observer_callback(
+    _observer: AXObserverRef,
+    _element: accessibility_sys::AXUIElementRef,
+    notification: core_foundation::string::CFStringRef,
+    refcon: *mut std::ffi::c_void,
+) {
+    use accessibility::AXUIElement;
+    use core_foundation::base::TCFType;
+    use core_foundation::string::CFString;
+
+    if refcon.is_null() {
+        return;
+    }
+
+    // Extract context (defined in ui_element.rs watch())
+    #[derive(Clone)]
+    #[repr(C)]
+    struct ObserverContext {
+        element_id: String,
+        sender: Arc<broadcast::Sender<String>>,
+    }
+
+    let context = &*(refcon as *const ObserverContext);
+    let notif_cfstring = CFString::wrap_under_get_rule(notification);
+    let notification_name = notif_cfstring.to_string();
+
+    // Convert element to AXUIElement
+    let changed_element = AXUIElement::wrap_under_get_rule(_element);
+
+    // Handle the notification
+    handle_notification(
+        &context.element_id,
+        &notification_name,
+        &changed_element,
+        &context.sender,
+    );
+}
+
+/// Handle a notification by extracting data and broadcasting
+fn handle_notification(
+    element_id: &str,
+    notification: &str,
+    element: &accessibility::AXUIElement,
+    sender: &Arc<broadcast::Sender<String>>,
+) {
+    use accessibility::AXAttribute;
+    use core_foundation::base::TCFType;
+    use core_foundation::string::CFString;
+    use serde_json::json;
+
+    let mut update = json!({
+        "id": element_id,
+    });
+
+    let mut has_changes = false;
+
+    match notification {
+        "AXValueChanged" => {
+            // Extract value
+            if let Ok(value_attr) = element.attribute(&AXAttribute::value()) {
+                let role = element
+                    .attribute(&AXAttribute::role())
+                    .ok()
+                    .and_then(|r| unsafe {
+                        let cf_string = CFString::wrap_under_get_rule(r.as_CFTypeRef() as *const _);
+                        Some(cf_string.to_string())
+                    });
+
+                if let Some(typed_value) =
+                    crate::platform::macos::extract_value(&value_attr, role.as_deref())
+                {
+                    update["value"] = json!(typed_value);
+                    has_changes = true;
+                }
+            }
+        }
+        _ => {
+            return; // Unhandled notification type
         }
     }
 
-    /// Register an element with its PID and return a unique ID for it
-    /// PID is stored for internal backend operations (watch/unwatch need it for AXObserver)
-    pub fn register(element: AXUIElement, pid: u32) -> String {
-        let id = Uuid::new_v4().to_string();
-        let mut registry = ELEMENT_REGISTRY.lock().unwrap();
-        registry.elements.insert(id.clone(), (element, pid));
-        id
+    if !has_changes {
+        return;
     }
 
-    /// Get an element by its ID
-    pub fn get(id: &str) -> Option<AXUIElement> {
-        let registry = ELEMENT_REGISTRY.lock().unwrap();
-        registry
-            .elements
-            .get(id)
-            .map(|(element, _pid)| element.clone())
-    }
+    // Broadcast update
+    let message = json!({
+        "event_type": "node_updated",
+        "update": update,
+    });
 
-    /// Get the PID associated with an element ID
-    /// Used internally by watch/unwatch operations
-    pub fn get_pid(id: &str) -> Option<u32> {
-        let registry = ELEMENT_REGISTRY.lock().unwrap();
-        registry.elements.get(id).map(|(_element, pid)| *pid)
+    if let Ok(json_str) = serde_json::to_string(&message) {
+        let _ = sender.send(json_str);
     }
 }

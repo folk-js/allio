@@ -17,8 +17,8 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 mod axio;
 mod element_registry;
 mod mouse;
-mod node_watcher;
 mod platform;
+mod ui_element;
 mod websocket;
 mod window_manager;
 mod windows;
@@ -189,6 +189,9 @@ fn main() {
         .setup(|app| {
             // Initialize WebSocket state
             let ws_state = WebSocketState::new(app.handle().clone());
+            
+            // Initialize ElementRegistry with broadcast sender
+            element_registry::ElementRegistry::initialize(ws_state.sender());
 
             let (screen_width, screen_height) = get_main_screen_dimensions();
             if let Some(window) = app.get_webview_window("main") {

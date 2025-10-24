@@ -21,6 +21,7 @@ use crate::axio::{AXNode, AXRole, AXValue, Bounds, Position, Size};
 /// If `load_children` is false, children_count is populated but children array is empty.
 pub fn element_to_axnode(
     element: &AXUIElement,
+    window_id: String,
     pid: u32,
     parent_id: Option<String>,
     depth: usize,
@@ -35,17 +36,24 @@ pub fn element_to_axnode(
     if depth > max_depth {
         return None;
     }
-
-    // Register this element and get its UUID
-    let element_id = ElementRegistry::register(element.clone(), pid);
-
-    // Get role and convert to AXIO format
+    
+    // Get role for registration
     let platform_role = element
         .attribute(&AXAttribute::role())
         .ok()
         .map(|r| r.to_string())
         .unwrap_or_else(|| "Unknown".to_string());
 
+    // Register this element and get its UUID
+    let element_id = ElementRegistry::register(
+        element.clone(),
+        window_id.clone(),
+        pid,
+        parent_id.clone(),
+        platform_role.clone(),
+    );
+
+    // Convert role to AXIO format
     let role = map_platform_role(&platform_role);
 
     // Get subrole (platform-specific subtype)
@@ -133,6 +141,7 @@ pub fn element_to_axnode(
     let children = if load_children {
         get_element_children(
             element,
+            window_id,
             pid,
             Some(element_id.clone()), // Pass element_id as parent_id
             depth,
@@ -243,6 +252,7 @@ fn get_element_bounds(element: &AXUIElement) -> Option<Bounds> {
 /// Get children of an element, recursively converting to AXNode
 fn get_element_children(
     element: &AXUIElement,
+    window_id: String,
     pid: u32,
     parent_id: Option<String>,
     depth: usize,
@@ -262,6 +272,7 @@ fn get_element_children(
         if let Some(child_ref) = children_array.get(i) {
             if let Some(child_node) = element_to_axnode(
                 &(*child_ref),
+                window_id.clone(),
                 pid,
                 parent_id.clone(),
                 depth + 1,
@@ -331,6 +342,7 @@ pub fn get_window_elements(pid: u32) -> Result<Vec<AXUIElement>, String> {
 /// The window element is the correct root for a window's accessibility tree.
 pub fn get_ax_tree_from_element(
     window_element: &AXUIElement,
+    window_id: String,
     pid: u32,
     max_depth: usize,
     max_children_per_level: usize,
@@ -338,6 +350,7 @@ pub fn get_ax_tree_from_element(
 ) -> Result<AXNode, String> {
     element_to_axnode(
         window_element,
+        window_id,
         pid,
         None, // Root element has no parent
         0,
@@ -371,6 +384,7 @@ pub fn get_ax_tree_by_window_id(
     // Build tree from the window element (not app element!)
     get_ax_tree_from_element(
         &window_element,
+        window_id.to_string(),
         managed_window.info.process_id,
         max_depth,
         max_children_per_level,
@@ -389,18 +403,16 @@ pub fn get_children_by_element_id(
 ) -> Result<Vec<AXNode>, String> {
     use crate::element_registry::ElementRegistry;
 
-    // Get the element from the registry
-    let target_element = ElementRegistry::get(element_id)
-        .ok_or_else(|| format!("Element {} not found in registry", element_id))?;
-
-    // Get the PID from the registry (needed for child element registration)
-    let pid = ElementRegistry::get_pid(element_id)
-        .ok_or_else(|| format!("PID not found for element {}", element_id))?;
+    // Get the window_id and pid from the element
+    let (ax_element, window_id, pid) = ElementRegistry::with_element(element_id, |element| {
+        (element.ax_element().clone(), element.window_id().to_string(), element.pid())
+    })?;
 
     // Get children of this node
     // Depth = 0 means we're getting immediate children with their counts, but not grandchildren
     let children = get_element_children(
-        &target_element,
+        &ax_element,
+        window_id,
         pid,
         Some(element_id.to_string()), // Pass element_id as parent_id
         0,                            // Start depth at 0 for children
@@ -412,32 +424,10 @@ pub fn get_children_by_element_id(
     Ok(children)
 }
 
-/// Write text to a specific element (identified by element ID) (NEW - Phase 3)
+/// Write text to a specific element (identified by element ID)
 pub fn write_to_element_by_id(element_id: &str, text: &str) -> Result<(), String> {
-    use crate::element_registry::ElementRegistry;
-
-    // Get the element from the registry
-    let target_element = ElementRegistry::get(element_id)
-        .ok_or_else(|| format!("Element {} not found in registry", element_id))?;
-
-    // Check if element is writable
-    let role = target_element
-        .attribute(&AXAttribute::role())
-        .ok()
-        .map(|r| r.to_string())
-        .unwrap_or_else(|| "Unknown".to_string());
-
-    if !is_writable_role(&role) {
-        return Err(format!("Element with role '{}' is not writable", role));
-    }
-
-    // Set the value
-    let cf_string = CFString::new(text);
-    target_element
-        .set_value(cf_string.as_CFType())
-        .map_err(|e| format!("Failed to set value: {:?}", e))?;
-
-    Ok(())
+    // Delegate to ElementRegistry, which delegates to UIElement
+    crate::element_registry::ElementRegistry::write(element_id, text)
 }
 
 /// Check if a role represents a writable element
