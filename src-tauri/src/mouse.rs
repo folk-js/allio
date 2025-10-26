@@ -55,11 +55,7 @@ pub fn start_mouse_tracking(ws_state: WebSocketState) {
                     last_position = Some((x, y));
 
                     // Broadcast to all connected clients
-                    let message = serde_json::json!({
-                        "event_type": "mouse_position",
-                        "x": x,
-                        "y": y,
-                    });
+                    let message = crate::protocol::ServerMessage::MousePosition { x, y };
 
                     if let Ok(json) = serde_json::to_string(&message) {
                         let _ = ws_state.sender.send(json);

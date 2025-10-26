@@ -11,6 +11,12 @@
  * - No UI concerns (overlay rendering is separate)
  */
 
+import {
+  type ServerMessage,
+  type ClientMessage,
+  type ElementUpdate,
+} from "./protocol.ts";
+
 // ============================================================================
 // Core Value Types
 // ============================================================================
@@ -156,18 +162,7 @@ export interface AXNode {
   getChildren?(maxDepth?: number, maxChildren?: number): Promise<AXNode[]>;
 }
 
-// ============================================================================
-// Element Update Types
-// ============================================================================
-
-/**
- * Typed update events for accessibility elements
- * Matches Rust ElementUpdate enum exactly
- */
-export type ElementUpdate =
-  | { update_type: "ValueChanged"; element_id: string; value: AXValue }
-  | { update_type: "TitleChanged"; element_id: string; title: string }
-  | { update_type: "ElementDestroyed"; element_id: string };
+// ElementUpdate is imported from protocol.ts
 
 // ============================================================================
 // AXIO Client Class
@@ -351,7 +346,25 @@ export class AXIO {
 
       // Send request
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ msg_type: msgType, ...data }));
+        let message: ClientMessage;
+
+        if (msgType === "write_to_element") {
+          message = {
+            type: "write_to_element",
+            element_id: data.element_id,
+            text: data.text,
+          };
+        } else if (msgType === "click_element") {
+          message = {
+            type: "click_element",
+            element_id: data.element_id,
+          };
+        } else {
+          reject(new Error(`Unknown message type: ${msgType}`));
+          return;
+        }
+
+        this.ws.send(JSON.stringify(message));
       } else {
         reject(new Error("WebSocket not connected"));
         return;
@@ -487,14 +500,13 @@ export class AXIO {
 
       // Send request
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.send(
-          JSON.stringify({
-            msg_type: "get_children",
-            element_id: elementId,
-            max_depth: maxDepth,
-            max_children_per_level: maxChildren,
-          })
-        );
+        const message: ClientMessage = {
+          type: "get_children",
+          element_id: elementId,
+          max_depth: maxDepth,
+          max_children_per_level: maxChildren,
+        };
+        this.ws.send(JSON.stringify(message));
       } else {
         reject(new Error("WebSocket not connected"));
       }
@@ -551,12 +563,11 @@ export class AXIO {
 
       // Send request
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.send(
-          JSON.stringify({
-            msg_type: "set_clickthrough",
-            enabled,
-          })
-        );
+        const message: ClientMessage = {
+          type: "set_clickthrough",
+          enabled,
+        };
+        this.ws.send(JSON.stringify(message));
       } else {
         reject(new Error("WebSocket not connected"));
       }
@@ -597,13 +608,12 @@ export class AXIO {
       this.listeners.get("watch_node_response")!.add(handler);
 
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.send(
-          JSON.stringify({
-            msg_type: "watch_node",
-            element_id: elementId,
-            node_id: nodeId,
-          })
-        );
+        const message: ClientMessage = {
+          type: "watch_node",
+          element_id: elementId,
+          node_id: nodeId,
+        };
+        this.ws.send(JSON.stringify(message));
       } else {
         reject(new Error("WebSocket not connected"));
       }
@@ -642,12 +652,11 @@ export class AXIO {
       this.listeners.get("unwatch_node_response")!.add(handler);
 
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.send(
-          JSON.stringify({
-            msg_type: "unwatch_node",
-            element_id: elementId,
-          })
-        );
+        const message: ClientMessage = {
+          type: "unwatch_node",
+          element_id: elementId,
+        };
+        this.ws.send(JSON.stringify(message));
       } else {
         reject(new Error("WebSocket not connected"));
       }
@@ -755,41 +764,70 @@ export class AXIO {
 
   private handleMessage(data: string): void {
     try {
-      const message = JSON.parse(data);
+      const message: ServerMessage = JSON.parse(data);
 
-      // Determine event type from various field names
-      let event = message.event_type || message.msg_type;
+      // Type-safe message handling with discriminated union
+      switch (message.type) {
+        case "window_update":
+          // Update internal window state
+          this.windows = message.windows;
+          this.focused = message.windows.find((w) => w.focused) || null;
 
-      // Special case: window updates (has 'windows' array but no explicit type)
-      if (!event && message.windows) {
-        event = "window_update";
-        // Always update internal window state, even if no listeners
-        const windows = message.windows as Window[];
-        this.windows = windows;
-        this.focused = windows.find((w: Window) => w.focused) || null;
-      }
+          // Notify listeners
+          const windowListeners = this.listeners.get("window_update");
+          if (windowListeners) {
+            windowListeners.forEach((callback) => callback(message));
+          }
+          break;
 
-      // Handle window root updates (pushed from backend)
-      if (event === "window_root_update") {
-        const windowId = message.window_id;
-        const root = message.root;
-        if (windowId && root) {
+        case "window_root_update":
           // Attach methods to the root node
-          const rootWithMethods = this.attachNodeMethods(root);
+          const rootWithMethods = this.attachNodeMethods(message.root);
           // Cache the root node
-          this.treeCache.set(windowId, rootWithMethods);
-          console.log(`[AXIO] 📦 Cached root node for window ${windowId}`);
-        }
-      }
+          this.treeCache.set(message.window_id, rootWithMethods);
+          console.log(
+            `[AXIO] 📦 Cached root node for window ${message.window_id}`
+          );
 
-      if (event) {
-        const listeners = this.listeners.get(event);
-        if (listeners) {
-          listeners.forEach((callback) => callback(message.data || message));
-        }
-      } else {
-        // Log unhandled messages for debugging
-        console.warn("[AXIO] Received message without event type:", message);
+          // Notify listeners
+          const rootListeners = this.listeners.get("window_root_update");
+          if (rootListeners) {
+            rootListeners.forEach((callback) => callback(message));
+          }
+          break;
+
+        case "mouse_position":
+          const mouseListeners = this.listeners.get("mouse_position");
+          if (mouseListeners) {
+            mouseListeners.forEach((callback) => callback(message));
+          }
+          break;
+
+        case "element_update":
+          const elementListeners = this.listeners.get("element_update");
+          if (elementListeners) {
+            elementListeners.forEach((callback) => callback(message));
+          }
+          // Apply update to cached tree
+          this.applyCachedTreeUpdate(message.update);
+          break;
+
+        // Response messages
+        case "get_children_response":
+        case "write_to_element_response":
+        case "click_element_response":
+        case "set_clickthrough_response":
+        case "watch_node_response":
+        case "unwatch_node_response":
+          // These are handled by request/response pattern in private methods
+          const responseListeners = this.listeners.get(message.type);
+          if (responseListeners) {
+            responseListeners.forEach((callback) => callback(message));
+          }
+          break;
+
+        default:
+          console.warn("[AXIO] Unhandled message type:", message);
       }
     } catch (error) {
       console.error("[AXIO] Failed to parse message:", error);

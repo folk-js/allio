@@ -1,111 +1,178 @@
 /**
  * Protocol Types
  *
- * WebSocket message definitions for client-server communication.
- * Only contains request/response types - AXIO types are in axio.rs.
+ * Complete WebSocket message protocol for client-server communication.
+ * All communication types are defined here for clarity and type safety.
+ *
+ * Design:
+ * - Request/Response pairs co-located in modules
+ * - ClientMessage and ServerMessage enums for serialization
+ * - Simple, clear structure with compile-time type safety
  */
 use serde::{Deserialize, Serialize};
 
 use crate::axio::{AXNode, AXValue};
+use crate::windows::WindowInfo;
 
 // ============================================================================
-// Push Events (Server -> Client, not request/response)
+// Request/Response Pair Modules
 // ============================================================================
 
-/// Sent when a window's root accessibility node is available or updated
-#[derive(Debug, Serialize, Deserialize)]
-pub struct WindowRootUpdate {
-    pub msg_type: String,
-    pub window_id: String,
-    pub root: AXNode,
+/// Get children of an accessibility element
+pub mod get_children {
+    use super::*;
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Request {
+        pub element_id: String,
+        #[serde(default = "super::default_max_depth")]
+        pub max_depth: usize,
+        #[serde(default = "super::default_max_children")]
+        pub max_children_per_level: usize,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Response {
+        pub success: bool,
+        pub children: Option<Vec<AXNode>>,
+        pub error: Option<String>,
+    }
+}
+
+/// Write text to an accessibility element
+pub mod write_to_element {
+    use super::*;
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Request {
+        pub element_id: String,
+        pub text: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Response {
+        pub success: bool,
+        pub error: Option<String>,
+    }
+}
+
+/// Click an accessibility element
+pub mod click_element {
+    use super::*;
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Request {
+        pub element_id: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Response {
+        pub success: bool,
+        pub error: Option<String>,
+    }
+}
+
+/// Enable/disable click-through on overlay window
+pub mod set_clickthrough {
+    use super::*;
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Request {
+        pub enabled: bool,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Response {
+        pub success: bool,
+        pub enabled: bool,
+        pub error: Option<String>,
+    }
+}
+
+/// Start watching an element for changes
+pub mod watch_node {
+    use super::*;
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Request {
+        pub element_id: String,
+        pub node_id: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Response {
+        pub success: bool,
+        pub node_id: String,
+        pub error: Option<String>,
+    }
+}
+
+/// Stop watching an element
+pub mod unwatch_node {
+    use super::*;
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Request {
+        pub element_id: String,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Response {
+        pub success: bool,
+    }
 }
 
 // ============================================================================
-// Request Types (Client -> Server)
+// Client -> Server Messages
 // ============================================================================
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct GetChildrenRequest {
-    pub element_id: String,
-    #[serde(default = "default_max_depth")]
-    pub max_depth: usize,
-    #[serde(default = "default_max_children")]
-    pub max_children_per_level: usize,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SetElementValueRequest {
-    pub element_id: String,
-    pub value: AXValue,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ClickElementRequest {
-    pub element_id: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct WatchNodeRequest {
-    pub element_id: String,
-    pub node_id: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct UnwatchNodeRequest {
-    pub element_id: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SetClickthroughRequest {
-    pub enabled: bool,
+/// All messages that can be sent from client to server
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ClientMessage {
+    GetChildren(get_children::Request),
+    WriteToElement(write_to_element::Request),
+    ClickElement(click_element::Request),
+    SetClickthrough(set_clickthrough::Request),
+    WatchNode(watch_node::Request),
+    UnwatchNode(unwatch_node::Request),
 }
 
 // ============================================================================
-// Response Types (Server -> Client)
+// Server -> Client Messages
 // ============================================================================
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct GetChildrenResponse {
-    pub msg_type: String,
-    pub success: bool,
-    pub children: Option<Vec<AXNode>>,
-    pub error: Option<String>,
+/// All messages that can be sent from server to client
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ServerMessage {
+    // Push Events (not request/response)
+    WindowUpdate { windows: Vec<WindowInfo> },
+    WindowRootUpdate { window_id: String, root: AXNode },
+    MousePosition { x: f64, y: f64 },
+    ElementUpdate { update: ElementUpdate },
+
+    // Response Messages (paired with requests above)
+    GetChildrenResponse(get_children::Response),
+    WriteToElementResponse(write_to_element::Response),
+    ClickElementResponse(click_element::Response),
+    SetClickthroughResponse(set_clickthrough::Response),
+    WatchNodeResponse(watch_node::Response),
+    UnwatchNodeResponse(unwatch_node::Response),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SetElementValueResponse {
-    pub msg_type: String,
-    pub success: bool,
-    pub error: Option<String>,
-}
+// ============================================================================
+// Element Update Types (Server Push Events)
+// ============================================================================
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ClickElementResponse {
-    pub msg_type: String,
-    pub success: bool,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct WatchNodeResponse {
-    pub msg_type: String,
-    pub success: bool,
-    pub node_id: String,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct UnwatchNodeResponse {
-    pub msg_type: String,
-    pub success: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SetClickthroughResponse {
-    pub msg_type: String,
-    pub success: bool,
-    pub enabled: bool,
-    pub error: Option<String>,
+/// Update events for accessibility elements
+/// Moved from axio.rs - this is part of the protocol, not core AXIO types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "update_type", rename_all = "PascalCase")]
+pub enum ElementUpdate {
+    ValueChanged { element_id: String, value: AXValue },
+    TitleChanged { element_id: String, title: String },
+    ElementDestroyed { element_id: String },
 }
 
 // ============================================================================

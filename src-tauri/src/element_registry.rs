@@ -403,11 +403,10 @@ fn handle_notification(
     element: &accessibility::AXUIElement,
     sender: &Arc<broadcast::Sender<String>>,
 ) {
-    use crate::axio::ElementUpdate;
+    use crate::protocol::{ElementUpdate, ServerMessage};
     use accessibility::AXAttribute;
     use core_foundation::base::TCFType;
     use core_foundation::string::CFString;
-    use serde_json::json;
 
     // Convert notification to typed update
     let update = match notification {
@@ -472,10 +471,7 @@ fn handle_notification(
 
     // Broadcast typed update
     if let Some(update) = update {
-        let message = json!({
-            "event_type": "element_update",
-            "update": update,
-        });
+        let message = ServerMessage::ElementUpdate { update };
 
         if let Ok(json_str) = serde_json::to_string(&message) {
             let _ = sender.send(json_str);

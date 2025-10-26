@@ -79,12 +79,6 @@ impl WindowInfo {
     }
 }
 
-// Event payload structures
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct WindowUpdatePayload {
-    pub windows: Vec<WindowInfo>,
-}
-
 #[cfg(target_os = "macos")]
 pub fn get_main_screen_dimensions() -> (f64, f64) {
     unsafe {
@@ -268,9 +262,7 @@ pub fn window_polling_loop(ws_state: WebSocketState) {
                     ws_state_clone.update_windows(&windows_clone).await;
                 });
 
-                ws_state.broadcast(&WindowUpdatePayload {
-                    windows: current_windows.clone(),
-                });
+                ws_state.broadcast(&current_windows);
 
                 last_windows = Some(current_windows);
             }

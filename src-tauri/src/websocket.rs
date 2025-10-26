@@ -8,53 +8,14 @@ use axum::{
     Router,
 };
 use colored::Colorize;
-use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, sync::Arc};
-use tauri::Manager; // For get_webview_window
+use tauri::Manager;
 use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::axio::AXNode;
 use crate::platform::{get_children_by_element_id, write_to_element_by_id};
-use crate::protocol::*;
-use crate::windows::{WindowInfo, WindowUpdatePayload};
-
-// ============================================================================
-// Message Type Constants
-// ============================================================================
-
-pub mod msg_types {
-    // Client -> Server request types
-    pub const GET_CHILDREN: &str = "get_children";
-    pub const WRITE_TO_ELEMENT: &str = "write_to_element";
-    pub const CLICK_ELEMENT: &str = "click_element";
-    pub const SET_CLICKTHROUGH: &str = "set_clickthrough";
-    pub const WATCH_NODE: &str = "watch_node";
-    pub const UNWATCH_NODE: &str = "unwatch_node";
-
-    // Server -> Client response types
-    pub const GET_CHILDREN_RESPONSE: &str = "get_children_response";
-    pub const ACCESSIBILITY_WRITE_RESPONSE: &str = "accessibility_write_response";
-    pub const CLICK_ELEMENT_RESPONSE: &str = "click_element_response";
-    pub const SET_CLICKTHROUGH_RESPONSE: &str = "set_clickthrough_response";
-    pub const WATCH_NODE_RESPONSE: &str = "watch_node_response";
-    pub const UNWATCH_NODE_RESPONSE: &str = "unwatch_node_response";
-
-    // Server -> Client push events (not request/response)
-    pub const WINDOW_ROOT_UPDATE: &str = "window_root_update";
-}
-
-// ============================================================================
-// Internal Message Types
-// ============================================================================
-
-/// Helper for extracting just the msg_type field for dispatching
-#[derive(Debug, Serialize, Deserialize)]
-struct MessageType {
-    msg_type: Option<String>,
-}
-
-// All request/response types are now in protocol.rs
+use crate::protocol::{ClientMessage, ServerMessage};
+use crate::windows::WindowInfo;
+use std::sync::Arc;
 
 // WebSocket state for broadcasting to clients
 #[derive(Clone)]
@@ -76,23 +37,22 @@ impl WebSocketState {
         }
     }
 
-    pub fn broadcast(&self, data: &WindowUpdatePayload) {
-        if let Ok(json) = serde_json::to_string(data) {
+    pub fn broadcast(&self, windows: &[WindowInfo]) {
+        let msg = ServerMessage::WindowUpdate {
+            windows: windows.to_vec(),
+        };
+        if let Ok(json) = serde_json::to_string(&msg) {
             let _ = self.sender.send(json);
         }
     }
 
     /// Broadcast a window root node to all connected clients
-    pub fn broadcast_window_root(&self, window_id: &str, root: AXNode) {
-        use crate::protocol::WindowRootUpdate;
-
-        let update = WindowRootUpdate {
-            msg_type: msg_types::WINDOW_ROOT_UPDATE.to_string(),
+    pub fn broadcast_window_root(&self, window_id: &str, root: crate::axio::AXNode) {
+        let msg = ServerMessage::WindowRootUpdate {
             window_id: window_id.to_string(),
             root,
         };
-
-        if let Ok(json) = serde_json::to_string(&update) {
+        if let Ok(json) = serde_json::to_string(&msg) {
             let _ = self.sender.send(json);
         }
     }
@@ -148,10 +108,10 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
     // Send initial window state immediately
     {
         let current_windows = ws_state.current_windows.read().await;
-        let window_update = WindowUpdatePayload {
+        let msg = ServerMessage::WindowUpdate {
             windows: current_windows.clone(),
         };
-        if let Ok(msg_json) = serde_json::to_string(&window_update) {
+        if let Ok(msg_json) = serde_json::to_string(&msg) {
             let _ = socket.send(Message::Text(msg_json)).await;
             println!(
                 "📡 Sent initial window state ({} windows) to client",
@@ -202,158 +162,119 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
 
 async fn handle_client_message(
     message: &str,
-    current_window_id: &mut Option<String>,
+    _current_window_id: &mut Option<String>,
     ws_state: &WebSocketState,
     socket: &mut WebSocket,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Extract msg_type for dispatching
-    let msg_type_parsed = serde_json::from_str::<MessageType>(message)?;
-    let msg_type = msg_type_parsed.msg_type.as_deref().unwrap_or("");
+    // Parse message to strongly-typed ClientMessage enum
+    let client_msg: ClientMessage = serde_json::from_str(message)?;
 
-    match msg_type {
-        msg_types::WRITE_TO_ELEMENT => {
-            // Parse as generic value to extract fields
-            let value: serde_json::Value = serde_json::from_str(message)?;
-            let element_id = value["element_id"].as_str();
-            let text = value["text"].as_str();
+    // Type-safe pattern matching with exhaustive checking
+    match client_msg {
+        ClientMessage::WriteToElement(req) => {
+            println!("✍️ Writing to element_id: {}", req.element_id);
 
-            // Attempt to write to the element
-            let response = if let (Some(element_id), Some(text)) = (element_id, text) {
-                println!("✍️ Writing via element_id: {}", element_id);
-                match write_to_element_by_id(element_id, text) {
-                    Ok(_) => SetElementValueResponse {
-                        msg_type: msg_types::ACCESSIBILITY_WRITE_RESPONSE.to_string(),
-                        success: true,
-                        error: None,
-                    },
-                    Err(e) => SetElementValueResponse {
-                        msg_type: msg_types::ACCESSIBILITY_WRITE_RESPONSE.to_string(),
-                        success: false,
-                        error: Some(e),
-                    },
-                }
-            } else {
-                SetElementValueResponse {
-                    msg_type: msg_types::ACCESSIBILITY_WRITE_RESPONSE.to_string(),
-                    success: false,
-                    error: Some("element_id or text not provided".to_string()),
-                }
-            };
-
-            let response_json = serde_json::to_string(&response)?;
-            socket.send(Message::Text(response_json)).await.ok();
-        }
-
-        msg_types::CLICK_ELEMENT => {
-            // Parse request
-            let value: serde_json::Value = serde_json::from_str(message)?;
-            let req: ClickElementRequest = serde_json::from_value(value)?;
-
-            println!("🖱️ Clicking element_id: {}", req.element_id);
-
-            // Perform click action
-            let response = match crate::platform::click_element_by_id(&req.element_id) {
-                Ok(_) => ClickElementResponse {
-                    msg_type: msg_types::CLICK_ELEMENT_RESPONSE.to_string(),
+            let response = match write_to_element_by_id(&req.element_id, &req.text) {
+                Ok(_) => crate::protocol::write_to_element::Response {
                     success: true,
                     error: None,
                 },
-                Err(e) => ClickElementResponse {
-                    msg_type: msg_types::CLICK_ELEMENT_RESPONSE.to_string(),
+                Err(e) => crate::protocol::write_to_element::Response {
                     success: false,
                     error: Some(e),
                 },
             };
 
-            let response_json = serde_json::to_string(&response)?;
-            socket.send(Message::Text(response_json)).await.ok();
+            let msg = ServerMessage::WriteToElementResponse(response);
+            let json = serde_json::to_string(&msg)?;
+            socket.send(Message::Text(json)).await.ok();
         }
 
-        msg_types::GET_CHILDREN => {
-            // Parse request
-            let value: serde_json::Value = serde_json::from_str(message)?;
-            let req: GetChildrenRequest = serde_json::from_value(value)?;
+        ClientMessage::ClickElement(req) => {
+            println!("🖱️ Clicking element_id: {}", req.element_id);
 
+            let response = match crate::platform::click_element_by_id(&req.element_id) {
+                Ok(_) => crate::protocol::click_element::Response {
+                    success: true,
+                    error: None,
+                },
+                Err(e) => crate::protocol::click_element::Response {
+                    success: false,
+                    error: Some(e),
+                },
+            };
+
+            let msg = ServerMessage::ClickElementResponse(response);
+            let json = serde_json::to_string(&msg)?;
+            socket.send(Message::Text(json)).await.ok();
+        }
+
+        ClientMessage::GetChildren(req) => {
             println!(
-                "👶 Client requesting children for element_id: {} (max_depth: {}, max_children: {})",
+                "👶 Requesting children for element_id: {} (max_depth: {}, max_children: {})",
                 req.element_id, req.max_depth, req.max_children_per_level
             );
 
-            // Get children
             let response = match get_children_by_element_id(
                 &req.element_id,
                 req.max_depth,
                 req.max_children_per_level,
             ) {
-                Ok(children) => GetChildrenResponse {
-                    msg_type: msg_types::GET_CHILDREN_RESPONSE.to_string(),
-                    success: true,
-                    children: Some(children),
-                    error: None,
-                },
-                Err(e) => GetChildrenResponse {
-                    msg_type: msg_types::GET_CHILDREN_RESPONSE.to_string(),
-                    success: false,
-                    children: None,
-                    error: Some(e),
-                },
+                Ok(children) => {
+                    println!("✅ Sent children");
+                    crate::protocol::get_children::Response {
+                        success: true,
+                        children: Some(children),
+                        error: None,
+                    }
+                }
+                Err(e) => {
+                    println!("❌ Failed to get children");
+                    crate::protocol::get_children::Response {
+                        success: false,
+                        children: None,
+                        error: Some(e),
+                    }
+                }
             };
 
-            let response_json = serde_json::to_string(&response)?;
-            socket.send(Message::Text(response_json)).await.ok();
-
-            if response.success {
-                println!("✅ Sent children");
-            } else {
-                println!("❌ Failed to get children");
-            }
+            let msg = ServerMessage::GetChildrenResponse(response);
+            let json = serde_json::to_string(&msg)?;
+            socket.send(Message::Text(json)).await.ok();
         }
 
-        msg_types::SET_CLICKTHROUGH => {
-            // Parse request
-            let value: serde_json::Value = serde_json::from_str(message)?;
-            let req: SetClickthroughRequest = serde_json::from_value(value)?;
-
-            // Set clickthrough state
+        ClientMessage::SetClickthrough(req) => {
             let response = match ws_state.app_handle.get_webview_window("main") {
                 Some(window) => match window.set_ignore_cursor_events(req.enabled) {
-                    Ok(_) => SetClickthroughResponse {
-                        msg_type: msg_types::SET_CLICKTHROUGH_RESPONSE.to_string(),
+                    Ok(_) => crate::protocol::set_clickthrough::Response {
                         success: true,
                         enabled: req.enabled,
                         error: None,
                     },
-                    Err(e) => SetClickthroughResponse {
-                        msg_type: msg_types::SET_CLICKTHROUGH_RESPONSE.to_string(),
+                    Err(e) => crate::protocol::set_clickthrough::Response {
                         success: false,
                         enabled: false,
                         error: Some(e.to_string()),
                     },
                 },
-                None => SetClickthroughResponse {
-                    msg_type: msg_types::SET_CLICKTHROUGH_RESPONSE.to_string(),
+                None => crate::protocol::set_clickthrough::Response {
                     success: false,
                     enabled: false,
                     error: Some("Main window not found".to_string()),
                 },
             };
 
-            let response_json = serde_json::to_string(&response)?;
-            socket.send(Message::Text(response_json)).await.ok();
+            let msg = ServerMessage::SetClickthroughResponse(response);
+            let json = serde_json::to_string(&msg)?;
+            socket.send(Message::Text(json)).await.ok();
         }
 
-        msg_types::WATCH_NODE => {
-            // Parse request
-            let value: serde_json::Value = serde_json::from_str(message)?;
-            let req: WatchNodeRequest = serde_json::from_value(value)?;
-
-            // Use ElementRegistry watch API
+        ClientMessage::WatchNode(req) => {
             use crate::element_registry::ElementRegistry;
             let result = ElementRegistry::watch(&req.element_id);
 
             let response = match result {
-                Ok(_) => WatchNodeResponse {
-                    msg_type: msg_types::WATCH_NODE_RESPONSE.to_string(),
+                Ok(_) => crate::protocol::watch_node::Response {
                     success: true,
                     node_id: req.node_id,
                     error: None,
@@ -363,8 +284,7 @@ async fn handle_client_message(
                         "{}",
                         format!("ERROR: Watch failed for {}: {}", req.node_id, e).red()
                     );
-                    WatchNodeResponse {
-                        msg_type: msg_types::WATCH_NODE_RESPONSE.to_string(),
+                    crate::protocol::watch_node::Response {
                         success: false,
                         node_id: req.node_id,
                         error: Some(e),
@@ -372,35 +292,21 @@ async fn handle_client_message(
                 }
             };
 
-            let response_json = serde_json::to_string(&response)?;
-            socket.send(Message::Text(response_json)).await.ok();
+            let msg = ServerMessage::WatchNodeResponse(response);
+            let json = serde_json::to_string(&msg)?;
+            socket.send(Message::Text(json)).await.ok();
         }
 
-        msg_types::UNWATCH_NODE => {
-            // Parse request
-            let value: serde_json::Value = serde_json::from_str(message)?;
-            let req: UnwatchNodeRequest = serde_json::from_value(value)?;
+        ClientMessage::UnwatchNode(req) => {
+            println!("🚫 Unwatching element_id: {}", req.element_id);
 
-            println!(
-                "🚫 Client requesting to unwatch element_id: {}",
-                req.element_id
-            );
-
-            // Use ElementRegistry unwatch API
             use crate::element_registry::ElementRegistry;
             ElementRegistry::unwatch(&req.element_id);
 
-            let response = UnwatchNodeResponse {
-                msg_type: msg_types::UNWATCH_NODE_RESPONSE.to_string(),
-                success: true,
-            };
-
-            let response_json = serde_json::to_string(&response)?;
-            socket.send(Message::Text(response_json)).await.ok();
-        }
-
-        _ => {
-            println!("❓ Unrecognized message type: {}", msg_type);
+            let response = crate::protocol::unwatch_node::Response { success: true };
+            let msg = ServerMessage::UnwatchNodeResponse(response);
+            let json = serde_json::to_string(&msg)?;
+            socket.send(Message::Text(json)).await.ok();
         }
     }
 
