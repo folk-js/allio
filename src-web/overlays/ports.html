@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ports</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background: transparent;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display",
+          sans-serif;
+        overflow: hidden;
+        pointer-events: none;
+        user-select: none;
+      }
+
+      /* Window container - matches actual window bounds */
+      .window-container {
+        position: absolute;
+        pointer-events: none;
+      }
+
+      /* Port visual representation - circles on window edges */
+      .port {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        border: 2px solid white;
+        box-sizing: border-box;
+        cursor: pointer;
+        pointer-events: auto;
+        transition: all 0.15s ease;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+        font-weight: bold;
+        color: white;
+        flex-shrink: 0;
+      }
+
+      .port.input {
+        background: rgba(52, 199, 89, 0.9);
+      }
+
+      .port.output {
+        background: rgba(0, 122, 255, 0.9);
+      }
+
+      .port:hover {
+        transform: scale(1.2);
+        box-shadow: 0 3px 12px rgba(0, 0, 0, 0.4);
+      }
+
+      .port.connecting {
+        animation: pulse 0.8s ease-in-out infinite;
+      }
+
+      /* Show a subtle indicator on ports */
+      .port::after {
+        content: "○";
+        font-size: 12px;
+      }
+
+      /* Port add button - same dimensions as ports */
+      .port-add-button {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        border: 2px solid white;
+        box-sizing: border-box;
+        color: white;
+        font-size: 16px;
+        font-weight: bold;
+        cursor: pointer;
+        pointer-events: auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        transition: all 0.15s ease;
+        flex-shrink: 0;
+      }
+
+      .port-add-button.input {
+        background: rgba(52, 199, 89, 0.9);
+      }
+
+      .port-add-button.output {
+        background: rgba(0, 122, 255, 0.9);
+      }
+
+      .port-add-button:hover {
+        transform: scale(1.2);
+        box-shadow: 0 3px 12px rgba(0, 0, 0, 0.5);
+      }
+
+      /* Edge groups - contain ports and add button for each edge */
+      .edge-group {
+        position: absolute;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+        top: 50%;
+        transform: translateY(-50%);
+      }
+
+      .edge-group.left {
+        left: 0;
+        transform: translate(-50%, -50%);
+      }
+
+      .edge-group.right {
+        right: 0;
+        transform: translate(50%, -50%);
+      }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          transform: scale(1);
+          opacity: 1;
+        }
+        50% {
+          transform: scale(1.4);
+          opacity: 0.7;
+        }
+      }
+
+      /* Connection arrows between ports */
+      svg.connections {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 1000;
+      }
+
+      .connection-line {
+        stroke: rgba(0, 122, 255, 0.8);
+        stroke-width: 2;
+        fill: none;
+        stroke-linecap: round;
+      }
+
+      .connection-arrow {
+        fill: rgba(0, 122, 255, 0.8);
+      }
+
+      .temp-connection {
+        stroke: rgba(255, 255, 255, 0.5);
+        stroke-width: 2;
+        stroke-dasharray: 5, 5;
+        fill: none;
+      }
+
+      /* Port info tooltip */
+      .port-tooltip {
+        position: absolute;
+        background: rgba(30, 30, 30, 0.98);
+        color: white;
+        padding: 8px 10px;
+        border-radius: 6px;
+        font-size: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        z-index: 2500;
+        pointer-events: none;
+        backdrop-filter: blur(20px);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+        white-space: nowrap;
+      }
+
+      .port-tooltip .role {
+        color: #007aff;
+        font-weight: 600;
+      }
+
+      .port-tooltip .value {
+        color: #ff9f0a;
+        margin-left: 8px;
+      }
+
+      /* Visual feedback for port creation */
+      .element-highlight {
+        position: absolute;
+        pointer-events: none;
+        border: 2px solid;
+        background: rgba(0, 122, 255, 0.1);
+        z-index: 1400;
+        transition: all 0.15s ease-out;
+        border-radius: 4px;
+      }
+
+      .element-highlight.input-mode {
+        border-color: rgba(52, 199, 89, 0.9);
+        background: rgba(52, 199, 89, 0.1);
+      }
+
+      .element-highlight.output-mode {
+        border-color: rgba(0, 122, 255, 0.9);
+        background: rgba(0, 122, 255, 0.1);
+      }
+
+      /* Visual overlay for port creation mode - NO dark overlay */
+      .click-capture-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        z-index: 999;
+        pointer-events: none; /* Always transparent - never blocks clicks */
+        display: none;
+      }
+
+      .click-capture-overlay.active {
+        display: block;
+      }
+
+      /* Instruction hint only - no background gradient */
+      .click-capture-overlay.active::after {
+        content: "Press 'C' to create port at cursor position";
+        position: fixed;
+        top: 46px; /* 36px menu bar + 10px spacing */
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(30, 30, 30, 0.95);
+        color: white;
+        padding: 8px 16px;
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 500;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        backdrop-filter: blur(20px);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="clickCaptureOverlay" class="click-capture-overlay"></div>
+    <div id="portContainer"></div>
+    <svg class="connections" id="connections"></svg>
+    <script type="module" src="../src/ports.ts"></script>
+  </body>
+</html>

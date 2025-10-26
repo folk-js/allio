@@ -109,6 +109,20 @@ export namespace UnwatchNode {
   }
 }
 
+/** Get accessibility element at screen position */
+export namespace GetElementAtPosition {
+  export interface Request {
+    x: number;
+    y: number;
+  }
+
+  export interface Response {
+    success: boolean;
+    element?: AXNode;
+    error?: string;
+  }
+}
+
 // ============================================================================
 // Client -> Server Messages
 // ============================================================================
@@ -119,7 +133,8 @@ export type ClientMessage =
   | ({ type: "click_element" } & ClickElement.Request)
   | ({ type: "set_clickthrough" } & SetClickthrough.Request)
   | ({ type: "watch_node" } & WatchNode.Request)
-  | ({ type: "unwatch_node" } & UnwatchNode.Request);
+  | ({ type: "unwatch_node" } & UnwatchNode.Request)
+  | ({ type: "get_element_at_position" } & GetElementAtPosition.Request);
 
 // ============================================================================
 // Server -> Client Messages
@@ -137,7 +152,10 @@ export type ServerMessage =
   | ({ type: "click_element_response" } & ClickElement.Response)
   | ({ type: "set_clickthrough_response" } & SetClickthrough.Response)
   | ({ type: "watch_node_response" } & WatchNode.Response)
-  | ({ type: "unwatch_node_response" } & UnwatchNode.Response);
+  | ({ type: "unwatch_node_response" } & UnwatchNode.Response)
+  | ({
+      type: "get_element_at_position_response";
+    } & GetElementAtPosition.Response);
 
 // ============================================================================
 // Element Update Types
@@ -205,6 +223,16 @@ export namespace WatchNode {
 export namespace UnwatchNode {
   export function success(): Response {
     return { success: true };
+  }
+}
+
+export namespace GetElementAtPosition {
+  export function success(element: AXNode): Response {
+    return { success: true, element };
+  }
+
+  export function error(error: string): Response {
+    return { success: false, error };
   }
 }
 

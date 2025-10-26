@@ -308,6 +308,27 @@ async fn handle_client_message(
             let json = serde_json::to_string(&msg)?;
             socket.send(Message::Text(json)).await.ok();
         }
+
+        ClientMessage::GetElementAtPosition(req) => {
+            println!("📍 Getting element at position ({}, {})", req.x, req.y);
+
+            let response = match crate::platform::get_element_at_position(req.x, req.y) {
+                Ok(element) => crate::protocol::get_element_at_position::Response {
+                    success: true,
+                    element: Some(element),
+                    error: None,
+                },
+                Err(e) => crate::protocol::get_element_at_position::Response {
+                    success: false,
+                    element: None,
+                    error: Some(e),
+                },
+            };
+
+            let msg = ServerMessage::GetElementAtPositionResponse(response);
+            let json = serde_json::to_string(&msg)?;
+            socket.send(Message::Text(json)).await.ok();
+        }
     }
 
     Ok(())

@@ -464,12 +464,179 @@ pub fn click_element_by_id(element_id: &str) -> Result<(), String> {
     })?
 }
 
-/// Check if a role represents a writable element
-fn is_writable_role(role: &str) -> bool {
-    matches!(
-        role,
-        "AXTextField" | "AXTextArea" | "AXComboBox" | "AXSecureTextField" | "AXSearchField"
-    )
+/// Get the accessibility element at a specific screen position
+///
+/// This uses the macOS Accessibility API to find the topmost element at the given coordinates.
+/// Returns the element as an AXNode with orphan tracking (element not part of any window tree).
+///
+/// The element is registered in the ElementRegistry with a unique orphan window_id.
+pub fn get_element_at_position(x: f64, y: f64) -> Result<AXNode, String> {
+    use accessibility_sys::{AXUIElementGetPid, AXUIElementRef};
+    use core_foundation::base::TCFType;
+    use std::ptr;
+
+    unsafe {
+        // Use the system-wide accessibility element as the starting point
+        let system_element = AXUIElement::system_wide();
+
+        let mut element_ref: AXUIElementRef = ptr::null_mut();
+        let result = AXUIElementCopyElementAtPosition(
+            system_element.as_concrete_TypeRef(),
+            x as f32,
+            y as f32,
+            &mut element_ref,
+        );
+
+        if result != 0 {
+            return Err(format!(
+                "Failed to get element at position ({}, {}), error code: {}",
+                x, y, result
+            ));
+        }
+
+        if element_ref.is_null() {
+            return Err(format!("No element found at position ({}, {})", x, y));
+        }
+
+        // Wrap the element
+        let mut element = AXUIElement::wrap_under_create_rule(element_ref);
+
+        // Get the PID of the element's application
+        let mut pid: i32 = 0;
+        let pid_result = AXUIElementGetPid(element_ref, &mut pid);
+        if pid_result != 0 {
+            return Err(format!("Failed to get PID for element at ({}, {})", x, y));
+        }
+
+        // Traverse down to find the leafmost (deepest) element at this position
+        element = find_leafmost_element_at_position(&element, x, y);
+
+        // Get the actual window this element belongs to
+        let window_id = get_window_id_for_element(&element)
+            .unwrap_or_else(|| format!("orphan-{}-{}", pid, uuid::Uuid::new_v4()));
+
+        println!(
+            "📍 Element at ({}, {}): window_id={}, role={:?}",
+            x,
+            y,
+            window_id,
+            element
+                .attribute(&AXAttribute::role())
+                .ok()
+                .map(|r| r.to_string())
+        );
+
+        // Convert to AXNode with the actual or unique window_id
+        element_to_axnode(
+            &element, window_id, pid as u32, None,  // No parent
+            0,     // Depth 0
+            0,     // Don't load children (max_depth = 0)
+            100,   // Max children (not used since max_depth = 0)
+            false, // Don't load children
+        )
+        .ok_or_else(|| format!("Failed to convert element at ({}, {}) to AXNode", x, y))
+    }
+}
+
+/// Recursively find the deepest (leafmost) element at a given position
+fn find_leafmost_element_at_position(element: &AXUIElement, x: f64, y: f64) -> AXUIElement {
+    // Try to get children
+    let children = match element.attribute(&AXAttribute::children()) {
+        Ok(children_array) => children_array,
+        Err(_) => return element.clone(),
+    };
+
+    let child_count = children.len();
+    if child_count == 0 {
+        return element.clone();
+    }
+
+    // Check each child to see if it contains the point
+    for i in 0..child_count {
+        if let Some(child) = children.get(i) {
+            // Check if child has bounds and contains the point
+            if element_contains_point(&child, x, y) {
+                // Recursively check this child's children
+                return find_leafmost_element_at_position(&child, x, y);
+            }
+        }
+    }
+
+    // No child contains the point, return this element
+    element.clone()
+}
+
+/// Check if an element's bounds contain a point
+fn element_contains_point(element: &AXUIElement, x: f64, y: f64) -> bool {
+    use accessibility_sys::{kAXPositionAttribute, kAXSizeAttribute};
+    use core_foundation::string::CFString;
+
+    // Get position
+    let position_attr = CFString::new(kAXPositionAttribute);
+    let ax_position_attr = AXAttribute::new(&position_attr);
+    let position = match element
+        .attribute(&ax_position_attr)
+        .ok()
+        .and_then(|p| extract_position(&p))
+    {
+        Some(pos) => pos,
+        None => return false,
+    };
+
+    // Get size
+    let size_attr = CFString::new(kAXSizeAttribute);
+    let ax_size_attr = AXAttribute::new(&size_attr);
+    let size = match element
+        .attribute(&ax_size_attr)
+        .ok()
+        .and_then(|s| extract_size(&s))
+    {
+        Some(sz) => sz,
+        None => return false,
+    };
+
+    // Check if point is within bounds
+    x >= position.0 && x <= position.0 + size.0 && y >= position.1 && y <= position.1 + size.1
+}
+
+/// Get the window ID for an element by traversing up to find its parent window
+fn get_window_id_for_element(element: &AXUIElement) -> Option<String> {
+    // Try to find the window by traversing up the accessibility tree
+    let mut current = element.clone();
+
+    for _ in 0..20 {
+        // Limit traversal depth
+        // Check if this is a window
+        if let Ok(role) = current.attribute(&AXAttribute::role()) {
+            let role_str = role.to_string();
+            if role_str == "AXWindow" {
+                // Found the window! Now try to match it to a known window
+                // Get the window's position and size to match with WindowManager
+                if let Some(bounds) = get_element_bounds(&current) {
+                    // Try to find matching window by comparing this AX element
+                    // We'll check if the WindowManager has this exact window element
+                    // by comparing positions (since we can't compare elements directly)
+
+                    // For now, just construct a pseudo window ID based on the window's bounds
+                    // This ensures different windows get different IDs even if elements are similar
+                    let window_pseudo_id = format!(
+                        "window-{:.0}x{:.0}-{:.0}x{:.0}",
+                        bounds.position.x, bounds.position.y, bounds.size.width, bounds.size.height
+                    );
+                    return Some(window_pseudo_id);
+                }
+                break;
+            }
+        }
+
+        // Try to get parent
+        match current.attribute(&AXAttribute::parent()) {
+            Ok(parent) => current = parent,
+            Err(_) => break,
+        }
+    }
+
+    None
 }
 
 // ============================================================================
@@ -515,6 +682,12 @@ type AXValueRef = CFTypeRef;
 extern "C" {
     fn AXValueGetType(value: AXValueRef) -> i32;
     fn AXValueGetValue(value: AXValueRef, value_type: i32, value_ptr: *mut c_void) -> bool;
+    fn AXUIElementCopyElementAtPosition(
+        application: accessibility_sys::AXUIElementRef,
+        x: f32,
+        y: f32,
+        element: *mut accessibility_sys::AXUIElementRef,
+    ) -> i32;
 }
 
 /// Safely extract a CGPoint from a CFType that should be an AXValue

@@ -22,6 +22,7 @@ import {
   SetClickthrough,
   WatchNode,
   UnwatchNode,
+  GetElementAtPosition,
 } from "./protocol.ts";
 
 // Re-export protocol types for convenience
@@ -497,6 +498,30 @@ export class AXIO {
   }
 
   /**
+   * Get accessibility element at screen position
+   * Returns an orphan element (not part of any window tree)
+   */
+  async getElementAtPosition(x: number, y: number): Promise<AXNode | null> {
+    const response = await this.rpc<
+      GetElementAtPosition.Request,
+      GetElementAtPosition.Response
+    >(
+      {
+        requestType: "get_element_at_position",
+        responseType: "get_element_at_position_response",
+        buildRequest: (req) => ({ type: "get_element_at_position", ...req }),
+        timeout: 5000,
+      },
+      { x, y }
+    );
+
+    if (response.element) {
+      return this.attachNodeMethods(response.element);
+    }
+    return null;
+  }
+
+  /**
    * Set clickthrough state (window transparency to mouse events)
    */
   async setClickthrough(enabled: boolean): Promise<void> {
@@ -672,6 +697,7 @@ export class AXIO {
         case "set_clickthrough_response":
         case "watch_node_response":
         case "unwatch_node_response":
+        case "get_element_at_position_response":
           // These are handled by request/response pattern via rpc() method
           const responseListeners = this.listeners.get(message.type);
           if (responseListeners) {

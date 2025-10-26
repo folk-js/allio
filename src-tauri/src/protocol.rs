@@ -122,6 +122,24 @@ pub mod unwatch_node {
     }
 }
 
+/// Get accessibility element at screen position
+pub mod get_element_at_position {
+    use super::*;
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Request {
+        pub x: f64,
+        pub y: f64,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct Response {
+        pub success: bool,
+        pub element: Option<AXNode>,
+        pub error: Option<String>,
+    }
+}
+
 // ============================================================================
 // Client -> Server Messages
 // ============================================================================
@@ -136,6 +154,7 @@ pub enum ClientMessage {
     SetClickthrough(set_clickthrough::Request),
     WatchNode(watch_node::Request),
     UnwatchNode(unwatch_node::Request),
+    GetElementAtPosition(get_element_at_position::Request),
 }
 
 // ============================================================================
@@ -159,6 +178,7 @@ pub enum ServerMessage {
     SetClickthroughResponse(set_clickthrough::Response),
     WatchNodeResponse(watch_node::Response),
     UnwatchNodeResponse(unwatch_node::Response),
+    GetElementAtPositionResponse(get_element_at_position::Response),
 }
 
 // ============================================================================
