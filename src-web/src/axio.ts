@@ -15,7 +15,17 @@ import {
   type ServerMessage,
   type ClientMessage,
   type ElementUpdate,
+  type Window,
+  GetChildren,
+  WriteToElement,
+  ClickElement,
+  SetClickthrough,
+  WatchNode,
+  UnwatchNode,
 } from "./protocol.ts";
+
+// Re-export protocol types for convenience
+export type { Window, ElementUpdate };
 
 // ============================================================================
 // Core Value Types
@@ -97,27 +107,8 @@ export type AXRole =
   | "scrollbar"
   | "unknown";
 
-// ============================================================================
-// Window Structure
-// ============================================================================
-
-/**
- * Window information
- *
- * Represents a system window with its metadata and geometry.
- * Windows are the entry point to accessibility trees via their process_id.
- */
-export interface Window {
-  readonly id: string; // System window ID
-  readonly title: string; // Window title
-  readonly app_name: string; // Application name
-  readonly x: number; // X position
-  readonly y: number; // Y position
-  readonly w: number; // Width
-  readonly h: number; // Height
-  readonly focused: boolean; // Is this window focused?
-  readonly process_id: number; // PID for accessing accessibility tree
-}
+// Window type is imported from protocol.ts
+// We extend it internally with root property when needed
 
 // ============================================================================
 // Node Structure
@@ -139,7 +130,7 @@ export interface AXNode {
   readonly subrole?: string; // Platform-specific subtype (or native name for unknown roles)
 
   // Content
-  readonly title?: string;
+  readonly label?: string;
   readonly value?: AXValue;
   readonly description?: string;
   readonly placeholder?: string;
@@ -169,6 +160,16 @@ export interface AXNode {
 // ============================================================================
 
 /**
+ * Type-safe RPC helper for request/response pairs
+ */
+type RPCConfig<Req> = {
+  requestType: ClientMessage["type"];
+  responseType: ServerMessage["type"];
+  buildRequest: (data: Req) => ClientMessage;
+  timeout?: number;
+};
+
+/**
  * Main AXIO client
  *
  * Responsibilities:
@@ -183,14 +184,18 @@ export class AXIO {
   private reconnectTimer: number | null = null;
   private readonly reconnectDelay = 1000;
 
-  // Window state (always up-to-date)
-  public windows: readonly Window[] = [];
+  // Window state
+  private windowsInternal: Window[] = [];
   public focused: Window | null = null;
 
-  // Tree cache - holds trees per window for stable state across focus changes
-  private treeCache: Map<string, AXNode> = new Map();
-
   constructor(private readonly wsUrl: string = "ws://localhost:3030/ws") {}
+
+  /**
+   * Get current windows (with roots automatically populated)
+   */
+  get windows(): ReadonlyArray<Window> {
+    return this.windowsInternal;
+  }
 
   /**
    * Connect to the AXIO backend
@@ -243,38 +248,82 @@ export class AXIO {
   }
 
   /**
-   * Register callback for window updates
-   * Also updates axio.windows and axio.focused automatically
-   * Cleans up cache for closed windows
+   * Helper to register event listeners with type safety
    */
-  onWindowUpdate(callback: (windows: Window[]) => void): void {
-    if (!this.listeners.has("window_update")) {
-      this.listeners.set("window_update", new Set());
+  private registerListener<T>(
+    eventType: string,
+    callback: (data: T) => void,
+    processor?: (rawData: any) => T | null
+  ): void {
+    if (!this.listeners.has(eventType)) {
+      this.listeners.set(eventType, new Set());
     }
-    this.listeners.get("window_update")!.add((data: any) => {
-      if (data.windows) {
-        const windows = data.windows as Window[];
-
-        // Track which windows were removed
-        const oldWindowIds = new Set(this.windows.map((w) => w.id));
-        const newWindowIds = new Set(windows.map((w: Window) => w.id));
-
-        // Clean up cache for closed windows
-        for (const oldId of oldWindowIds) {
-          if (!newWindowIds.has(oldId)) {
-            this.treeCache.delete(oldId);
-            console.log(`🗑️ Removed cached tree for closed window ${oldId}`);
-          }
-        }
-
-        // Update internal state
-        this.windows = windows;
-        this.focused = windows.find((w: Window) => w.focused) || null;
-
-        // Notify listeners
-        callback(windows);
+    this.listeners.get(eventType)!.add((data: any) => {
+      const processed = processor ? processor(data) : data;
+      if (processed !== null) {
+        callback(processed as T);
       }
     });
+  }
+
+  /**
+   * Register callback for window updates
+   * Also updates axio.windows and axio.focused automatically
+   * Preserves roots for existing windows
+   */
+  onWindowUpdate(callback: (windows: Window[]) => void): void {
+    this.registerListener<Window[]>("window_update", callback, (data) => {
+      if (!data.windows) return null;
+
+      const incomingWindows = data.windows as Window[];
+
+      // Create a map of existing windows with their roots
+      const existingRoots = new Map<string, AXNode>();
+      for (const win of this.windowsInternal) {
+        if (win.root) {
+          existingRoots.set(win.id, win.root);
+        }
+      }
+
+      // Merge incoming windows with existing roots
+      this.windowsInternal = incomingWindows.map((win) => ({
+        ...win,
+        root: existingRoots.get(win.id),
+      }));
+
+      // Track previous focused window
+      const previousFocused = this.focused;
+
+      // Update focused window
+      this.focused = this.windowsInternal.find((w) => w.focused) || null;
+
+      // Notify focused window change listeners if changed
+      if (previousFocused?.id !== this.focused?.id) {
+        this.notifyFocusedWindowChange(this.focused);
+      }
+
+      return this.windowsInternal;
+    });
+  }
+
+  /**
+   * Register callback for focused window changes
+   * Called whenever the focused window changes (or becomes null)
+   */
+  onFocusedWindowChange(
+    callback: (focusedWindow: Window | null) => void
+  ): void {
+    this.registerListener<Window | null>("focused_window_change", callback);
+  }
+
+  /**
+   * Notify all focused window change listeners
+   */
+  private notifyFocusedWindowChange(focusedWindow: Window | null): void {
+    const listeners = this.listeners.get("focused_window_change");
+    if (listeners) {
+      listeners.forEach((callback) => callback(focusedWindow));
+    }
   }
 
   /**
@@ -282,30 +331,16 @@ export class AXIO {
    * Mouse position is tracked system-wide, even when window is not focused
    */
   onMousePosition(callback: (x: number, y: number) => void): void {
-    if (!this.listeners.has("mouse_position")) {
-      this.listeners.set("mouse_position", new Set());
-    }
-    this.listeners.get("mouse_position")!.add((data: any) => {
-      if (data.x !== undefined && data.y !== undefined) {
-        callback(data.x, data.y);
+    this.registerListener<{ x: number; y: number }>(
+      "mouse_position",
+      (data) => callback(data.x, data.y),
+      (data) => {
+        if (data.x !== undefined && data.y !== undefined) {
+          return { x: data.x, y: data.y };
+        }
+        return null;
       }
-    });
-  }
-
-  /**
-   * Register callback for tree changes (pushed from backend when focus changes)
-   */
-  onTreeChanged(callback: (pid: number, tree: AXNode) => void): void {
-    if (!this.listeners.has("tree_changed")) {
-      this.listeners.set("tree_changed", new Set());
-    }
-    this.listeners.get("tree_changed")!.add((data: any) => {
-      if (data.pid !== undefined && data.tree !== undefined) {
-        // Attach methods to the tree
-        const tree = this.attachNodeMethods(data.tree);
-        callback(data.pid, tree);
-      }
-    });
+    );
   }
 
   // ============================================================================
@@ -313,57 +348,36 @@ export class AXIO {
   // ============================================================================
 
   /**
-   * Generic method to send a request and wait for a response
-   * Reduces boilerplate by centralizing Promise/listener/timeout logic
+   * Type-safe RPC method for request/response pairs
+   * Eliminates string-typing and provides compile-time safety
    */
-  private async sendRequest<T>(
-    msgType: string,
-    data: Record<string, any>,
-    timeout: number = 5000
-  ): Promise<T> {
+  private async rpc<Req, Res extends { success: boolean; error?: string }>(
+    config: RPCConfig<Req>,
+    request: Req
+  ): Promise<Res> {
     return new Promise((resolve, reject) => {
-      const responseType = `${msgType}_response`;
-
       const handler = (responseData: any) => {
-        // Remove this specific handler
-        const listeners = this.listeners.get(responseType);
+        const listeners = this.listeners.get(config.responseType);
         if (listeners) {
           listeners.delete(handler);
         }
 
         if (responseData.success) {
-          resolve(responseData as T);
+          resolve(responseData as Res);
         } else {
           reject(new Error(responseData.error || "Request failed"));
         }
       };
 
-      // Add temporary handler
-      if (!this.listeners.has(responseType)) {
-        this.listeners.set(responseType, new Set());
+      // Register temporary handler
+      if (!this.listeners.has(config.responseType)) {
+        this.listeners.set(config.responseType, new Set());
       }
-      this.listeners.get(responseType)!.add(handler);
+      this.listeners.get(config.responseType)!.add(handler);
 
       // Send request
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        let message: ClientMessage;
-
-        if (msgType === "write_to_element") {
-          message = {
-            type: "write_to_element",
-            element_id: data.element_id,
-            text: data.text,
-          };
-        } else if (msgType === "click_element") {
-          message = {
-            type: "click_element",
-            element_id: data.element_id,
-          };
-        } else {
-          reject(new Error(`Unknown message type: ${msgType}`));
-          return;
-        }
-
+        const message = config.buildRequest(request);
         this.ws.send(JSON.stringify(message));
       } else {
         reject(new Error("WebSocket not connected"));
@@ -372,62 +386,22 @@ export class AXIO {
 
       // Timeout
       setTimeout(() => {
-        const listeners = this.listeners.get(responseType);
+        const listeners = this.listeners.get(config.responseType);
         if (listeners) {
           listeners.delete(handler);
         }
-        reject(new Error(`Timeout waiting for ${msgType} response`));
-      }, timeout);
-    });
-  }
-
-  /**
-   * Get the root accessibility node for a window by window ID
-   * Returns the cached root node (pushed by backend when window is focused)
-   * If not cached, waits for the backend to push it (with timeout)
-   * The root node has getChildren() method to fetch children on demand
-   */
-  async getRootNode(windowId: string, timeout: number = 5000): Promise<AXNode> {
-    // Check cache first
-    const cached = this.treeCache.get(windowId);
-    if (cached) {
-      console.log(`📦 Returning cached root for window ${windowId}`);
-      return Promise.resolve(cached);
-    }
-
-    // Not cached - wait for backend to push it
-    console.log(`⏳ Waiting for root node for window ${windowId}`);
-    return new Promise((resolve, reject) => {
-      const checkInterval = setInterval(() => {
-        const root = this.treeCache.get(windowId);
-        if (root) {
-          clearInterval(checkInterval);
-          resolve(root);
-        }
-      }, 100); // Check every 100ms
-
-      // Timeout
-      setTimeout(() => {
-        clearInterval(checkInterval);
         reject(
-          new Error(`Timeout waiting for root node for window ${windowId}`)
+          new Error(`Timeout waiting for ${config.responseType} response`)
         );
-      }, timeout);
+      }, config.timeout || 5000);
     });
   }
 
   /**
-   * @deprecated Use getRootNode() instead. The backend now pushes root nodes automatically.
+   * Get a window by ID (convenience method)
    */
-  async getTreeByWindowId(
-    windowId: string,
-    maxDepth?: number,
-    maxChildrenPerLevel?: number
-  ): Promise<AXNode> {
-    console.warn(
-      "[AXIO] getTreeByWindowId is deprecated, use getRootNode() instead"
-    );
-    return this.getRootNode(windowId);
+  getWindow(windowId: string): Window | undefined {
+    return this.windowsInternal.find((w) => w.id === windowId);
   }
 
   /**
@@ -477,249 +451,140 @@ export class AXIO {
     maxDepth: number = 1,
     maxChildren: number = 2000
   ): Promise<AXNode[]> {
-    return new Promise((resolve, reject) => {
-      const handler = (data: any) => {
-        // Remove this specific handler
-        const listeners = this.listeners.get("get_children_response");
-        if (listeners) {
-          listeners.delete(handler);
-        }
-
-        if (data.success && data.children) {
-          resolve(data.children);
-        } else {
-          reject(new Error(data.error || "Failed to get children"));
-        }
-      };
-
-      // Add temporary handler
-      if (!this.listeners.has("get_children_response")) {
-        this.listeners.set("get_children_response", new Set());
+    const response = await this.rpc<GetChildren.Request, GetChildren.Response>(
+      {
+        requestType: "get_children",
+        responseType: "get_children_response",
+        buildRequest: (req) => ({ type: "get_children", ...req }),
+        timeout: 10000,
+      },
+      {
+        element_id: elementId,
+        max_depth: maxDepth,
+        max_children_per_level: maxChildren,
       }
-      this.listeners.get("get_children_response")!.add(handler);
+    );
 
-      // Send request
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        const message: ClientMessage = {
-          type: "get_children",
-          element_id: elementId,
-          max_depth: maxDepth,
-          max_children_per_level: maxChildren,
-        };
-        this.ws.send(JSON.stringify(message));
-      } else {
-        reject(new Error("WebSocket not connected"));
-      }
-
-      // Timeout after 10s
-      setTimeout(() => {
-        const listeners = this.listeners.get("get_children_response");
-        if (listeners) {
-          listeners.delete(handler);
-        }
-        reject(new Error("Timeout waiting for children response"));
-      }, 10000);
-    });
+    return response.children || [];
   }
 
   /**
    * Write text to an element by element ID
    */
   async writeByElementId(elementId: string, text: string): Promise<void> {
-    await this.sendRequest("write_to_element", { element_id: elementId, text });
+    await this.rpc<WriteToElement.Request, WriteToElement.Response>(
+      {
+        requestType: "write_to_element",
+        responseType: "write_to_element_response",
+        buildRequest: (req) => ({ type: "write_to_element", ...req }),
+      },
+      { element_id: elementId, text }
+    );
   }
 
   /**
    * Click/press an element by element ID
    */
   async clickElement(elementId: string): Promise<void> {
-    await this.sendRequest("click_element", { element_id: elementId });
+    await this.rpc<ClickElement.Request, ClickElement.Response>(
+      {
+        requestType: "click_element",
+        responseType: "click_element_response",
+        buildRequest: (req) => ({ type: "click_element", ...req }),
+      },
+      { element_id: elementId }
+    );
   }
 
   /**
    * Set clickthrough state (window transparency to mouse events)
    */
   async setClickthrough(enabled: boolean): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const handler = (data: any) => {
-        // Remove this specific handler
-        const listeners = this.listeners.get("set_clickthrough_response");
-        if (listeners) {
-          listeners.delete(handler);
-        }
-
-        if (data.success) {
-          resolve();
-        } else {
-          reject(new Error(data.error || "Failed to set clickthrough"));
-        }
-      };
-
-      // Add temporary handler
-      if (!this.listeners.has("set_clickthrough_response")) {
-        this.listeners.set("set_clickthrough_response", new Set());
-      }
-      this.listeners.get("set_clickthrough_response")!.add(handler);
-
-      // Send request
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        const message: ClientMessage = {
-          type: "set_clickthrough",
-          enabled,
-        };
-        this.ws.send(JSON.stringify(message));
-      } else {
-        reject(new Error("WebSocket not connected"));
-      }
-
-      // Timeout after 2s (faster timeout for UI responsiveness)
-      setTimeout(() => {
-        const listeners = this.listeners.get("set_clickthrough_response");
-        if (listeners) {
-          listeners.delete(handler);
-        }
-        reject(new Error("Timeout waiting for clickthrough response"));
-      }, 2000);
-    });
+    await this.rpc<SetClickthrough.Request, SetClickthrough.Response>(
+      {
+        requestType: "set_clickthrough",
+        responseType: "set_clickthrough_response",
+        buildRequest: (req) => ({ type: "set_clickthrough", ...req }),
+        timeout: 2000,
+      },
+      { enabled }
+    );
   }
 
   /**
    * Watch a node for changes by element ID
-   * When the node changes, `onNodeUpdated` callbacks will fire
+   * When the node changes, `onElementUpdate` callbacks will fire
    */
   async watchNodeByElementId(elementId: string, nodeId: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const handler = (data: any) => {
-        const listeners = this.listeners.get("watch_node_response");
-        if (listeners) {
-          listeners.delete(handler);
-        }
-
-        if (data.success) {
-          resolve();
-        } else {
-          reject(new Error(data.error || "Failed to watch node"));
-        }
-      };
-
-      if (!this.listeners.has("watch_node_response")) {
-        this.listeners.set("watch_node_response", new Set());
-      }
-      this.listeners.get("watch_node_response")!.add(handler);
-
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        const message: ClientMessage = {
-          type: "watch_node",
-          element_id: elementId,
-          node_id: nodeId,
-        };
-        this.ws.send(JSON.stringify(message));
-      } else {
-        reject(new Error("WebSocket not connected"));
-      }
-
-      setTimeout(() => {
-        const listeners = this.listeners.get("watch_node_response");
-        if (listeners) {
-          listeners.delete(handler);
-        }
-        reject(new Error("Timeout waiting for watch response"));
-      }, 5000);
-    });
+    await this.rpc<WatchNode.Request, WatchNode.Response>(
+      {
+        requestType: "watch_node",
+        responseType: "watch_node_response",
+        buildRequest: (req) => ({ type: "watch_node", ...req }),
+      },
+      { element_id: elementId, node_id: nodeId }
+    );
   }
 
   /**
    * Stop watching a node by element ID
    */
   async unwatchNodeByElementId(elementId: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const handler = (data: any) => {
-        const listeners = this.listeners.get("unwatch_node_response");
-        if (listeners) {
-          listeners.delete(handler);
-        }
-
-        if (data.success) {
-          resolve();
-        } else {
-          reject(new Error("Failed to unwatch node"));
-        }
-      };
-
-      if (!this.listeners.has("unwatch_node_response")) {
-        this.listeners.set("unwatch_node_response", new Set());
-      }
-      this.listeners.get("unwatch_node_response")!.add(handler);
-
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        const message: ClientMessage = {
-          type: "unwatch_node",
-          element_id: elementId,
-        };
-        this.ws.send(JSON.stringify(message));
-      } else {
-        reject(new Error("WebSocket not connected"));
-      }
-
-      setTimeout(() => {
-        const listeners = this.listeners.get("unwatch_node_response");
-        if (listeners) {
-          listeners.delete(handler);
-        }
-        reject(new Error("Timeout waiting for unwatch response"));
-      }, 5000);
-    });
+    await this.rpc<UnwatchNode.Request, UnwatchNode.Response>(
+      {
+        requestType: "unwatch_node",
+        responseType: "unwatch_node_response",
+        buildRequest: (req) => ({ type: "unwatch_node", ...req }),
+      },
+      { element_id: elementId }
+    );
   }
 
   /**
    * Register callback for element updates (pushed from backend via AXObserver)
-   * Called when a watched element's value, title, or other properties change
-   * Also updates cached trees to keep them fresh
+   * Called when a watched element's value, label, or other properties change
+   * Also updates window roots to keep them fresh
    */
   onElementUpdate(callback: (update: ElementUpdate) => void): void {
-    if (!this.listeners.has("element_update")) {
-      this.listeners.set("element_update", new Set());
-    }
-    this.listeners.get("element_update")!.add((data: any) => {
-      if (data.update) {
-        const update = data.update as ElementUpdate;
+    this.registerListener<ElementUpdate>("element_update", callback, (data) => {
+      if (!data.update) return null;
 
-        // Apply update to cached trees
-        this.applyCachedTreeUpdate(update);
+      const update = data.update as ElementUpdate;
 
-        // Notify listeners
-        callback(update);
-      }
+      // Apply update to window roots
+      this.applyTreeUpdate(update);
+
+      return update;
     });
   }
 
   /**
-   * Apply element update to cached trees
+   * Apply element update to window roots
    * Keeps trees fresh without refetching
    */
-  private applyCachedTreeUpdate(update: ElementUpdate): void {
-    // Search all cached trees for the element
-    for (const tree of this.treeCache.values()) {
-      const node = this.findNodeInTree(tree, update.element_id);
-      if (node) {
-        // Found the node - apply update
-        switch (update.update_type) {
-          case "ValueChanged":
-            (node as any).value = update.value;
-            break;
-          case "TitleChanged":
-            (node as any).title = update.title;
-            break;
-          case "ElementDestroyed":
-            // Note: For destruction, we'd need to remove from parent's children
-            // This is complex, so for now we just mark it
-            // Frontend can handle this by removing from DOM
-            console.log(
-              `⚠️ Element ${update.element_id} destroyed in cached tree`
-            );
-            break;
+  private applyTreeUpdate(update: ElementUpdate): void {
+    // Search all window roots for the element
+    for (const window of this.windowsInternal) {
+      if (window.root) {
+        const node = this.findNodeInTree(window.root, update.element_id);
+        if (node) {
+          // Found the node - apply update
+          switch (update.update_type) {
+            case "ValueChanged":
+              (node as any).value = update.value;
+              break;
+            case "LabelChanged":
+              (node as any).label = update.label;
+              break;
+            case "ElementDestroyed":
+              // Note: For destruction, we'd need to remove from parent's children
+              // This is complex, so for now we just mark it
+              // Frontend can handle this by removing from DOM
+              console.log(`⚠️ Element ${update.element_id} destroyed in tree`);
+              break;
+          }
+          break; // Found and updated, stop searching
         }
-        break; // Found and updated, stop searching
       }
     }
   }
@@ -740,24 +605,6 @@ export class AXIO {
     return null;
   }
 
-  /**
-   * Clear cached tree for a specific window
-   * Next request will fetch fresh tree from backend
-   */
-  clearTreeCache(windowId: string): void {
-    this.treeCache.delete(windowId);
-    console.log(`🗑️ Cleared tree cache for window ${windowId}`);
-  }
-
-  /**
-   * Clear all cached trees
-   * Useful for debugging or forced refresh
-   */
-  clearAllTreeCache(): void {
-    this.treeCache.clear();
-    console.log(`🗑️ Cleared all tree cache`);
-  }
-
   // ============================================================================
   // Private Methods
   // ============================================================================
@@ -769,11 +616,7 @@ export class AXIO {
       // Type-safe message handling with discriminated union
       switch (message.type) {
         case "window_update":
-          // Update internal window state
-          this.windows = message.windows;
-          this.focused = message.windows.find((w) => w.focused) || null;
-
-          // Notify listeners
+          // Handled via onWindowUpdate listeners
           const windowListeners = this.listeners.get("window_update");
           if (windowListeners) {
             windowListeners.forEach((callback) => callback(message));
@@ -783,11 +626,21 @@ export class AXIO {
         case "window_root_update":
           // Attach methods to the root node
           const rootWithMethods = this.attachNodeMethods(message.root);
-          // Cache the root node
-          this.treeCache.set(message.window_id, rootWithMethods);
-          console.log(
-            `[AXIO] 📦 Cached root node for window ${message.window_id}`
+
+          // Store root on the window
+          const window = this.windowsInternal.find(
+            (w) => w.id === message.window_id
           );
+          if (window) {
+            (window as any).root = rootWithMethods;
+            console.log(
+              `[AXIO] 📦 Attached root node to window ${message.window_id}`
+            );
+          } else {
+            console.warn(
+              `[AXIO] ⚠️ Received root for unknown window ${message.window_id}`
+            );
+          }
 
           // Notify listeners
           const rootListeners = this.listeners.get("window_root_update");
@@ -808,8 +661,8 @@ export class AXIO {
           if (elementListeners) {
             elementListeners.forEach((callback) => callback(message));
           }
-          // Apply update to cached tree
-          this.applyCachedTreeUpdate(message.update);
+          // Apply update to tree
+          this.applyTreeUpdate(message.update);
           break;
 
         // Response messages
@@ -819,7 +672,7 @@ export class AXIO {
         case "set_clickthrough_response":
         case "watch_node_response":
         case "unwatch_node_response":
-          // These are handled by request/response pattern in private methods
+          // These are handled by request/response pattern via rpc() method
           const responseListeners = this.listeners.get(message.type);
           if (responseListeners) {
             responseListeners.forEach((callback) => callback(message));

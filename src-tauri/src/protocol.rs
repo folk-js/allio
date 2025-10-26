@@ -171,7 +171,7 @@ pub enum ServerMessage {
 #[serde(tag = "update_type", rename_all = "PascalCase")]
 pub enum ElementUpdate {
     ValueChanged { element_id: String, value: AXValue },
-    TitleChanged { element_id: String, title: String },
+    LabelChanged { element_id: String, label: String },
     ElementDestroyed { element_id: String },
 }
 

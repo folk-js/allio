@@ -437,13 +437,13 @@ fn handle_notification(
         }
 
         "AXTitleChanged" => {
-            // Extract title
-            if let Ok(title_attr) = element.attribute(&AXAttribute::title()) {
-                let title = title_attr.to_string();
-                if !title.is_empty() {
-                    Some(ElementUpdate::TitleChanged {
+            // Extract label (ARIA term for title/label)
+            if let Ok(label_attr) = element.attribute(&AXAttribute::title()) {
+                let label = label_attr.to_string();
+                if !label.is_empty() {
+                    Some(ElementUpdate::LabelChanged {
                         element_id: element_id.to_string(),
-                        title,
+                        label,
                     })
                 } else {
                     None

@@ -335,7 +335,7 @@ impl UIElement {
                 ]
             }
 
-            // WINDOWS - watch title changes
+            // WINDOWS - watch label (title attribute) changes
             "AXWindow" => {
                 vec!["AXTitleChanged", "AXUIElementDestroyed"]
             }

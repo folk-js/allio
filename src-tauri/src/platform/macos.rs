@@ -36,7 +36,7 @@ pub fn element_to_axnode(
     if depth > max_depth {
         return None;
     }
-    
+
     // Get role for registration
     let platform_role = element
         .attribute(&AXAttribute::role())
@@ -68,8 +68,8 @@ pub fn element_to_axnode(
             .filter(|s| !s.is_empty())
     };
 
-    // Get title
-    let title = element.attribute(&AXAttribute::title()).ok().and_then(|t| {
+    // Get label (ARIA term for title/label attribute)
+    let label = element.attribute(&AXAttribute::title()).ok().and_then(|t| {
         let s = t.to_string();
         if s.is_empty() {
             None
@@ -158,7 +158,7 @@ pub fn element_to_axnode(
         parent_id,
         role,
         subrole,
-        title,
+        label,
         value,
         description,
         placeholder,
@@ -405,7 +405,11 @@ pub fn get_children_by_element_id(
 
     // Get the window_id and pid from the element
     let (ax_element, window_id, pid) = ElementRegistry::with_element(element_id, |element| {
-        (element.ax_element().clone(), element.window_id().to_string(), element.pid())
+        (
+            element.ax_element().clone(),
+            element.window_id().to_string(),
+            element.pid(),
+        )
     })?;
 
     // Get children of this node
@@ -437,18 +441,24 @@ pub fn click_element_by_id(element_id: &str) -> Result<(), String> {
     use accessibility_sys::{kAXPressAction, AXUIElementPerformAction};
     use core_foundation::base::TCFType;
     use core_foundation::string::CFString;
-    
+
     // Get the element from registry and perform press action
     ElementRegistry::with_element(element_id, |element| {
         let ax_element = element.ax_element();
         let action = CFString::new(kAXPressAction);
-        
+
         unsafe {
-            let result = AXUIElementPerformAction(ax_element.as_concrete_TypeRef(), action.as_concrete_TypeRef());
+            let result = AXUIElementPerformAction(
+                ax_element.as_concrete_TypeRef(),
+                action.as_concrete_TypeRef(),
+            );
             if result == 0 {
                 Ok(())
             } else {
-                Err(format!("Failed to perform press action, error code: {}", result))
+                Err(format!(
+                    "Failed to perform press action, error code: {}",
+                    result
+                ))
             }
         }
     })?

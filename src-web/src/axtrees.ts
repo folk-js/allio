@@ -1,4 +1,5 @@
-import { AXIO, AXNode, Window, ElementUpdate } from "./axio.ts";
+import { AXIO, AXNode } from "./axio.ts";
+import { ElementUpdate, Window } from "./protocol.ts";
 
 class AXTreeOverlay {
   private windowContainer: HTMLElement;
@@ -93,6 +94,11 @@ class AXTreeOverlay {
         this.updateWindows(windows);
       });
 
+      // Set up focused window change handler
+      this.axio.onFocusedWindowChange((focusedWindow) => {
+        this.handleFocusedWindowChange(focusedWindow);
+      });
+
       // Set up element update handler (receives AXObserver notifications)
       this.axio.onElementUpdate((update) => {
         console.log("🔄 Element updated:", update);
@@ -109,41 +115,52 @@ class AXTreeOverlay {
   }
 
   private updateWindows(windows: Window[]) {
-    const newFocusedWindow = windows.find((w) => w.focused);
+    // Just update the tree position if the window geometry changed
+    // Focus changes are now handled by onFocusedWindowChange
+    if (this.lastFocusedWindow) {
+      const currentWindow = windows.find(
+        (w) => w.id === this.lastFocusedWindow!.id
+      );
+      if (currentWindow) {
+        this.lastFocusedWindow = currentWindow;
+        this.updateTreePosition();
+      }
+    }
+  }
 
-    // No focused window in the list means either:
+  /**
+   * Handle focused window changes (called by AXIO when focus changes)
+   */
+  private handleFocusedWindowChange(focusedWindow: Window | null) {
+    // No focused window means either:
     // - The overlay itself is focused (most common)
     // - Desktop or other non-application window is focused
     // In either case, preserve the last tree for interaction
-    if (!newFocusedWindow) {
+    if (!focusedWindow) {
       if (this.treeContainer && this.lastFocusedWindow) {
         console.log("🖱️ No focused window - preserving last tree");
         this.updateTreePosition();
       }
-      return; // Early return to prevent tree changes
+      return;
     }
 
-    // New window focused - fetch its tree
+    // New window focused - display its tree
     if (
       !this.lastFocusedWindow ||
-      newFocusedWindow.id !== this.lastFocusedWindow.id
+      focusedWindow.id !== this.lastFocusedWindow.id
     ) {
-      console.log(
-        `🎯 Focus changed to "${newFocusedWindow.title}", fetching tree by window_id`
-      );
-      this.lastFocusedWindow = newFocusedWindow;
+      console.log(`🎯 Focus changed to "${focusedWindow.title}"`);
+      this.lastFocusedWindow = focusedWindow;
 
-      this.axio
-        .getTreeByWindowId(newFocusedWindow.id, 3, 100)
-        .then((tree) => {
-          this.displayAccessibilityTree(tree, newFocusedWindow);
-        })
-        .catch((err) => {
-          console.error("Failed to get accessibility tree:", err);
-        });
+      // Root is automatically populated by the backend
+      if (focusedWindow.root) {
+        this.displayAccessibilityTree(focusedWindow.root, focusedWindow);
+      } else {
+        console.log("⏳ Waiting for root to be pushed by backend...");
+      }
     } else {
       // Same window still focused - just update position in case window moved
-      this.lastFocusedWindow = newFocusedWindow;
+      this.lastFocusedWindow = focusedWindow;
       this.updateTreePosition();
     }
   }
@@ -169,7 +186,7 @@ class AXTreeOverlay {
     legend.innerHTML = `
       <span class="legend-item"><span class="tree-role">role</span></span>
       <span class="legend-item"><span class="tree-subrole">subrole</span></span>
-      <span class="legend-item"><span class="tree-title">title</span></span>
+      <span class="legend-item"><span class="tree-label">label</span></span>
       <span class="legend-item"><span class="tree-value-string">string</span></span>
       <span class="legend-item"><span class="tree-value-number">number</span></span>
       <span class="legend-item"><span class="tree-value-boolean">bool</span></span>
@@ -272,12 +289,12 @@ class AXTreeOverlay {
         nodeInfo.appendChild(subroleSpan);
       }
 
-      // Title (if present)
-      if (node.title) {
-        const titleSpan = document.createElement("span");
-        titleSpan.className = "tree-title";
-        titleSpan.textContent = ` "${node.title}"`;
-        nodeInfo.appendChild(titleSpan);
+      // Label (if present)
+      if (node.label) {
+        const labelSpan = document.createElement("span");
+        labelSpan.className = "tree-label";
+        labelSpan.textContent = ` "${node.label}"`;
+        nodeInfo.appendChild(labelSpan);
       }
 
       // Value (if present) - with type-specific colors
@@ -939,7 +956,7 @@ class AXTreeOverlay {
     // Check if this is an empty group that should be filtered out
     if (node.role === "group") {
       // Filter out group if it has no meaningful content
-      const hasTitle = node.title && node.title.trim() !== "";
+      const hasLabel = node.label && node.label.trim() !== "";
       const hasValue = node.value !== undefined;
       const hasDescription = node.description && node.description.trim() !== "";
       const hasPlaceholder = node.placeholder && node.placeholder.trim() !== "";
@@ -948,7 +965,7 @@ class AXTreeOverlay {
 
       // Keep the group only if it has some meaningful content or children (loaded or unloaded)
       if (
-        !hasTitle &&
+        !hasLabel &&
         !hasValue &&
         !hasDescription &&
         !hasPlaceholder &&
@@ -1018,18 +1035,18 @@ class AXTreeOverlay {
         }
         break;
 
-      case "TitleChanged":
-        // Update the node's title
-        (node as any).title = update.title;
+      case "LabelChanged":
+        // Update the node's label
+        (node as any).label = update.label;
         console.log(
-          `  🏷️  Title changed for ${update.element_id}:`,
-          update.title
+          `  🏷️  Label changed for ${update.element_id}:`,
+          update.label
         );
 
-        // Update title in DOM
-        const titleSpan = element.querySelector(".tree-title") as HTMLElement;
-        if (titleSpan) {
-          titleSpan.textContent = ` "${update.title}"`;
+        // Update label in DOM
+        const labelSpan = element.querySelector(".tree-label") as HTMLElement;
+        if (labelSpan) {
+          labelSpan.textContent = ` "${update.label}"`;
         }
         break;
 

@@ -24,7 +24,7 @@ export interface Window {
   w: number;
   h: number;
   focused: boolean;
-  process_id: number;
+  root?: AXNode; // Accessibility tree root (populated by backend when available)
 }
 
 // ============================================================================
@@ -145,7 +145,7 @@ export type ServerMessage =
 
 export type ElementUpdate =
   | { update_type: "ValueChanged"; element_id: string; value: AXValue }
-  | { update_type: "TitleChanged"; element_id: string; title: string }
+  | { update_type: "LabelChanged"; element_id: string; label: string }
   | { update_type: "ElementDestroyed"; element_id: string };
 
 // ============================================================================

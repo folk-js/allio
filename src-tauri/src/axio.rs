@@ -116,7 +116,7 @@ pub struct AXNode {
 
     // Content
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
+    pub label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<AXValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
