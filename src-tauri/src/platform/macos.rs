@@ -430,6 +430,30 @@ pub fn write_to_element_by_id(element_id: &str, text: &str) -> Result<(), String
     crate::element_registry::ElementRegistry::write(element_id, text)
 }
 
+/// Click/press a specific element (identified by element ID)
+/// Performs the AXPress action on the element
+pub fn click_element_by_id(element_id: &str) -> Result<(), String> {
+    use crate::element_registry::ElementRegistry;
+    use accessibility_sys::{kAXPressAction, AXUIElementPerformAction};
+    use core_foundation::base::TCFType;
+    use core_foundation::string::CFString;
+    
+    // Get the element from registry and perform press action
+    ElementRegistry::with_element(element_id, |element| {
+        let ax_element = element.ax_element();
+        let action = CFString::new(kAXPressAction);
+        
+        unsafe {
+            let result = AXUIElementPerformAction(ax_element.as_concrete_TypeRef(), action.as_concrete_TypeRef());
+            if result == 0 {
+                Ok(())
+            } else {
+                Err(format!("Failed to perform press action, error code: {}", result))
+            }
+        }
+    })?
+}
+
 /// Check if a role represents a writable element
 fn is_writable_role(role: &str) -> bool {
     matches!(

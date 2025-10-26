@@ -152,6 +152,7 @@ export interface AXNode {
 
   // Operations (set by AXIO when creating nodes)
   setValue?(text: string): Promise<void>;
+  click?(): Promise<void>;
   getChildren?(maxDepth?: number, maxChildren?: number): Promise<AXNode[]>;
 }
 
@@ -317,76 +318,103 @@ export class AXIO {
   // ============================================================================
 
   /**
-   * Get accessibility tree for a window by window ID
-   * Uses tree cache - if tree already fetched, returns cached version with stable IDs
-   * Otherwise fetches from backend and caches result
-   * All nodes have setValue() and getChildren() methods attached for easy operations
+   * Generic method to send a request and wait for a response
+   * Reduces boilerplate by centralizing Promise/listener/timeout logic
    */
-  async getTreeByWindowId(
-    windowId: string,
-    maxDepth: number = 50,
-    maxChildrenPerLevel: number = 2000
-  ): Promise<AXNode> {
-    // Check cache first
-    const cached = this.treeCache.get(windowId);
-    if (cached) {
-      console.log(`📦 Returning cached tree for window ${windowId}`);
-      return Promise.resolve(cached);
-    }
-
-    // Not cached - fetch from backend
-    console.log(`🌐 Fetching tree from backend for window ${windowId}`);
+  private async sendRequest<T>(
+    msgType: string,
+    data: Record<string, any>,
+    timeout: number = 5000
+  ): Promise<T> {
     return new Promise((resolve, reject) => {
-      const handler = (data: any) => {
+      const responseType = `${msgType}_response`;
+
+      const handler = (responseData: any) => {
         // Remove this specific handler
-        const listeners = this.listeners.get("accessibility_tree_response");
+        const listeners = this.listeners.get(responseType);
         if (listeners) {
           listeners.delete(handler);
         }
 
-        if (data.success && data.tree) {
-          // Attach methods to all nodes in the tree
-          const tree = this.attachNodeMethods(data.tree);
-
-          // Cache the tree for this window
-          this.treeCache.set(windowId, tree);
-          console.log(`💾 Cached tree for window ${windowId}`);
-
-          resolve(tree);
+        if (responseData.success) {
+          resolve(responseData as T);
         } else {
-          reject(new Error(data.error || "Failed to get tree"));
+          reject(new Error(responseData.error || "Request failed"));
         }
       };
 
       // Add temporary handler
-      if (!this.listeners.has("accessibility_tree_response")) {
-        this.listeners.set("accessibility_tree_response", new Set());
+      if (!this.listeners.has(responseType)) {
+        this.listeners.set(responseType, new Set());
       }
-      this.listeners.get("accessibility_tree_response")!.add(handler);
+      this.listeners.get(responseType)!.add(handler);
 
       // Send request
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.send(
-          JSON.stringify({
-            msg_type: "get_accessibility_tree",
-            window_id: windowId,
-            max_depth: maxDepth,
-            max_children_per_level: maxChildrenPerLevel,
-          })
-        );
+        this.ws.send(JSON.stringify({ msg_type: msgType, ...data }));
       } else {
         reject(new Error("WebSocket not connected"));
+        return;
       }
 
-      // Timeout after 10s
+      // Timeout
       setTimeout(() => {
-        const listeners = this.listeners.get("accessibility_tree_response");
+        const listeners = this.listeners.get(responseType);
         if (listeners) {
           listeners.delete(handler);
         }
-        reject(new Error("Timeout waiting for tree response"));
-      }, 10000);
+        reject(new Error(`Timeout waiting for ${msgType} response`));
+      }, timeout);
     });
+  }
+
+  /**
+   * Get the root accessibility node for a window by window ID
+   * Returns the cached root node (pushed by backend when window is focused)
+   * If not cached, waits for the backend to push it (with timeout)
+   * The root node has getChildren() method to fetch children on demand
+   */
+  async getRootNode(windowId: string, timeout: number = 5000): Promise<AXNode> {
+    // Check cache first
+    const cached = this.treeCache.get(windowId);
+    if (cached) {
+      console.log(`📦 Returning cached root for window ${windowId}`);
+      return Promise.resolve(cached);
+    }
+
+    // Not cached - wait for backend to push it
+    console.log(`⏳ Waiting for root node for window ${windowId}`);
+    return new Promise((resolve, reject) => {
+      const checkInterval = setInterval(() => {
+        const root = this.treeCache.get(windowId);
+        if (root) {
+          clearInterval(checkInterval);
+          resolve(root);
+        }
+      }, 100); // Check every 100ms
+
+      // Timeout
+      setTimeout(() => {
+        clearInterval(checkInterval);
+        reject(
+          new Error(`Timeout waiting for root node for window ${windowId}`)
+        );
+      }, timeout);
+    });
+  }
+
+  /**
+   * @deprecated Use getRootNode() instead. The backend now pushes root nodes automatically.
+   */
+  async getTreeByWindowId(
+    windowId: string,
+    maxDepth?: number,
+    maxChildrenPerLevel?: number
+  ): Promise<AXNode> {
+    console.warn(
+      "[AXIO] getTreeByWindowId is deprecated, use getRootNode() instead"
+    );
+    return this.getRootNode(windowId);
   }
 
   /**
@@ -396,6 +424,11 @@ export class AXIO {
     // Attach setValue method
     (node as any).setValue = async (text: string) => {
       return this.writeByElementId(node.id, text);
+    };
+
+    // Attach click method
+    (node as any).click = async () => {
+      return this.clickElement(node.id);
     };
 
     // Attach getChildren method
@@ -481,49 +514,14 @@ export class AXIO {
    * Write text to an element by element ID
    */
   async writeByElementId(elementId: string, text: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const handler = (data: any) => {
-        // Remove this specific handler
-        const listeners = this.listeners.get("accessibility_write_response");
-        if (listeners) {
-          listeners.delete(handler);
-        }
+    await this.sendRequest("write_to_element", { element_id: elementId, text });
+  }
 
-        if (data.success) {
-          resolve();
-        } else {
-          reject(new Error(data.error || "Failed to write"));
-        }
-      };
-
-      // Add temporary handler
-      if (!this.listeners.has("accessibility_write_response")) {
-        this.listeners.set("accessibility_write_response", new Set());
-      }
-      this.listeners.get("accessibility_write_response")!.add(handler);
-
-      // Send request
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        this.ws.send(
-          JSON.stringify({
-            msg_type: "write_to_element",
-            element_id: elementId,
-            text,
-          })
-        );
-      } else {
-        reject(new Error("WebSocket not connected"));
-      }
-
-      // Timeout after 5s
-      setTimeout(() => {
-        const listeners = this.listeners.get("accessibility_write_response");
-        if (listeners) {
-          listeners.delete(handler);
-        }
-        reject(new Error("Timeout waiting for write response"));
-      }, 5000);
-    });
+  /**
+   * Click/press an element by element ID
+   */
+  async clickElement(elementId: string): Promise<void> {
+    await this.sendRequest("click_element", { element_id: elementId });
   }
 
   /**
@@ -769,6 +767,19 @@ export class AXIO {
         const windows = message.windows as Window[];
         this.windows = windows;
         this.focused = windows.find((w: Window) => w.focused) || null;
+      }
+
+      // Handle window root updates (pushed from backend)
+      if (event === "window_root_update") {
+        const windowId = message.window_id;
+        const root = message.root;
+        if (windowId && root) {
+          // Attach methods to the root node
+          const rootWithMethods = this.attachNodeMethods(root);
+          // Cache the root node
+          this.treeCache.set(windowId, rootWithMethods);
+          console.log(`[AXIO] 📦 Cached root node for window ${windowId}`);
+        }
       }
 
       if (event) {

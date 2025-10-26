@@ -21,6 +21,24 @@ pub enum AXValue {
 }
 
 // ============================================================================
+// Element Updates (pushed from backend)
+// ============================================================================
+
+/// Update events for accessibility elements
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "update_type")]
+pub enum ElementUpdate {
+    /// Value changed (text, number, boolean)
+    ValueChanged { element_id: String, value: AXValue },
+
+    /// Title/label changed
+    TitleChanged { element_id: String, title: String },
+
+    /// Element was destroyed (no longer exists)
+    ElementDestroyed { element_id: String },
+}
+
+// ============================================================================
 // Geometry Types
 // ============================================================================
 
@@ -96,21 +114,6 @@ pub enum AXRole {
 // ============================================================================
 // Node Structure
 // ============================================================================
-
-/// Typed update events for accessibility elements
-/// Each variant represents a specific change to an element
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "update_type")]
-pub enum ElementUpdate {
-    /// Value changed (text, number, boolean)
-    ValueChanged { element_id: String, value: AXValue },
-
-    /// Title/label changed
-    TitleChanged { element_id: String, title: String },
-
-    /// Element was destroyed (no longer exists)
-    ElementDestroyed { element_id: String },
-}
 
 /// Core accessibility node
 ///
