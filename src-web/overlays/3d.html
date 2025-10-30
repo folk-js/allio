@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>3D AX Tree Visualization</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background: transparent;
+        overflow: hidden;
+      }
+
+      #scene {
+        position: absolute;
+        inset: 0;
+        transform-style: preserve-3d;
+        perspective: 1000px;
+        perspective-origin: center center;
+        /* Force 3D rendering context with a tiny rotation */
+        transform: rotateX(0.001deg);
+      }
+
+      .ax-node {
+        position: absolute;
+        border: 2px solid rgba(255, 255, 255, 0.6);
+        box-sizing: border-box;
+        transform-style: preserve-3d;
+        pointer-events: none;
+        will-change: transform;
+      }
+
+      .ax-node:hover {
+        border-color: rgba(255, 255, 255, 0.8);
+        box-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+      }
+
+      #stats {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: rgba(0, 0, 0, 0.85);
+        backdrop-filter: blur(10px);
+        padding: 12px 16px;
+        border-radius: 8px;
+        font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+        font-size: 12px;
+        color: #fff;
+        z-index: 10000;
+        pointer-events: auto;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+      }
+
+      #stats .stat-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        margin: 4px 0;
+      }
+
+      #stats .label {
+        color: #94a3b8;
+      }
+
+      #stats .value {
+        color: #4ade80;
+        font-weight: bold;
+      }
+
+      #error {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(255, 69, 58, 0.95);
+        color: white;
+        padding: 20px;
+        border-radius: 10px;
+        font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+        font-size: 14px;
+        max-width: 400px;
+        z-index: 10001;
+        display: none;
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="scene"></div>
+
+    <div id="stats">
+      <div class="stat-row">
+        <span class="label">Nodes:</span>
+        <span class="value" id="nodeCount">0</span>
+      </div>
+      <div class="stat-row">
+        <span class="label">Max Depth:</span>
+        <span class="value" id="maxDepth">0</span>
+      </div>
+      <div class="stat-row">
+        <span class="label">Window:</span>
+        <span class="value" id="windowTitle">None</span>
+      </div>
+    </div>
+
+    <div id="error"></div>
+
+    <script type="module">
+      // Import AXIO directly from the source
+      import { AXIO } from "../src/axio.ts";
+
+      // Configuration
+      const MAX_DEPTH = 50;
+      const MAX_NODES = 2000;
+      const COLOR_HUE = 190;
+      const THICKNESS = 100; // Space between layers
+
+      // State
+      let scene;
+      let axio;
+      let renderedElements = new Map(); // Map<nodeId, HTMLElement> to track rendered elements
+      let nodeMetadata = new Map(); // Map<nodeId, {depth, maxDepth, rootId, offsetX, offsetY}> to track node metadata
+      let currentWindowId = null; // Track current window to avoid rebuilding on moves
+      let rootPositions = new Map(); // Map<rootId, {x, y}> to track root element positions
+      let isBuilding = false; // Prevent concurrent builds
+
+      // Initialize
+      async function init() {
+        scene = document.getElementById("scene");
+        axio = new AXIO();
+
+        try {
+          await axio.connect();
+          console.log("[3D] Connected to AXIO");
+
+          // Listen for window updates (includes position changes)
+          axio.onWindowUpdate((windows) => {
+            const focused = windows.find((w) => w.focused);
+            if (focused) {
+              handleWindowUpdate(focused);
+            }
+          });
+
+          // Listen for focused window changes (actual focus switches)
+          axio.onFocusedWindowChange((focusedWindow) => {
+            if (focusedWindow) {
+              console.log("[3D] Focused window changed:", focusedWindow.title);
+              // Force rebuild on focus change
+              currentWindowId = null;
+              if (focusedWindow.root) {
+                buildScene(focusedWindow);
+              }
+            }
+          });
+
+          console.log("[3D] Waiting for focused window...");
+        } catch (error) {
+          showError(`Failed to connect: ${error.message}`);
+        }
+      }
+
+      // Calculate color based on depth - transparent at root, opaque at depth
+      function getColorByDepth(depth, maxDepth) {
+        // Start at 10% opacity, go to 80% opacity at max depth
+        const opacity = 0.1 + (depth / Math.max(maxDepth, 1)) * 0.7;
+        return `hsla(${COLOR_HUE}, 75%, 50%, ${opacity})`;
+      }
+
+      // Handle window updates - decide whether to rebuild or just update positions
+      function handleWindowUpdate(window) {
+        // If we don't have a root yet, wait for it
+        if (!window.root) {
+          return;
+        }
+
+        // Check if this is the same window
+        const isSameWindow = currentWindowId === window.id;
+
+        if (!isSameWindow) {
+          // Different window - rebuild
+          console.log("[3D] New window detected via update:", window.title);
+          buildScene(window);
+        } else if (renderedElements.size > 0) {
+          // Same window with existing elements - just update positions (no fetching!)
+          updateAllElementPositions(window.root);
+        } else {
+          // Same window but no elements yet - build
+          buildScene(window);
+        }
+
+        // Update window bounds tracking
+        if (window.bounds) {
+          currentWindowBounds = window.bounds;
+        }
+      }
+
+      // Update positions when root moves - offset all children
+      function updateAllElementPositions(rootNode) {
+        if (!rootNode || !rootNode.bounds) return;
+
+        const rootId = rootNode.id;
+        const oldPos = rootPositions.get(rootId);
+        const newPos = {
+          x: rootNode.bounds.position.x,
+          y: rootNode.bounds.position.y,
+        };
+
+        // Calculate offset
+        const offsetX = newPos.x - (oldPos ? oldPos.x : newPos.x);
+        const offsetY = newPos.y - (oldPos ? oldPos.y : newPos.y);
+
+        // Update root position tracking
+        rootPositions.set(rootId, newPos);
+
+        // Apply offset to all elements belonging to this root
+        for (const [nodeId, element] of renderedElements.entries()) {
+          const metadata = nodeMetadata.get(nodeId);
+          if (metadata && metadata.rootId === rootId) {
+            // Apply offset to current position
+            const currentLeft = parseFloat(element.style.left) || 0;
+            const currentTop = parseFloat(element.style.top) || 0;
+            element.style.left = `${currentLeft + offsetX}px`;
+            element.style.top = `${currentTop + offsetY}px`;
+          }
+        }
+      }
+
+      // Build the 3D scene from accessibility tree
+      async function buildScene(window) {
+        if (!window.root) {
+          console.log("[3D] No root node available");
+          return;
+        }
+
+        // Prevent concurrent builds
+        if (isBuilding) {
+          console.log("[3D] Build already in progress, skipping");
+          return;
+        }
+
+        isBuilding = true;
+
+        try {
+          // Check if this is a new window
+          const isNewWindow = currentWindowId !== window.id;
+
+          if (isNewWindow) {
+            console.log("[3D] Building scene for new window:", window.title);
+            currentWindowId = window.id;
+
+            // Clear all elements for new window
+            for (const element of renderedElements.values()) {
+              element.remove();
+            }
+            renderedElements.clear();
+            nodeMetadata.clear();
+            rootPositions.clear();
+          } else {
+            console.log(
+              "[3D] Rebuilding scene for existing window:",
+              window.title
+            );
+          }
+
+          // Update stats
+          document.getElementById("windowTitle").textContent =
+            window.title || "Unknown";
+
+          // Track which nodes are still in the tree and max depth
+          const seenNodes = new Set();
+          const depthTracker = { max: 0, count: 0 };
+
+          // Store root position
+          if (window.root.bounds) {
+            rootPositions.set(window.root.id, {
+              x: window.root.bounds.position.x,
+              y: window.root.bounds.position.y,
+            });
+          }
+
+          // Traverse tree and create/update elements
+          await traverseAndRender(
+            window.root,
+            0,
+            seenNodes,
+            depthTracker,
+            window.root.id,
+            window.root.bounds
+          );
+
+          // Remove elements that are no longer in the tree
+          for (const [nodeId, element] of renderedElements.entries()) {
+            if (!seenNodes.has(nodeId)) {
+              element.remove();
+              renderedElements.delete(nodeId);
+              nodeMetadata.delete(nodeId);
+            }
+          }
+
+          // Update final stats
+          updateStats(renderedElements.size, depthTracker.max);
+
+          console.log(
+            `[3D] Scene complete: ${renderedElements.size} nodes, depth ${depthTracker.max}`
+          );
+        } catch (error) {
+          showError(`Failed to build scene: ${error.message}`);
+        } finally {
+          isBuilding = false;
+        }
+      }
+
+      // Recursively traverse the AX tree and render nodes
+      async function traverseAndRender(
+        node,
+        depth,
+        seenNodes,
+        depthTracker,
+        rootId,
+        rootBounds
+      ) {
+        // Stop if we've hit limits
+        if (depth >= MAX_DEPTH || depthTracker.count >= MAX_NODES) {
+          return;
+        }
+
+        // Mark this node as seen
+        seenNodes.add(node.id);
+
+        // Update max depth
+        depthTracker.max = Math.max(depthTracker.max, depth);
+
+        // Create or update visual element for this node if it has bounds
+        if (node.bounds) {
+          createOrUpdateNodeElement(
+            node,
+            depth,
+            depthTracker.max,
+            rootId,
+            rootBounds
+          );
+          depthTracker.count++;
+        }
+
+        // Load and traverse children if available
+        if (node.children_count > 0) {
+          try {
+            // Get children (limit depth to 1 to load level by level)
+            const children = await node.getChildren(1, MAX_NODES);
+
+            // Recursively render children
+            for (const child of children) {
+              await traverseAndRender(
+                child,
+                depth + 1,
+                seenNodes,
+                depthTracker,
+                rootId,
+                rootBounds
+              );
+
+              // Check if we hit node limit
+              if (depthTracker.count >= MAX_NODES) {
+                console.log("[3D] Hit max nodes limit");
+                return;
+              }
+            }
+          } catch (error) {
+            console.warn(
+              `[3D] Failed to get children for node ${node.id}:`,
+              error
+            );
+          }
+        }
+      }
+
+      // Create or update a visual DOM element for an AX node
+      function createOrUpdateNodeElement(
+        node,
+        depth,
+        maxDepth,
+        rootId,
+        rootBounds
+      ) {
+        const { position, size } = node.bounds;
+
+        // Store metadata for this node including rootId
+        nodeMetadata.set(node.id, {
+          depth,
+          maxDepth,
+          rootId,
+        });
+
+        // Check if element already exists
+        let element = renderedElements.get(node.id);
+        const isNewElement = !element;
+
+        if (isNewElement) {
+          // Create new element
+          element = document.createElement("div");
+          element.className = "ax-node";
+          renderedElements.set(node.id, element);
+        }
+
+        // Use ABSOLUTE position - all elements in flat structure
+        element.style.left = `${position.x}px`;
+        element.style.top = `${position.y}px`;
+        element.style.width = `${size.width}px`;
+        element.style.height = `${size.height}px`;
+
+        // 3D transform - move forward in Z based on depth
+        const zValue = depth * THICKNESS;
+        element.style.transform = `translate3d(0, 0, ${zValue}px)`;
+
+        // Debug: Log some examples
+        if (isNewElement && depth > 0 && depth <= 3) {
+          console.log(
+            `[3D] Created element at depth ${depth}, Z=${zValue}px, role=${node.role}`
+          );
+        }
+
+        // Color based on depth (use the max depth we know about)
+        element.style.backgroundColor = getColorByDepth(
+          depth,
+          Math.max(maxDepth, 1)
+        );
+
+        // Add tooltip with node info
+        const tooltip = [];
+        if (node.role) tooltip.push(`Role: ${node.role}`);
+        if (node.label) tooltip.push(`Label: ${node.label}`);
+        if (node.value) {
+          const val =
+            typeof node.value === "object" ? node.value.value : node.value;
+          tooltip.push(`Value: ${val}`);
+        }
+        element.title = tooltip.join("\n") || "No info";
+
+        // Always append to scene (flat structure for proper 3D perspective)
+        if (isNewElement) {
+          scene.appendChild(element);
+        }
+
+        return element;
+      }
+
+      // Update statistics display
+      function updateStats(nodeCount, maxDepth) {
+        document.getElementById("nodeCount").textContent = nodeCount;
+        document.getElementById("maxDepth").textContent = maxDepth;
+      }
+
+      // Show error message
+      function showError(message) {
+        const errorDiv = document.getElementById("error");
+        errorDiv.textContent = message;
+        errorDiv.style.display = "block";
+        console.error("[3D]", message);
+      }
+
+      // Start the application
+      init();
+    </script>
+  </body>
+</html>
