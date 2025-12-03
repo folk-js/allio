@@ -9,6 +9,7 @@ use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use crate::axio::WindowId;
 use crate::windows::WindowInfo;
 
 /// Cached window data with AX element
@@ -23,7 +24,7 @@ pub struct ManagedWindow {
 static WINDOW_CACHE: Lazy<Mutex<WindowCache>> = Lazy::new(|| Mutex::new(WindowCache::new()));
 
 struct WindowCache {
-    windows: HashMap<String, ManagedWindow>, // window_id -> ManagedWindow
+    windows: HashMap<WindowId, ManagedWindow>, // window_id -> ManagedWindow
 }
 
 impl WindowCache {
@@ -43,7 +44,7 @@ impl WindowManager {
     /// Returns: (current_windows, added_ids, removed_ids)
     pub fn update_windows(
         new_windows: Vec<WindowInfo>,
-    ) -> (Vec<ManagedWindow>, Vec<String>, Vec<String>) {
+    ) -> (Vec<ManagedWindow>, Vec<WindowId>, Vec<WindowId>) {
         let mut cache = WINDOW_CACHE.lock().unwrap();
 
         // Track which windows are new/removed
@@ -52,7 +53,7 @@ impl WindowManager {
 
         // Build set of current window IDs
         let new_ids: std::collections::HashSet<_> =
-            new_windows.iter().map(|w| w.id.clone()).collect();
+            new_windows.iter().map(|w| WindowId::new(&w.id)).collect();
 
         // Find removed windows
         for existing_id in cache.windows.keys() {
@@ -72,7 +73,7 @@ impl WindowManager {
         // Process new/updated windows
         let mut result = Vec::new();
         for window_info in new_windows {
-            let window_id = window_info.id.clone();
+            let window_id = WindowId::new(&window_info.id);
 
             if let Some(existing) = cache.windows.get_mut(&window_id) {
                 // Existing window - update info
@@ -186,7 +187,7 @@ impl WindowManager {
     }
 
     /// Get a managed window by ID
-    pub fn get_window(window_id: &str) -> Option<ManagedWindow> {
+    pub fn get_window(window_id: &WindowId) -> Option<ManagedWindow> {
         let cache = WINDOW_CACHE.lock().unwrap();
         cache.windows.get(window_id).cloned()
     }

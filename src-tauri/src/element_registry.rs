@@ -16,7 +16,8 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::ui_element::UIElement;
+use crate::axio::{ElementId, WindowId};
+use crate::ui_element::{ObserverContext, UIElement};
 
 /// Check if two AXUIElements refer to the same UI element using CFEqual
 fn ax_elements_equal(
@@ -41,21 +42,21 @@ pub struct ElementRegistry {
     // Primary Storage
     // ============================================================================
     /// Map of element_id -> UIElement
-    elements: HashMap<String, UIElement>,
+    elements: HashMap<ElementId, UIElement>,
 
     // ============================================================================
     // Indices for Fast Lookup
     // ============================================================================
     /// Map of window_id -> Set<element_id>
     /// Used to find all elements in a window and for cleanup
-    window_to_elements: HashMap<String, HashSet<String>>,
+    window_to_elements: HashMap<WindowId, HashSet<ElementId>>,
 
     // ============================================================================
     // AXObservers for Watching
     // ============================================================================
     /// Map of window_id -> AXObserverRef
     /// One observer per window (keyed by window_id, not PID, for consistency)
-    observers: HashMap<String, AXObserverRef>,
+    observers: HashMap<WindowId, AXObserverRef>,
 
     /// Broadcast sender for notifications (shared across all watches)
     sender: Arc<broadcast::Sender<String>>,
@@ -101,11 +102,11 @@ impl ElementRegistry {
     /// Called by platform/macos.rs during tree building.
     pub fn register(
         ax_element: accessibility::AXUIElement,
-        window_id: String,
+        window_id: WindowId,
         pid: u32,
-        parent_id: Option<String>,
+        parent_id: Option<ElementId>,
         role: String,
-    ) -> String {
+    ) -> ElementId {
         Self::with(|registry| {
             // Check if an equivalent element already exists for this window
             if let Some(window_elements) = registry.window_to_elements.get(&window_id) {
@@ -119,7 +120,7 @@ impl ElementRegistry {
             }
 
             // No equivalent element found - create new one
-            let id = Uuid::new_v4().to_string();
+            let id = ElementId::new(Uuid::new_v4().to_string());
 
             let ui_element = UIElement::new(
                 id.clone(),
@@ -137,7 +138,7 @@ impl ElementRegistry {
             registry
                 .window_to_elements
                 .entry(window_id)
-                .or_insert_with(HashSet::new)
+                .or_default()
                 .insert(id.clone());
 
             id
@@ -145,15 +146,16 @@ impl ElementRegistry {
     }
 
     // ============================================================================
-    // Lookup
+    // Lookup (API surface - may not be used internally yet)
     // ============================================================================
 
     /// Get an element by its ID (immutable)
-    pub fn get(element_id: &str) -> Option<String> {
+    #[allow(dead_code)]
+    pub fn get(element_id: &ElementId) -> Option<ElementId> {
         // Returns element_id if it exists (for checking existence)
         Self::with(|registry| {
             if registry.elements.contains_key(element_id) {
-                Some(element_id.to_string())
+                Some(element_id.clone())
             } else {
                 None
             }
@@ -161,7 +163,7 @@ impl ElementRegistry {
     }
 
     /// Execute an operation with an element (immutable access)
-    pub fn with_element<F, R>(element_id: &str, f: F) -> Result<R, String>
+    pub fn with_element<F, R>(element_id: &ElementId, f: F) -> Result<R, String>
     where
         F: FnOnce(&UIElement) -> R,
     {
@@ -175,7 +177,8 @@ impl ElementRegistry {
     }
 
     /// Execute an operation with an element (mutable access)
-    pub fn with_element_mut<F, R>(element_id: &str, f: F) -> Result<R, String>
+    #[allow(dead_code)]
+    pub fn with_element_mut<F, R>(element_id: &ElementId, f: F) -> Result<R, String>
     where
         F: FnOnce(&mut UIElement) -> R,
     {
@@ -189,7 +192,8 @@ impl ElementRegistry {
     }
 
     /// Find all elements belonging to a window
-    pub fn find_by_window(window_id: &str) -> Vec<String> {
+    #[allow(dead_code)]
+    pub fn find_by_window(window_id: &WindowId) -> Vec<ElementId> {
         Self::with(|registry| {
             registry
                 .window_to_elements
@@ -200,7 +204,8 @@ impl ElementRegistry {
     }
 
     /// Check if an element exists
-    pub fn contains(element_id: &str) -> bool {
+    #[allow(dead_code)]
+    pub fn contains(element_id: &ElementId) -> bool {
         Self::with(|registry| registry.elements.contains_key(element_id))
     }
 
@@ -209,10 +214,10 @@ impl ElementRegistry {
     // ============================================================================
 
     /// Remove a single element (e.g., when it's destroyed)
-    pub fn remove_element(element_id: &str) {
+    pub fn remove_element(element_id: &ElementId) {
         Self::with(|registry| {
             if let Some(element) = registry.elements.remove(element_id) {
-                let window_id = element.window_id().to_string();
+                let window_id = element.window_id().clone();
 
                 // Unwatch if observer exists
                 if let Some(&observer) = registry.observers.get(&window_id) {
@@ -234,7 +239,7 @@ impl ElementRegistry {
     /// - Elements are unwatched (notifications removed)
     /// - Observer is cleaned up
     /// - Memory is freed
-    pub fn remove_window_elements(window_id: &str) {
+    pub fn remove_window_elements(window_id: &WindowId) {
         Self::with(|registry| {
             // Get all element IDs for this window
             if let Some(element_ids) = registry.window_to_elements.remove(window_id) {
@@ -262,19 +267,19 @@ impl ElementRegistry {
     // ============================================================================
 
     /// Write text to an element
-    pub fn write(element_id: &str, text: &str) -> Result<(), String> {
+    pub fn write(element_id: &ElementId, text: &str) -> Result<(), String> {
         Self::with_element(element_id, |element| element.set_value(text))?
     }
 
     /// Watch an element for changes
-    pub fn watch(element_id: &str) -> Result<(), String> {
+    pub fn watch(element_id: &ElementId) -> Result<(), String> {
         Self::with(|registry| {
             let element = registry
                 .elements
                 .get(element_id)
                 .ok_or_else(|| format!("Element {} not found", element_id))?;
 
-            let window_id = element.window_id().to_string();
+            let window_id = element.window_id().clone();
             let pid = element.pid();
 
             // Get or create observer for this window
@@ -325,11 +330,11 @@ impl ElementRegistry {
     }
 
     /// Unwatch an element
-    pub fn unwatch(element_id: &str) {
+    pub fn unwatch(element_id: &ElementId) {
         Self::with(|registry| {
             if let Some(element) = registry.elements.get(element_id) {
-                let window_id = element.window_id();
-                if let Some(&observer) = registry.observers.get(window_id) {
+                let window_id = element.window_id().clone();
+                if let Some(&observer) = registry.observers.get(&window_id) {
                     if let Some(element) = registry.elements.get_mut(element_id) {
                         element.unwatch(observer);
                     }
@@ -339,13 +344,18 @@ impl ElementRegistry {
     }
 
     /// Get children of an element (builds tree)
+    #[allow(dead_code)]
     pub fn get_children(
-        element_id: &str,
+        element_id: &ElementId,
         max_depth: usize,
         max_children: usize,
     ) -> Result<Vec<crate::axio::AXNode>, String> {
         Self::with_element(element_id, |_element| {
-            crate::platform::macos::get_children_by_element_id(element_id, max_depth, max_children)
+            crate::platform::macos::get_children_by_element_id(
+                element_id.as_str(),
+                max_depth,
+                max_children,
+            )
         })?
     }
 }
@@ -368,14 +378,7 @@ unsafe extern "C" fn observer_callback(
         "AXObserver callback received null refcon - this is a bug in AXIO"
     );
 
-    // Extract context (defined in ui_element.rs watch())
-    #[derive(Clone)]
-    #[repr(C)]
-    struct ObserverContext {
-        element_id: String,
-        sender: Arc<broadcast::Sender<String>>,
-    }
-
+    // Extract context (shared type from ui_element.rs)
     let context = &*(refcon as *const ObserverContext);
     let notif_cfstring = CFString::wrap_under_get_rule(notification);
     let notification_name = notif_cfstring.to_string();
@@ -394,7 +397,7 @@ unsafe extern "C" fn observer_callback(
 
 /// Handle a notification by extracting data and broadcasting typed updates
 fn handle_notification(
-    element_id: &str,
+    element_id: &ElementId,
     notification: &str,
     element: &accessibility::AXUIElement,
     sender: &Arc<broadcast::Sender<String>>,

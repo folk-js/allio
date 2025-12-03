@@ -1,10 +1,131 @@
-/**
- * AXIO - Accessibility I/O Layer (Rust)
- *
- * Core types for the AXIO system, mirroring TypeScript types exactly.
- * Based on a principled subset of ARIA roles.
- */
+//! AXIO - Accessibility I/O Layer (Rust)
+//!
+//! Core types for the AXIO system, mirroring TypeScript types exactly.
+//! Based on a principled subset of ARIA roles.
+
 use serde::{Deserialize, Serialize};
+use std::fmt;
+
+// ============================================================================
+// Identity Types (Newtypes for type safety)
+// ============================================================================
+
+/// Unique identifier for an accessibility element
+///
+/// Wraps a UUID string. Using a newtype prevents accidentally passing
+/// a WindowId where an ElementId is expected.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ElementId(pub String);
+
+impl ElementId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ElementId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<String> for ElementId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for ElementId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+/// Unique identifier for a window
+///
+/// Wraps an ID string from x-win. Using a newtype prevents accidentally
+/// passing an ElementId where a WindowId is expected.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct WindowId(pub String);
+
+#[allow(dead_code)]
+impl WindowId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for WindowId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<String> for WindowId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for WindowId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+// ============================================================================
+// Error Types
+// ============================================================================
+
+/// Errors that can occur in AXIO operations
+#[derive(Debug, thiserror::Error)]
+#[allow(dead_code)] // Not all variants used yet
+pub enum AxioError {
+    /// Element with given ID was not found in the registry
+    #[error("Element not found: {0}")]
+    ElementNotFound(ElementId),
+
+    /// Window with given ID was not found
+    #[error("Window not found: {0}")]
+    WindowNotFound(WindowId),
+
+    /// An accessibility API operation failed
+    #[error("Accessibility operation failed: {0}")]
+    AccessibilityError(String),
+
+    /// Failed to create or manage an AXObserver
+    #[error("Observer error: {0}")]
+    ObserverError(String),
+
+    /// Element doesn't support the requested operation
+    #[error("Operation not supported: {0}")]
+    NotSupported(String),
+
+    /// Internal error (should not happen in normal operation)
+    #[error("Internal error: {0}")]
+    Internal(String),
+}
+
+#[allow(dead_code)]
+impl AxioError {
+    /// Create an AccessibilityError from any error type
+    pub fn ax<E: std::error::Error>(e: E) -> Self {
+        Self::AccessibilityError(e.to_string())
+    }
+}
+
+/// Result type for AXIO operations
+pub type AxioResult<T> = Result<T, AxioError>;
 
 // ============================================================================
 // Value Types
@@ -113,7 +234,7 @@ pub struct AXNode {
     // IDENTITY (always present)
     // ══════════════════════════════════════════════════════════════════
     /// UUID from ElementRegistry (for direct lookup)
-    pub id: String,
+    pub id: ElementId,
 
     /// ARIA-style role
     pub role: AXRole,
@@ -123,7 +244,7 @@ pub struct AXNode {
     // ══════════════════════════════════════════════════════════════════
     /// UUID of parent element (None for root or if not fetched)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<String>,
+    pub parent_id: Option<ElementId>,
 
     /// Platform-specific subtype (or native role name for Unknown)
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -10,7 +10,16 @@ use std::ffi::c_void;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
-use crate::axio::AXValue;
+use crate::axio::{AXValue, ElementId, WindowId};
+
+/// Context passed to AX observer callbacks
+/// Must match the definition used in element_registry.rs observer_callback
+#[derive(Clone)]
+#[repr(C)]
+pub struct ObserverContext {
+    pub element_id: ElementId,
+    pub sender: Arc<broadcast::Sender<String>>,
+}
 
 /// Watch state for an element (merged from NodeWatcher)
 pub struct WatchState {
@@ -26,13 +35,14 @@ pub struct UIElement {
     // Identity
     // ============================================================================
     /// Unique UUID for this element (unchanging)
-    id: String,
+    id: ElementId,
 
     /// Which window this element belongs to
-    window_id: String,
+    window_id: WindowId,
 
     /// Parent element ID (None for root)
-    parent_id: Option<String>,
+    #[allow(dead_code)]
+    parent_id: Option<ElementId>,
 
     // ============================================================================
     // macOS References (internal)
@@ -67,9 +77,9 @@ impl UIElement {
 
     /// Create a new UI element
     pub fn new(
-        id: String,
-        window_id: String,
-        parent_id: Option<String>,
+        id: ElementId,
+        window_id: WindowId,
+        parent_id: Option<ElementId>,
         ax_element: AXUIElement,
         pid: u32,
         role: String,
@@ -90,18 +100,20 @@ impl UIElement {
     // ============================================================================
 
     /// Get the element's unique ID
-    pub fn id(&self) -> &str {
+    #[allow(dead_code)]
+    pub fn id(&self) -> &ElementId {
         &self.id
     }
 
     /// Get the window ID this element belongs to
-    pub fn window_id(&self) -> &str {
+    pub fn window_id(&self) -> &WindowId {
         &self.window_id
     }
 
     /// Get the parent element ID (None for root)
-    pub fn parent_id(&self) -> Option<&str> {
-        self.parent_id.as_deref()
+    #[allow(dead_code)]
+    pub fn parent_id(&self) -> Option<&ElementId> {
+        self.parent_id.as_ref()
     }
 
     /// Get the element's PID
@@ -110,6 +122,7 @@ impl UIElement {
     }
 
     /// Get the element's role
+    #[allow(dead_code)]
     pub fn role(&self) -> &str {
         &self.role
     }
@@ -120,6 +133,7 @@ impl UIElement {
     }
 
     /// Check if this element is currently being watched
+    #[allow(dead_code)]
     pub fn is_watched(&self) -> bool {
         self.watch_state.is_some()
     }
@@ -129,6 +143,7 @@ impl UIElement {
     // ============================================================================
 
     /// Get the current value of this element
+    #[allow(dead_code)]
     pub fn get_value(&self) -> Result<AXValue, String> {
         use accessibility::AXAttribute;
 
@@ -146,6 +161,7 @@ impl UIElement {
     ///
     /// This delegates to platform-specific conversion but uses this element's metadata.
     /// If load_children is true, children will be loaded up to max_depth.
+    #[allow(dead_code)]
     pub fn to_axnode(
         &self,
         load_children: bool,
@@ -191,6 +207,7 @@ impl UIElement {
     }
 
     /// Call an accessibility action on this element
+    #[allow(dead_code)]
     pub fn call_action(&self, _action: &str) -> Result<(), String> {
         // TODO: Implement action calls
         // The accessibility crate doesn't have a direct perform_action method
@@ -236,13 +253,7 @@ impl UIElement {
             return Ok(());
         }
 
-        // Create context for this specific element
-        #[derive(Clone)]
-        struct ObserverContext {
-            element_id: String,
-            sender: Arc<broadcast::Sender<String>>,
-        }
-
+        // Create context for this specific element (uses shared ObserverContext type)
         let context = Box::new(ObserverContext {
             element_id: self.id.clone(),
             sender: sender.clone(),

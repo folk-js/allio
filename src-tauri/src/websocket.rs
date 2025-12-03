@@ -12,7 +12,7 @@ use tauri::Manager;
 use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::platform::{get_children_by_element_id, write_to_element_by_id};
+use crate::axio::ElementId;
 use crate::protocol::{ClientMessage, ServerMessage};
 use crate::windows::WindowInfo;
 use std::sync::Arc;
@@ -169,9 +169,10 @@ async fn handle_client_message(
     match client_msg {
         ClientMessage::WriteToElement(req) => {
             let request_id = req.request_id;
-            let (success, error) = match write_to_element_by_id(&req.element_id, &req.text) {
+            let element_id = ElementId::new(&req.element_id);
+            let (success, error) = match crate::api::write(&element_id, &req.text) {
                 Ok(_) => (true, None),
-                Err(e) => (false, Some(e)),
+                Err(e) => (false, Some(e.to_string())),
             };
             let response = crate::protocol::write_to_element::Response {
                 request_id,
@@ -186,9 +187,10 @@ async fn handle_client_message(
 
         ClientMessage::ClickElement(req) => {
             let request_id = req.request_id;
-            let (success, error) = match crate::platform::click_element_by_id(&req.element_id) {
+            let element_id = ElementId::new(&req.element_id);
+            let (success, error) = match crate::api::click(&element_id) {
                 Ok(_) => (true, None),
-                Err(e) => (false, Some(e)),
+                Err(e) => (false, Some(e.to_string())),
             };
             let response = crate::protocol::click_element::Response {
                 request_id,
@@ -203,14 +205,12 @@ async fn handle_client_message(
 
         ClientMessage::GetChildren(req) => {
             let request_id = req.request_id;
-            let (success, children, error) = match get_children_by_element_id(
-                &req.element_id,
-                req.max_depth,
-                req.max_children_per_level,
-            ) {
-                Ok(children) => (true, Some(children), None),
-                Err(e) => (false, None, Some(e)),
-            };
+            let element_id = ElementId::new(&req.element_id);
+            let (success, children, error) =
+                match crate::api::tree(&element_id, req.max_depth, req.max_children_per_level) {
+                    Ok(children) => (true, Some(children), None),
+                    Err(e) => (false, None, Some(e.to_string())),
+                };
             let response = crate::protocol::get_children::Response {
                 request_id,
                 success,
@@ -245,11 +245,11 @@ async fn handle_client_message(
         }
 
         ClientMessage::WatchNode(req) => {
-            use crate::element_registry::ElementRegistry;
             let request_id = req.request_id;
-            let (success, error) = match ElementRegistry::watch(&req.element_id) {
+            let element_id = ElementId::new(&req.element_id);
+            let (success, error) = match crate::api::watch(&element_id) {
                 Ok(_) => (true, None),
-                Err(e) => (false, Some(e)),
+                Err(e) => (false, Some(e.to_string())),
             };
             let response = crate::protocol::watch_node::Response {
                 request_id,
@@ -264,8 +264,8 @@ async fn handle_client_message(
         }
 
         ClientMessage::UnwatchNode(req) => {
-            use crate::element_registry::ElementRegistry;
-            ElementRegistry::unwatch(&req.element_id);
+            let element_id = ElementId::new(&req.element_id);
+            crate::api::unwatch(&element_id);
 
             let response = crate::protocol::unwatch_node::Response {
                 request_id: req.request_id,
@@ -278,11 +278,10 @@ async fn handle_client_message(
 
         ClientMessage::GetElementAtPosition(req) => {
             let request_id = req.request_id;
-            let (success, element, error) =
-                match crate::platform::get_element_at_position(req.x, req.y) {
-                    Ok(element) => (true, Some(element), None),
-                    Err(e) => (false, None, Some(e)),
-                };
+            let (success, element, error) = match crate::api::element_at(req.x, req.y) {
+                Ok(element) => (true, Some(element), None),
+                Err(e) => (false, None, Some(e.to_string())),
+            };
             let response = crate::protocol::get_element_at_position::Response {
                 request_id,
                 success,

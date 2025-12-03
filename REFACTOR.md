@@ -954,11 +954,14 @@ pub struct Element {
 
 ### Phase 1: Core Refactoring (in place)
 
-1. ~~**Implement Element type** - single type with Option fields as decided~~ ✓ Done
-2. **Instance-based state** - remove global statics, `Axio::new()` returns owned instance
-3. **Clear threading model** - start with `!Send` (single-threaded), document constraints
-4. **Push + pull pattern** - subscribe to AX notifications, on-demand getters
-5. ~~**Protocol updates** - add request IDs for correlation~~ ✓ Done
+1. ~~**Implement Element type** - single type with Option fields~~ ✓ Done
+2. ~~**Protocol updates** - add request IDs for correlation~~ ✓ Done
+3. ~~**Fix duplicate ObserverContext**~~ ✓ Done - shared type in ui_element.rs
+4. ~~**Add newtype IDs**~~ ✓ Done - `ElementId` and `WindowId` for type safety
+5. ~~**Add AxioError enum**~~ ✓ Done - proper error handling with thiserror
+6. ~~**Create api.rs facade**~~ ✓ Done - clean public API module
+7. **Migrate internals to new types** - use ElementId/WindowId/AxioError throughout
+8. **Push + pull pattern** - subscribe to AX notifications, on-demand getters
 
 ### Phase 2: TypeScript Client
 

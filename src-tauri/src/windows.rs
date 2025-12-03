@@ -18,6 +18,7 @@ use core_graphics::display::{
     CGDirectDisplayID, CGDisplayPixelsHigh, CGDisplayPixelsWide, CGMainDisplayID,
 };
 
+use crate::axio::WindowId;
 use crate::websocket::WebSocketState;
 
 // Constants - optimized polling rate
@@ -235,8 +236,9 @@ pub fn window_polling_loop(ws_state: WebSocketState) {
                 // Broadcast root node for focused window
                 if let Some(focused_window) = current_windows.iter().find(|w| w.focused) {
                     // Get the root AX node for this window
+                    let window_id = WindowId::new(&focused_window.id);
                     if let Ok(root_node) = crate::platform::get_ax_tree_by_window_id(
-                        &focused_window.id,
+                        &window_id,
                         1,     // Just the root, no children
                         0,     // No children
                         false, // Don't load full tree

@@ -308,6 +308,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-shell",
+ "thiserror 1.0.69",
  "tokio",
  "tower-http 0.5.2",
  "uuid",

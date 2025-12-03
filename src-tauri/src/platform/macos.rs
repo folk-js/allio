@@ -9,7 +9,7 @@ use accessibility_sys::{kAXPositionAttribute, kAXSizeAttribute};
 use core_foundation::base::TCFType;
 use core_foundation::string::CFString;
 
-use crate::axio::{AXNode, AXRole, AXValue, Bounds, Position, Size};
+use crate::axio::{AXNode, AXRole, AXValue, Bounds, ElementId, Position, Size, WindowId};
 
 /// Convert macOS AXUIElement to AXIO AXNode
 ///
@@ -21,9 +21,9 @@ use crate::axio::{AXNode, AXRole, AXValue, Bounds, Position, Size};
 /// If `load_children` is false, children_count is populated but children array is empty.
 pub fn element_to_axnode(
     element: &AXUIElement,
-    window_id: String,
+    window_id: WindowId,
     pid: u32,
-    parent_id: Option<String>,
+    parent_id: Option<ElementId>,
     depth: usize,
     max_depth: usize,
     max_children_per_level: usize,
@@ -151,7 +151,7 @@ pub fn element_to_axnode(
     };
 
     Some(AXNode {
-        id: element_id, // UUID from ElementRegistry
+        id: element_id,
         parent_id,
         role,
         subrole,
@@ -249,9 +249,9 @@ fn get_element_bounds(element: &AXUIElement) -> Option<Bounds> {
 /// Get children of an element, recursively converting to AXNode
 fn get_element_children(
     element: &AXUIElement,
-    window_id: String,
+    window_id: WindowId,
     pid: u32,
-    parent_id: Option<String>,
+    parent_id: Option<ElementId>,
     depth: usize,
     max_depth: usize,
     max_children_per_level: usize,
@@ -336,7 +336,7 @@ pub fn get_window_elements(pid: u32) -> Result<Vec<AXUIElement>, String> {
 /// The window element is the correct root for a window's accessibility tree.
 pub fn get_ax_tree_from_element(
     window_element: &AXUIElement,
-    window_id: String,
+    window_id: WindowId,
     pid: u32,
     max_depth: usize,
     max_children_per_level: usize,
@@ -359,7 +359,7 @@ pub fn get_ax_tree_from_element(
 ///
 /// This is the preferred method - looks up the window in the cache and uses its element.
 pub fn get_ax_tree_by_window_id(
-    window_id: &str,
+    window_id: &WindowId,
     max_depth: usize,
     max_children_per_level: usize,
     load_children: bool,
@@ -378,7 +378,7 @@ pub fn get_ax_tree_by_window_id(
     // Build tree from the window element (not app element!)
     get_ax_tree_from_element(
         &window_element,
-        window_id.to_string(),
+        window_id.clone(),
         managed_window.info.process_id,
         max_depth,
         max_children_per_level,
@@ -397,11 +397,13 @@ pub fn get_children_by_element_id(
 ) -> Result<Vec<AXNode>, String> {
     use crate::element_registry::ElementRegistry;
 
+    let element_id = ElementId::new(element_id);
+
     // Get the window_id and pid from the element
-    let (ax_element, window_id, pid) = ElementRegistry::with_element(element_id, |element| {
+    let (ax_element, window_id, pid) = ElementRegistry::with_element(&element_id, |element| {
         (
             element.ax_element().clone(),
-            element.window_id().to_string(),
+            element.window_id().clone(),
             element.pid(),
         )
     })?;
@@ -412,20 +414,14 @@ pub fn get_children_by_element_id(
         &ax_element,
         window_id,
         pid,
-        Some(element_id.to_string()), // Pass element_id as parent_id
-        0,                            // Start depth at 0 for children
+        Some(element_id), // Pass element_id as parent_id
+        0,                // Start depth at 0 for children
         max_depth,
         max_children_per_level,
         max_depth > 1, // Only load grandchildren if max_depth > 1
     );
 
     Ok(children)
-}
-
-/// Write text to a specific element (identified by element ID)
-pub fn write_to_element_by_id(element_id: &str, text: &str) -> Result<(), String> {
-    // Delegate to ElementRegistry, which delegates to UIElement
-    crate::element_registry::ElementRegistry::write(element_id, text)
 }
 
 /// Click/press a specific element (identified by element ID)
@@ -436,8 +432,10 @@ pub fn click_element_by_id(element_id: &str) -> Result<(), String> {
     use core_foundation::base::TCFType;
     use core_foundation::string::CFString;
 
+    let element_id = ElementId::new(element_id);
+
     // Get the element from registry and perform press action
-    ElementRegistry::with_element(element_id, |element| {
+    ElementRegistry::with_element(&element_id, |element| {
         let ax_element = element.ax_element();
         let action = CFString::new(kAXPressAction);
 
@@ -506,8 +504,9 @@ pub fn get_element_at_position(x: f64, y: f64) -> Result<AXNode, String> {
         element = find_leafmost_element_at_position(&element, x, y);
 
         // Get the actual window this element belongs to
-        let window_id = get_window_id_for_element(&element)
+        let window_id_str = get_window_id_for_element(&element)
             .unwrap_or_else(|| format!("orphan-{}-{}", pid, uuid::Uuid::new_v4()));
+        let window_id = WindowId::new(window_id_str);
 
         // Convert to AXNode with the actual or unique window_id
         element_to_axnode(
