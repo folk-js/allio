@@ -119,23 +119,11 @@ Frontend can request "refresh bounds for dirty elements in viewport"
 Backend batches AX queries for efficiency
 ```
 
-### Current Thinking
+### Decision: Push + Pull Hybrid
 
-The most promising approach seems to be **Approach C + D hybrid**:
+**See "Phase 0 Decisions" section for the resolved approach.**
 
-1. **Store element positions relative to window** when possible
-2. **Subscribe to window geometry events** (these are reliable)
-3. **Mark elements dirty** when window moves or content likely changed
-4. **Batch refresh** dirty elements that are in the viewport
-5. **Accept some staleness** for elements outside viewport
-
-### Open Questions
-
-- How do we detect in-window layout changes (scroll, tab switch)?
-- Should the frontend or backend track "viewport" for dirty refresh?
-- What's the right polling interval for actively-watched elements?
-- How do we handle coordinate transformation for multi-monitor setups?
-- Should `AXNode.bounds` be optional/nullable to indicate "unknown/stale"?
+Summary: Don't poll, don't track dirty state. Push events we get for free, pull on demand when caller needs fresh data. Keep it simple.
 
 ---
 
@@ -203,172 +191,176 @@ await axio.watch(element.id);
 
 **Key insight:** Elements exist independently. Trees are just one way to query/view them.
 
-### Proposed Dual API
+### Proposed API (Updated)
 
 ```rust
 impl Axio {
     // ══════════════════════════════════════════════════════════
-    // ELEMENT-CENTRIC API (for direct manipulation)
+    // ELEMENT-CENTRIC (direct manipulation)
     // ══════════════════════════════════════════════════════════
 
-    /// Get element at screen position (hit test)
-    fn element_at(&self, x: f64, y: f64) -> Option<ElementRef>;
+    /// Get element at screen position (hit test) - returns minimal Element
+    fn element_at(&self, x: f64, y: f64) -> Option<Element>;
 
-    /// Get element by stable ID (if still valid)
-    fn element(&self, id: &ElementId) -> Option<ElementRef>;
+    /// Get element by ID (if still valid)
+    fn element(&self, id: &ElementId) -> Option<Element>;
 
-    /// Watch an element for changes
+    /// Watch an element for changes (push notifications)
     fn watch(&mut self, id: &ElementId) -> Result<(), Error>;
+    fn unwatch(&mut self, id: &ElementId);
 
-    /// Get current bounds of an element (fresh query)
+    /// Get fresh bounds (pull)
     fn bounds(&self, id: &ElementId) -> Option<Bounds>;
 
-    /// Perform action on element
+    /// Actions
     fn click(&self, id: &ElementId) -> Result<(), Error>;
     fn set_value(&self, id: &ElementId, value: &str) -> Result<(), Error>;
 
     // ══════════════════════════════════════════════════════════
-    // TREE-CENTRIC API (for exploration/visualization)
+    // TREE-CENTRIC (exploration/visualization)
     // ══════════════════════════════════════════════════════════
 
-    /// Get tree rooted at element (or window)
-    fn tree(&mut self, root: &ElementId, depth: usize) -> AXNode;
+    /// Get tree - returns Elements with children populated
+    fn tree(&mut self, root: &ElementId, depth: usize) -> Element;
 
-    /// Get children of element (lazy loading)
-    fn children(&mut self, id: &ElementId) -> Vec<ElementRef>;
+    /// Get children only
+    fn children(&mut self, id: &ElementId) -> Vec<Element>;
 
-    /// Get parent of element
-    fn parent(&self, id: &ElementId) -> Option<ElementRef>;
+    /// Navigate up
+    fn parent(&self, id: &ElementId) -> Option<Element>;
 
     // ══════════════════════════════════════════════════════════
-    // QUERY API (find elements by criteria)
+    // WINDOWS
     // ══════════════════════════════════════════════════════════
 
-    /// Find elements matching predicate
-    fn find(&mut self, root: &ElementId, predicate: impl Fn(&AXNode) -> bool) -> Vec<ElementRef>;
+    /// Get all windows (with z-order for occlusion)
+    fn windows(&self) -> Vec<Window>;
+}
 
-    /// Find elements by role
-    fn find_by_role(&mut self, root: &ElementId, role: AXRole) -> Vec<ElementRef>;
+struct Window {
+    pub id: WindowId,
+    pub bounds: Bounds,
+    pub z_index: u32,  // 0 = frontmost, higher = further back
+    pub focused: bool,
+    // ... other fields
+}
+
+// Event delivery mechanism TBD (callbacks, channels, or for axio-ws just push to clients)
+enum AxioEvent {
+    WindowChanged { window: Window },
+    ElementChanged { element_id: ElementId, element: Element },
+    ElementDestroyed { element_id: ElementId },
+    FocusChanged { element_id: Option<ElementId> },
 }
 ```
 
-### ElementRef vs AXNode
+### Decision: Single Element Type
 
-Two different representations for different purposes:
+**See "Phase 0 Decisions" section for the resolved approach.**
 
-```rust
-/// Lightweight reference to an element (for direct access)
-/// Contains only the stable ID - properties fetched on demand
-pub struct ElementRef {
-    pub id: ElementId,
-    // Optionally cache some immutable properties
-    pub role: AXRole,
-}
-
-impl ElementRef {
-    /// Fetch current properties (fresh from AX API)
-    fn properties(&self, axio: &Axio) -> ElementProperties;
-
-    /// Fetch current bounds (fresh from AX API)
-    fn bounds(&self, axio: &Axio) -> Option<Bounds>;
-}
-
-/// Full node snapshot (for tree visualization)
-/// Contains all properties at time of query
-pub struct AXNode {
-    pub id: ElementId,
-    pub role: AXRole,
-    pub label: Option<String>,
-    pub value: Option<AXValue>,
-    pub bounds: Option<Bounds>,
-    pub children: Vec<AXNode>,
-    // ...
-}
-```
+Summary: One `Element` type with `Option<T>` fields. Fields are populated based on what was queried. No separate ElementRef vs AXNode types.
 
 ### Protocol Implications
 
-The WebSocket protocol should support both patterns:
+The WebSocket protocol supports push + pull:
 
 ```typescript
-// Element-centric messages
-{ type: "get_element_at", x: 100, y: 200 }
-{ type: "watch_element", element_id: "..." }
-{ type: "get_bounds", element_id: "..." }
-{ type: "click", element_id: "..." }
+// ═══════════════════════════════════════════════════════════
+// PULL (client requests)
+// ═══════════════════════════════════════════════════════════
 
-// Tree-centric messages
-{ type: "get_tree", root_id: "...", max_depth: 3 }
-{ type: "get_children", element_id: "..." }
+// Element-centric
+{ type: "get_element_at", request_id: "r1", x: 100, y: 200 }
+{ type: "get_bounds", request_id: "r2", element_id: "..." }
+{ type: "click", request_id: "r3", element_id: "..." }
+{ type: "set_value", request_id: "r4", element_id: "...", value: "..." }
 
-// Query messages
-{ type: "find", root_id: "...", role: "textbox" }
+// Tree-centric
+{ type: "get_tree", request_id: "r5", root_id: "...", max_depth: 3 }
+{ type: "get_children", request_id: "r6", element_id: "..." }
 
-// Push events (both patterns benefit)
-{ type: "element_update", element_id: "...", ... }
+// Subscriptions
+{ type: "watch", request_id: "r7", element_id: "..." }
+{ type: "unwatch", request_id: "r8", element_id: "..." }
+
+// ═══════════════════════════════════════════════════════════
+// PUSH (server events)
+// ═══════════════════════════════════════════════════════════
+
+// Responses (correlated by request_id)
+{ type: "response", request_id: "r1", success: true, element: {...} }
+
+// Events (unsolicited, for watched elements)
+{ type: "element_changed", element_id: "...", element: {...} }
 { type: "element_destroyed", element_id: "..." }
+{ type: "window_moved", window_id: "...", bounds: {...} }
+{ type: "focus_changed", element_id: "..." }
 ```
 
 ### The Ports Use Case
 
 For ports.ts (linking element state between apps):
 
-1. **Discovery:** User hovers → `get_element_at(x, y)` → get `ElementRef`
+1. **Discovery:** User hovers → `get_element_at(x, y)` → get `Element` (minimal: id + role)
 2. **Binding:** User clicks to "pin" → `watch(element.id)`
-3. **Live updates:** Backend pushes `element_update` events
-4. **Geometry:** When drawing connections, call `get_bounds(id)` for fresh positions
-5. **Cleanup:** When element is destroyed → `element_destroyed` event → remove port
+3. **Live updates:** Backend pushes `element_changed` events with hydrated `Element`
+4. **Geometry:** When drawing, call `get_bounds(id)` for fresh positions (pull)
+5. **Cleanup:** `element_destroyed` event → remove port
 
 ```typescript
 // Ports overlay pseudocode
-const ports = new Map<ElementId, Port>();
+const ports = new Map<string, Port>();
 
-axio.onElementAtPosition(x, y).then((element) => {
-  // Show preview port at element bounds
-  showPreview(element);
-});
+// PULL: Hit test on hover
+const element = await axio.getElementAt(x, y);
+// element = { id: "abc", role: "textbox", bounds: {...} }
+showPreview(element);
 
-onClick(() => {
-  const port = createPort(element.id);
+// PULL + subscribe: Pin an element
+onClick(async () => {
+  const port = createPort(element);
   ports.set(element.id, port);
-  axio.watch(element.id);
+  await axio.watch(element.id); // Start receiving push events
 });
 
-axio.onElementUpdate((update) => {
-  const port = ports.get(update.element_id);
-  if (port) {
-    if (update.type === "destroyed") {
-      ports.delete(update.element_id);
-      removePort(port);
-    } else {
-      updatePort(port, update);
-    }
+// PUSH: Handle events
+axio.onEvent((event) => {
+  switch (event.type) {
+    case "element_changed":
+      const port = ports.get(event.element_id);
+      if (port) {
+        // event.element has the changed fields hydrated
+        port.update(event.element);
+      }
+      break;
+
+    case "element_destroyed":
+      ports.delete(event.element_id);
+      break;
   }
 });
 
-// On render frame, refresh geometry for visible ports
-for (const [id, port] of ports) {
-  const bounds = await axio.getBounds(id);
-  port.updatePosition(bounds);
+// PULL: Refresh bounds on demand (e.g., before drawing)
+async function refreshPortBounds(portId: string) {
+  const bounds = await axio.getBounds(portId);
+  ports.get(portId)?.updatePosition(bounds);
 }
 ```
 
-### Compromises
+### Design Summary
 
-| Aspect         | Tree-Centric           | Element-Centric  | Compromise                                     |
-| -------------- | ---------------------- | ---------------- | ---------------------------------------------- |
-| Discovery      | Tree traversal         | Hit-test, search | Support both                                   |
-| Identity       | Path-based             | UUID-based       | UUID (current approach)                        |
-| Data freshness | Snapshot at query time | On-demand + push | Hybrid (push what you can, poll what you must) |
-| Memory         | Hold full tree         | Hold only refs   | Refs + lazy loading                            |
-| Relationships  | Embedded in tree       | Navigate via API | Both work                                      |
+| Aspect         | Decision                                                 |
+| -------------- | -------------------------------------------------------- |
+| Element type   | Single `Element` type with `Option<T>` fields (hydrated) |
+| Identity       | UUID-based (stable as long as element exists)            |
+| Data freshness | Push events we get free, pull on demand                  |
+| Discovery      | Both tree traversal and hit-test supported               |
+| Memory         | Elements with only requested fields populated            |
 
-### Open Questions
+### Remaining Questions (for implementation)
 
-- Should `ElementRef` cache anything, or always be a pure reference?
 - How do we efficiently batch `get_bounds` calls for many elements?
-- Should there be a "viewport subscription" that auto-tracks visible elements?
-- How does the frontend know an element ID is stale without calling the API?
+- Multi-monitor coordinate handling (frontend concern mostly)
 
 ---
 
@@ -888,64 +880,125 @@ fn main() -> Result<(), axio::Error> {
 
 ---
 
-## Quick Wins
+## Phase 0 Decisions (RESOLVED)
 
-1. **Remove all the debug `println!`** statements or gate them behind a feature flag
-2. **Delete deprecated protocol types** in `protocol.ts` (lines 240-347)
-3. **Use `thiserror` for proper error types** instead of `String`
-4. **Remove redundant `clone()` calls** - many are unnecessary
-5. **Add `#[must_use]` to Result-returning functions** to catch ignored errors
+### Decision 1: Live Element Data → Push + Pull Hybrid
+
+**Approach:** Keep it simple. Push events when we get info for free, pull when needed.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  PUSH (events we receive for free)                              │
+│  ─────────────────────────────────────────────────────────────  │
+│  • Window moved/resized (kAXMovedNotification)                  │
+│  • Element value changed (kAXValueChangedNotification)          │
+│  • Element destroyed (kAXUIElementDestroyedNotification)        │
+│  • Focus changed (kAXFocusedUIElementChangedNotification)       │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼ Broadcast to subscribers
+┌─────────────────────────────────────────────────────────────────┐
+│  PULL (on-demand queries)                                       │
+│  ─────────────────────────────────────────────────────────────  │
+│  • Get element at position (hit test)                           │
+│  • Get current bounds of element                                │
+│  • Get children / tree                                          │
+│  • Get current value/label/properties                           │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Key principles:**
+
+- Don't poll. Only query when explicitly asked.
+- Push all events we subscribe to (watchers get notifications for free)
+- Frontend decides when it needs fresh data
+- Bounds may be stale - caller can request refresh if needed
+
+### Decision 2: Single Element Type with Hydration
+
+**Approach:** One `Element` type where fields are `Option<T>` and get filled in based on what was queried.
+
+```rust
+/// A UI element. Fields are populated based on how it was obtained.
+pub struct Element {
+    // Always present (required for identity)
+    pub id: ElementId,
+    pub role: AXRole,
+
+    // Populated when queried or from tree traversal
+    pub label: Option<String>,
+    pub value: Option<AXValue>,
+    pub description: Option<String>,
+
+    // Populated when bounds were requested or from tree
+    pub bounds: Option<Bounds>,
+
+    // Populated when children were requested
+    pub children: Option<Vec<Element>>,
+    pub children_count: Option<usize>,  // May know count without loading children
+
+    // Populated from watch events
+    pub focused: Option<bool>,
+    pub enabled: Option<bool>,
+}
+```
+
+**Semantics:**
+
+- `None` = "not fetched" (unknown)
+- `Some(value)` = "was this value when queried" (may be stale)
+- To get fresh data, call `axio.refresh(&element.id, fields)` or individual getters
+
+**This pairs well with "elements are primary, trees are views":**
+
+- Tree query returns Elements with children populated
+- Hit test returns Element with just id/role (minimal)
+- Watch returns Element with changed fields populated
 
 ---
 
-## Recommended Priority
+## Remaining Work
 
-### Phase 0: Design Decisions (Before Major Refactoring)
+### Quick Wins (Completed ✓)
 
-Two fundamental architectural questions need answers first:
+- ✓ Removed debug `println!` statements
+- ✓ Deleted deprecated protocol types in `protocol.ts`
+- ✓ Fixed silent failures that should crash (added proper expects/asserts)
 
-**1. Live element data architecture** (see "The Hard Problem: Live Element Data"):
+### Quick Wins (Remaining)
 
-- How does the core crate expose element geometry?
-- What's the subscription/refresh model?
-- How do we handle coordinate systems?
-- What does the protocol look like for geometry updates?
+- [ ] Add `thiserror` for proper error types (do during crate extraction)
+- [ ] Remove redundant `clone()` calls (do during crate extraction)
 
-**2. Tree vs Element access patterns** (see "The Other Hard Problem: Trees vs Elements"):
+---
 
-- Do we have two types (`ElementRef` vs `AXNode`) or one?
-- How does the API surface both tree navigation and direct element access?
-- What's the caching/freshness story for each pattern?
-- How do subscriptions work (watch whole subtrees? individual elements?)?
-
-These decisions ripple through everything: core API, protocol, TypeScript client, overlays.
+## Implementation Phases
 
 ### Phase 1: Core Crate Extraction
 
-1. **Split into crates** (Proposal 7) - establishes clean architecture for all other work
-2. **Instance-based state** (Proposal 3) - remove global statics, enable testing
-3. **Clear threading model** (Proposal 6) - define !Send or dispatcher pattern
+1. **Split into crates** - `axio` (core) + `axio-ws` (WebSocket)
+2. **Instance-based state** - remove global statics, `Axio::new()` returns owned instance
+3. **Clear threading model** - start with `!Send` (single-threaded), document constraints
+4. **Implement Element type** - single type with Option fields as decided above
 
 ### Phase 2: Fix Window Tracking
 
-4. **Event-driven window tracking** (Proposal 1) - use NSWorkspace notifications
-5. **Remove bounds-matching** (Proposal 2) - use CGWindowID or other stable identifier
+5. **Event-driven window tracking** - use NSWorkspace notifications instead of polling
+6. **Stable window identity** - use CGWindowID or other stable identifier, not bounds-matching
 
-### Phase 3: Live Element Data Implementation
+### Phase 3: Push + Pull Implementation
 
-6. Implement chosen approach for element geometry freshness
-7. Design efficient "subscribe to elements" API
-8. Handle window-relative vs screen coordinates
+7. **Implement push events** - subscribe to AX notifications, broadcast to watchers
+8. **Implement pull queries** - on-demand getters for bounds, properties, children
+9. **Protocol updates** - add request IDs for correlation, update message types
 
-### Phase 4: Protocol & API Improvements
+### Phase 4: TypeScript Client Improvements
 
-9. **Request IDs** (Proposal 4) - fixes protocol race conditions
-10. **Immutable TypeScript API** (Proposal 5) - improves frontend DX
+10. **Match new Element model** - single type with optional fields
+11. **Proper state management** - immutable updates, no mutation
+12. **Request correlation** - handle concurrent requests correctly
 
-### Quick Wins (Anytime)
+### Future Goals
 
-- Remove debug `println!` statements
-- Delete deprecated protocol types in `protocol.ts`
-- Add `thiserror` for proper error types
-- Remove redundant `clone()` calls
-- Add `#[must_use]` to Result-returning functions
+- **Query API:** `find(root, predicate)` and `find_by_role(root, role)` for searching
+- **Z-order occlusion:** Use window `z_index` for CSS-driven occlusion in overlays (e.g., hide ports behind other windows using z-index or clip-path)
