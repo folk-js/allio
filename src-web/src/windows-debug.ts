@@ -1,5 +1,4 @@
-import { AXIO } from "./axio";
-import { Window } from "./axio";
+import { AXIO, Window } from "@axio/client";
 
 const axio = new AXIO();
 const output = document.getElementById("output")!;

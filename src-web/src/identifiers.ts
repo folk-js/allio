@@ -1,4 +1,4 @@
-import { AXIO, Window } from "./axio.ts";
+import { AXIO, Window } from "@axio/client";
 
 interface Rectangle {
   x: number;

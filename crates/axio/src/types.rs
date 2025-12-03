@@ -19,7 +19,7 @@ use ts_rs::TS;
 /// a WindowId where an ElementId is expected.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(transparent)]
-#[ts(export, export_to = "src-web/src/generated/")]
+#[ts(export, export_to = "packages/axio-client/src/types/")]
 pub struct ElementId(pub String);
 
 impl ElementId {
@@ -138,7 +138,7 @@ pub type AxioResult<T> = Result<T, AxioError>;
 /// Represents a properly typed accessibility value
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[serde(tag = "type", content = "value")]
-#[ts(export, export_to = "src-web/src/generated/")]
+#[ts(export, export_to = "packages/axio-client/src/types/")]
 pub enum AXValue {
     String(String),
     Integer(i64),
@@ -152,7 +152,7 @@ pub enum AXValue {
 
 /// 2D position in screen coordinates
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, TS)]
-#[ts(export, export_to = "src-web/src/generated/")]
+#[ts(export, export_to = "packages/axio-client/src/types/")]
 pub struct Position {
     pub x: f64,
     pub y: f64,
@@ -160,7 +160,7 @@ pub struct Position {
 
 /// 2D size dimensions
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, TS)]
-#[ts(export, export_to = "src-web/src/generated/")]
+#[ts(export, export_to = "packages/axio-client/src/types/")]
 pub struct Size {
     pub width: f64,
     pub height: f64,
@@ -168,7 +168,7 @@ pub struct Size {
 
 /// Geometric bounds (position + size)
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, TS)]
-#[ts(export, export_to = "src-web/src/generated/")]
+#[ts(export, export_to = "packages/axio-client/src/types/")]
 pub struct Bounds {
     pub position: Position,
     pub size: Size,
@@ -181,7 +181,7 @@ pub struct Bounds {
 /// ARIA role subset covering common UI elements
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, TS)]
 #[serde(rename_all = "lowercase")]
-#[ts(export, export_to = "src-web/src/generated/")]
+#[ts(export, export_to = "packages/axio-client/src/types/")]
 pub enum AXRole {
     // Document structure
     Application,
@@ -238,7 +238,7 @@ pub enum AXRole {
 ///
 /// Only `id` and `role` are always present (required for identity).
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "src-web/src/generated/")]
+#[ts(export, export_to = "packages/axio-client/src/types/")]
 pub struct AXNode {
     // ══════════════════════════════════════════════════════════════════
     // IDENTITY (always present)
@@ -300,7 +300,7 @@ pub struct AXNode {
 /// This is the core window metadata type used throughout AXIO.
 /// It's populated from platform-specific APIs (x-win on macOS).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "src-web/src/generated/")]
+#[ts(export, export_to = "packages/axio-client/src/types/")]
 pub struct WindowInfo {
     pub id: String,
     pub title: String,
@@ -320,7 +320,7 @@ pub struct WindowInfo {
 /// Update event for an element (broadcast when changes are observed)
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "update_type", rename_all = "PascalCase")]
-#[ts(export, export_to = "src-web/src/generated/")]
+#[ts(export, export_to = "packages/axio-client/src/types/")]
 pub enum ElementUpdate {
     ValueChanged { element_id: String, value: AXValue },
     LabelChanged { element_id: String, label: String },

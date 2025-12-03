@@ -1,5 +1,4 @@
-import { AXIO, AXNode } from "./axio.ts";
-import { ElementUpdate, Window } from "./axio.ts";
+import { AXIO, AXNode, ElementUpdate, Window } from "@axio/client";
 
 class AXTreeOverlay {
   private windowContainer: HTMLElement;

@@ -13,15 +13,9 @@
 // Import auto-generated types from Rust
 import type {
   AXNode as GeneratedAXNode,
-  AXValue,
-  AXRole,
-  Bounds,
   ElementUpdate,
   WindowInfo,
-} from "./generated";
-
-// Re-export generated types
-export type { AXValue, AXRole, Bounds, ElementUpdate, WindowInfo };
+} from "./types";
 
 // ============================================================================
 // Extended Types (client-side additions)

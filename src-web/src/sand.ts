@@ -1,4 +1,4 @@
-import { AXIO } from "./axio.js";
+import { AXIO } from "@axio/client";
 import {
   collisionFragmentShader,
   collisionVertexShader,

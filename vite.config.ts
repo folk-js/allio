@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import path from "path";
 
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
@@ -13,6 +14,12 @@ export default defineConfig(async () => ({
     watch: {
       // 3. tell vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
+    },
+  },
+  // Path aliases
+  resolve: {
+    alias: {
+      "@axio/client": path.resolve(__dirname, "packages/axio-client/src"),
     },
   },
 }));
