@@ -7,8 +7,6 @@
 use accessibility::AXUIElement;
 use accessibility_sys::AXObserverRef;
 use std::ffi::c_void;
-use std::sync::Arc;
-use tokio::sync::broadcast;
 
 use crate::types::{AXValue, ElementId, WindowId};
 
@@ -18,7 +16,6 @@ use crate::types::{AXValue, ElementId, WindowId};
 #[repr(C)]
 pub struct ObserverContext {
     pub element_id: ElementId,
-    pub sender: Arc<broadcast::Sender<String>>,
 }
 
 /// Watch state for an element (merged from NodeWatcher)
@@ -231,11 +228,7 @@ impl UIElement {
     ///
     /// Registers for accessibility notifications appropriate for this element's role.
     /// Requires mutable access since it modifies watch_state.
-    pub fn watch(
-        &mut self,
-        observer: AXObserverRef,
-        sender: Arc<broadcast::Sender<String>>,
-    ) -> Result<(), String> {
+    pub fn watch(&mut self, observer: AXObserverRef) -> Result<(), String> {
         use accessibility_sys::{AXObserverAddNotification, AXUIElementRef};
         use core_foundation::base::TCFType;
         use core_foundation::string::CFString;
@@ -256,7 +249,6 @@ impl UIElement {
         // Create context for this specific element (uses shared ObserverContext type)
         let context = Box::new(ObserverContext {
             element_id: self.id.clone(),
-            sender: sender.clone(),
         });
         let context_ptr = Box::into_raw(context) as *mut c_void;
 

@@ -1,5 +1,5 @@
 import { AXIO, AXNode } from "./axio.ts";
-import { Window } from "./protocol.ts";
+import { Window } from "./axio.ts";
 
 /**
  * Port Types

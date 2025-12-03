@@ -11,7 +11,6 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
-use tokio::sync::broadcast;
 
 #[cfg(target_os = "macos")]
 use core_graphics::display::{
@@ -241,11 +240,11 @@ pub struct PollingConfig {
     /// Polling interval in milliseconds
     pub interval_ms: u64,
     /// Called when window list changes: (windows, added_ids, removed_ids)
+    /// Note: Events are also emitted via the EventSink trait
     pub on_windows_changed: Option<WindowUpdateCallback>,
     /// Called with root node of focused window
+    /// Note: Events are also emitted via the EventSink trait
     pub on_focused_root: Option<FocusedRootCallback>,
-    /// Broadcast sender for JSON messages (for WebSocket integration)
-    pub broadcast_sender: Option<std::sync::Arc<broadcast::Sender<String>>>,
 }
 
 impl Default for PollingConfig {
@@ -255,7 +254,6 @@ impl Default for PollingConfig {
             interval_ms: DEFAULT_POLLING_INTERVAL_MS,
             on_windows_changed: None,
             on_focused_root: None,
-            broadcast_sender: None,
         }
     }
 }
@@ -281,56 +279,21 @@ pub fn start_polling(config: PollingConfig) {
                         callback(&current_windows, &added_ids, &removed_ids);
                     }
 
-                    // Get focused window root
+                    // Emit window update via event system
+                    crate::events::emit_window_update(&current_windows);
+
+                    // Get focused window root and emit
                     if let Some(focused) = current_windows.iter().find(|w| w.focused) {
                         let window_id = WindowId::new(&focused.id);
                         if let Ok(root) =
                             crate::platform::get_ax_tree_by_window_id(&window_id, 1, 0, false)
                         {
+                            // Emit via event system
+                            crate::events::emit_window_root(&focused.id, &root);
+
+                            // Also call callback if provided
                             if let Some(ref callback) = config.on_focused_root {
                                 callback(&focused.id, &root);
-                            }
-                        }
-                    }
-
-                    // Broadcast if sender provided (for WebSocket integration)
-                    if let Some(ref sender) = config.broadcast_sender {
-                        // Broadcast window update
-                        #[derive(serde::Serialize)]
-                        struct WindowUpdate<'a> {
-                            #[serde(rename = "type")]
-                            msg_type: &'static str,
-                            windows: &'a [WindowInfo],
-                        }
-                        let msg = WindowUpdate {
-                            msg_type: "window_update",
-                            windows: &current_windows,
-                        };
-                        if let Ok(json) = serde_json::to_string(&msg) {
-                            let _ = sender.send(json);
-                        }
-
-                        // Broadcast focused root
-                        if let Some(focused) = current_windows.iter().find(|w| w.focused) {
-                            let window_id = WindowId::new(&focused.id);
-                            if let Ok(root) =
-                                crate::platform::get_ax_tree_by_window_id(&window_id, 1, 0, false)
-                            {
-                                #[derive(serde::Serialize)]
-                                struct WindowRootUpdate<'a> {
-                                    #[serde(rename = "type")]
-                                    msg_type: &'static str,
-                                    window_id: &'a str,
-                                    root: &'a crate::AXNode,
-                                }
-                                let msg = WindowRootUpdate {
-                                    msg_type: "window_root_update",
-                                    window_id: &focused.id,
-                                    root: &root,
-                                };
-                                if let Ok(json) = serde_json::to_string(&msg) {
-                                    let _ = sender.send(json);
-                                }
                             }
                         }
                     }

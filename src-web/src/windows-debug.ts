@@ -1,5 +1,5 @@
 import { AXIO } from "./axio";
-import { Window } from "./protocol";
+import { Window } from "./axio";
 
 const axio = new AXIO();
 const output = document.getElementById("output")!;

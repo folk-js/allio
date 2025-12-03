@@ -9,7 +9,10 @@
 //! # Example
 //!
 //! ```ignore
-//! use axio::{api, windows, ElementId};
+//! use axio::{api, windows, events, ElementId};
+//!
+//! // Set up event handling
+//! events::set_event_sink(MyEventHandler);
 //!
 //! // Start window polling
 //! windows::start_polling(windows::PollingConfig::default());
@@ -27,6 +30,13 @@
 // Core types
 mod types;
 pub use types::*;
+
+// Event system (trait-based, decoupled from transport)
+pub mod events;
+pub use events::{set_event_sink, EventSink, NoopEventSink};
+
+// RPC dispatch (for WebSocket/HTTP servers)
+pub mod rpc;
 
 // Window enumeration and polling
 pub mod windows;

@@ -2,7 +2,7 @@
  * Global Mouse Position Tracking
  *
  * Tracks mouse position system-wide, even when the window is not focused.
- * Broadcasts position updates to connected WebSocket clients.
+ * Broadcasts position updates via AXIO's event system.
  */
 use std::thread;
 use std::time::Duration;
@@ -12,7 +12,8 @@ use core_graphics::event::CGEvent;
 #[cfg(target_os = "macos")]
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
-use axio_ws::{ServerMessage, WebSocketState};
+use axio_ws::WebSocketState;
+use serde_json::json;
 
 /// Get current mouse position (macOS)
 #[cfg(target_os = "macos")]
@@ -54,12 +55,13 @@ pub fn start_mouse_tracking(ws_state: WebSocketState) {
                 if position_changed {
                     last_position = Some((x, y));
 
-                    // Broadcast to all connected clients
-                    let message = ServerMessage::MousePosition { x, y };
+                    // Broadcast to all connected clients via JSON-RPC event format
+                    let message = json!({
+                        "event": "mouse_position",
+                        "data": { "x": x, "y": y }
+                    });
 
-                    if let Ok(json) = serde_json::to_string(&message) {
-                        let _ = ws_state.sender.send(json);
-                    }
+                    let _ = ws_state.sender.send(message.to_string());
                 }
             }
 

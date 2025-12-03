@@ -90,12 +90,13 @@ pub fn click(element_id: &ElementId) -> AxioResult<()> {
 // and WebSocket state. A future refactor could move them here for consistency.
 
 // ============================================================================
-// Internal helpers
+// Initialization
 // ============================================================================
 
 /// Initialize the AXIO system
 ///
-/// Must be called once at startup with the broadcast sender for events.
-pub fn initialize(sender: std::sync::Arc<tokio::sync::broadcast::Sender<String>>) {
-    ElementRegistry::initialize(sender);
+/// Must be called once at startup. Events are emitted via the EventSink
+/// (set via `axio::set_event_sink`).
+pub fn initialize() {
+    ElementRegistry::initialize();
 }

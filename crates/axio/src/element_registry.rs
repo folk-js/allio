@@ -12,8 +12,7 @@ use core_foundation::base::TCFType;
 use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopSource};
 use once_cell::sync::Lazy;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
-use tokio::sync::broadcast;
+use std::sync::Mutex;
 use uuid::Uuid;
 
 use crate::types::{ElementId, ElementUpdate, WindowId};
@@ -57,9 +56,6 @@ pub struct ElementRegistry {
     /// Map of window_id -> AXObserverRef
     /// One observer per window (keyed by window_id, not PID, for consistency)
     observers: HashMap<WindowId, AXObserverRef>,
-
-    /// Broadcast sender for notifications (shared across all watches)
-    sender: Arc<broadcast::Sender<String>>,
 }
 
 // Manual implementation - operations are thread-safe behind Mutex
@@ -68,14 +64,13 @@ unsafe impl Sync for ElementRegistry {}
 
 impl ElementRegistry {
     /// Initialize the global registry
-    /// Must be called once at startup with the broadcast sender
-    pub fn initialize(sender: Arc<broadcast::Sender<String>>) {
+    /// Must be called once at startup
+    pub fn initialize() {
         let mut registry = ELEMENT_REGISTRY.lock().unwrap();
         *registry = Some(ElementRegistry {
             elements: HashMap::new(),
             window_to_elements: HashMap::new(),
             observers: HashMap::new(),
-            sender,
         });
     }
 
@@ -325,7 +320,7 @@ impl ElementRegistry {
                 .get_mut(element_id)
                 .ok_or_else(|| format!("Element {} not found", element_id))?;
 
-            element.watch(observer, registry.sender.clone())
+            element.watch(observer)
         })
     }
 
@@ -387,20 +382,14 @@ unsafe extern "C" fn observer_callback(
     let changed_element = AXUIElement::wrap_under_get_rule(_element);
 
     // Handle the notification
-    handle_notification(
-        &context.element_id,
-        &notification_name,
-        &changed_element,
-        &context.sender,
-    );
+    handle_notification(&context.element_id, &notification_name, &changed_element);
 }
 
-/// Handle a notification by extracting data and broadcasting typed updates
+/// Handle a notification by extracting data and emitting typed updates via EventSink
 fn handle_notification(
     element_id: &ElementId,
     notification: &str,
     element: &accessibility::AXUIElement,
-    sender: &Arc<broadcast::Sender<String>>,
 ) {
     use accessibility::AXAttribute;
     use core_foundation::base::TCFType;
@@ -466,24 +455,8 @@ fn handle_notification(
         }
     };
 
-    // Broadcast the update (wrapped for wire protocol compatibility)
-    // The receiver (src-tauri websocket) will wrap this in ServerMessage
+    // Emit the update via the event system
     if let Some(update) = update {
-        // Wrap in a simple object with type tag for the receiver
-        #[derive(serde::Serialize)]
-        struct BroadcastMessage {
-            #[serde(rename = "type")]
-            msg_type: &'static str,
-            update: ElementUpdate,
-        }
-
-        let message = BroadcastMessage {
-            msg_type: "element_update", // snake_case to match TypeScript protocol
-            update,
-        };
-
-        if let Ok(json_str) = serde_json::to_string(&message) {
-            let _ = sender.send(json_str);
-        }
+        crate::events::emit_element_update(update);
     }
 }

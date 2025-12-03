@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "typegen": "cargo test -p axio export_bindings",
     "client:dev": "vite --config vite.client.config.ts",
     "client:build": "vite build --config vite.client.config.ts",
     "client:preview": "vite preview --config vite.client.config.ts"
