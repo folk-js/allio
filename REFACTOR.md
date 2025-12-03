@@ -974,31 +974,29 @@ pub struct Element {
 
 ## Implementation Phases
 
-### Phase 1: Core Crate Extraction
+### Phase 1: Core Refactoring (in place)
 
-1. **Split into crates** - `axio` (core) + `axio-ws` (WebSocket)
+1. **Implement Element type** - single type with Option fields as decided
 2. **Instance-based state** - remove global statics, `Axio::new()` returns owned instance
 3. **Clear threading model** - start with `!Send` (single-threaded), document constraints
-4. **Implement Element type** - single type with Option fields as decided above
+4. **Push + pull pattern** - subscribe to AX notifications, on-demand getters
+5. **Protocol updates** - add request IDs for correlation
 
-### Phase 2: Fix Window Tracking
+### Phase 2: TypeScript Client
 
-5. **Event-driven window tracking** - use NSWorkspace notifications instead of polling
-6. **Stable window identity** - use CGWindowID or other stable identifier, not bounds-matching
+6. **Match new Element model** - single type with optional fields
+7. **Proper state management** - immutable updates, no mutation
+8. **Request correlation** - handle concurrent requests correctly
 
-### Phase 3: Push + Pull Implementation
+### Phase 3: Crate Split
 
-7. **Implement push events** - subscribe to AX notifications, broadcast to watchers
-8. **Implement pull queries** - on-demand getters for bounds, properties, children
-9. **Protocol updates** - add request IDs for correlation, update message types
-
-### Phase 4: TypeScript Client Improvements
-
-10. **Match new Element model** - single type with optional fields
-11. **Proper state management** - immutable updates, no mutation
-12. **Request correlation** - handle concurrent requests correctly
+9. **Split into crates** - `axio` (core) + `axio-ws` (WebSocket)
+   - Should be mostly moving files and updating imports
+   - Core refactoring already done in Phase 1
 
 ### Future Goals
 
 - **Query API:** `find(root, predicate)` and `find_by_role(root, role)` for searching
-- **Z-order occlusion:** Use window `z_index` for CSS-driven occlusion in overlays (e.g., hide ports behind other windows using z-index or clip-path)
+- **Z-order occlusion:** Use window `z_index` for CSS-driven occlusion in overlays
+- **Stable window identity** - replace bounds-matching with CGWindowID or similar
+- **Event-driven window tracking** - NSWorkspace notifications instead of polling

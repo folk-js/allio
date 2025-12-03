@@ -24,6 +24,8 @@ pub mod get_children {
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct Request {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub request_id: Option<String>,
         pub element_id: String,
         #[serde(default = "super::default_max_depth")]
         pub max_depth: usize,
@@ -33,6 +35,8 @@ pub mod get_children {
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct Response {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub request_id: Option<String>,
         pub success: bool,
         pub children: Option<Vec<AXNode>>,
         pub error: Option<String>,
@@ -45,12 +49,16 @@ pub mod write_to_element {
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct Request {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub request_id: Option<String>,
         pub element_id: String,
         pub text: String,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct Response {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub request_id: Option<String>,
         pub success: bool,
         pub error: Option<String>,
     }
@@ -62,11 +70,15 @@ pub mod click_element {
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct Request {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub request_id: Option<String>,
         pub element_id: String,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct Response {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub request_id: Option<String>,
         pub success: bool,
         pub error: Option<String>,
     }
@@ -78,11 +90,15 @@ pub mod set_clickthrough {
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct Request {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub request_id: Option<String>,
         pub enabled: bool,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct Response {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub request_id: Option<String>,
         pub success: bool,
         pub enabled: bool,
         pub error: Option<String>,
@@ -95,12 +111,16 @@ pub mod watch_node {
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct Request {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub request_id: Option<String>,
         pub element_id: String,
         pub node_id: String,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct Response {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub request_id: Option<String>,
         pub success: bool,
         pub node_id: String,
         pub error: Option<String>,
@@ -113,11 +133,15 @@ pub mod unwatch_node {
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct Request {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub request_id: Option<String>,
         pub element_id: String,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct Response {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub request_id: Option<String>,
         pub success: bool,
     }
 }
@@ -128,12 +152,16 @@ pub mod get_element_at_position {
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct Request {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub request_id: Option<String>,
         pub x: f64,
         pub y: f64,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct Response {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub request_id: Option<String>,
         pub success: bool,
         pub element: Option<AXNode>,
         pub error: Option<String>,

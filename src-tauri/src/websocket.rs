@@ -168,15 +168,15 @@ async fn handle_client_message(
     // Type-safe pattern matching with exhaustive checking
     match client_msg {
         ClientMessage::WriteToElement(req) => {
-            let response = match write_to_element_by_id(&req.element_id, &req.text) {
-                Ok(_) => crate::protocol::write_to_element::Response {
-                    success: true,
-                    error: None,
-                },
-                Err(e) => crate::protocol::write_to_element::Response {
-                    success: false,
-                    error: Some(e),
-                },
+            let request_id = req.request_id;
+            let (success, error) = match write_to_element_by_id(&req.element_id, &req.text) {
+                Ok(_) => (true, None),
+                Err(e) => (false, Some(e)),
+            };
+            let response = crate::protocol::write_to_element::Response {
+                request_id,
+                success,
+                error,
             };
 
             let msg = ServerMessage::WriteToElementResponse(response);
@@ -185,15 +185,15 @@ async fn handle_client_message(
         }
 
         ClientMessage::ClickElement(req) => {
-            let response = match crate::platform::click_element_by_id(&req.element_id) {
-                Ok(_) => crate::protocol::click_element::Response {
-                    success: true,
-                    error: None,
-                },
-                Err(e) => crate::protocol::click_element::Response {
-                    success: false,
-                    error: Some(e),
-                },
+            let request_id = req.request_id;
+            let (success, error) = match crate::platform::click_element_by_id(&req.element_id) {
+                Ok(_) => (true, None),
+                Err(e) => (false, Some(e)),
+            };
+            let response = crate::protocol::click_element::Response {
+                request_id,
+                success,
+                error,
             };
 
             let msg = ServerMessage::ClickElementResponse(response);
@@ -202,21 +202,20 @@ async fn handle_client_message(
         }
 
         ClientMessage::GetChildren(req) => {
-            let response = match get_children_by_element_id(
+            let request_id = req.request_id;
+            let (success, children, error) = match get_children_by_element_id(
                 &req.element_id,
                 req.max_depth,
                 req.max_children_per_level,
             ) {
-                Ok(children) => crate::protocol::get_children::Response {
-                    success: true,
-                    children: Some(children),
-                    error: None,
-                },
-                Err(e) => crate::protocol::get_children::Response {
-                    success: false,
-                    children: None,
-                    error: Some(e),
-                },
+                Ok(children) => (true, Some(children), None),
+                Err(e) => (false, None, Some(e)),
+            };
+            let response = crate::protocol::get_children::Response {
+                request_id,
+                success,
+                children,
+                error,
             };
 
             let msg = ServerMessage::GetChildrenResponse(response);
@@ -225,24 +224,19 @@ async fn handle_client_message(
         }
 
         ClientMessage::SetClickthrough(req) => {
-            let response = match ws_state.app_handle.get_webview_window("main") {
+            let request_id = req.request_id;
+            let (success, enabled, error) = match ws_state.app_handle.get_webview_window("main") {
                 Some(window) => match window.set_ignore_cursor_events(req.enabled) {
-                    Ok(_) => crate::protocol::set_clickthrough::Response {
-                        success: true,
-                        enabled: req.enabled,
-                        error: None,
-                    },
-                    Err(e) => crate::protocol::set_clickthrough::Response {
-                        success: false,
-                        enabled: false,
-                        error: Some(e.to_string()),
-                    },
+                    Ok(_) => (true, req.enabled, None),
+                    Err(e) => (false, false, Some(e.to_string())),
                 },
-                None => crate::protocol::set_clickthrough::Response {
-                    success: false,
-                    enabled: false,
-                    error: Some("Main window not found".to_string()),
-                },
+                None => (false, false, Some("Main window not found".to_string())),
+            };
+            let response = crate::protocol::set_clickthrough::Response {
+                request_id,
+                success,
+                enabled,
+                error,
             };
 
             let msg = ServerMessage::SetClickthroughResponse(response);
@@ -252,19 +246,16 @@ async fn handle_client_message(
 
         ClientMessage::WatchNode(req) => {
             use crate::element_registry::ElementRegistry;
-            let result = ElementRegistry::watch(&req.element_id);
-
-            let response = match result {
-                Ok(_) => crate::protocol::watch_node::Response {
-                    success: true,
-                    node_id: req.node_id,
-                    error: None,
-                },
-                Err(e) => crate::protocol::watch_node::Response {
-                    success: false,
-                    node_id: req.node_id,
-                    error: Some(e),
-                },
+            let request_id = req.request_id;
+            let (success, error) = match ElementRegistry::watch(&req.element_id) {
+                Ok(_) => (true, None),
+                Err(e) => (false, Some(e)),
+            };
+            let response = crate::protocol::watch_node::Response {
+                request_id,
+                success,
+                node_id: req.node_id,
+                error,
             };
 
             let msg = ServerMessage::WatchNodeResponse(response);
@@ -276,24 +267,27 @@ async fn handle_client_message(
             use crate::element_registry::ElementRegistry;
             ElementRegistry::unwatch(&req.element_id);
 
-            let response = crate::protocol::unwatch_node::Response { success: true };
+            let response = crate::protocol::unwatch_node::Response {
+                request_id: req.request_id,
+                success: true,
+            };
             let msg = ServerMessage::UnwatchNodeResponse(response);
             let json = serde_json::to_string(&msg)?;
             socket.send(Message::Text(json)).await.ok();
         }
 
         ClientMessage::GetElementAtPosition(req) => {
-            let response = match crate::platform::get_element_at_position(req.x, req.y) {
-                Ok(element) => crate::protocol::get_element_at_position::Response {
-                    success: true,
-                    element: Some(element),
-                    error: None,
-                },
-                Err(e) => crate::protocol::get_element_at_position::Response {
-                    success: false,
-                    element: None,
-                    error: Some(e),
-                },
+            let request_id = req.request_id;
+            let (success, element, error) =
+                match crate::platform::get_element_at_position(req.x, req.y) {
+                    Ok(element) => (true, Some(element), None),
+                    Err(e) => (false, None, Some(e)),
+                };
+            let response = crate::protocol::get_element_at_position::Response {
+                request_id,
+                success,
+                element,
+                error,
             };
 
             let msg = ServerMessage::GetElementAtPositionResponse(response);
