@@ -1,15 +1,18 @@
 //! AXIO - Accessibility I/O Layer
 //!
-//! A platform-agnostic accessibility API providing:
+//! Provides window tracking and accessibility operations:
+//! - Window enumeration and polling
+//! - Accessibility element operations (read, write, watch)
 //! - Type-safe element and window identifiers
-//! - Element lifecycle management
 //! - AXObserver-based change notifications
-//! - Clean public API
 //!
 //! # Example
 //!
 //! ```ignore
-//! use axio_core::{api, ElementId};
+//! use axio::{api, windows, ElementId};
+//!
+//! // Start window polling
+//! windows::start_polling(windows::PollingConfig::default());
 //!
 //! // Get element at screen position
 //! let element = api::element_at(100.0, 200.0)?;
@@ -25,7 +28,10 @@
 mod types;
 pub use types::*;
 
-// Internal modules (pub for now, may be made private later)
+// Window enumeration and polling
+pub mod windows;
+
+// Internal modules
 pub mod element_registry;
 mod ui_element;
 pub mod window_manager;
@@ -38,3 +44,4 @@ pub mod api;
 
 // Re-export commonly used items at crate root
 pub use api::{click, element_at, tree, unwatch, watch, write};
+pub use windows::{get_main_screen_dimensions, get_windows, start_polling};

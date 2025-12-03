@@ -8,12 +8,12 @@ use axum::{
     Router,
 };
 use colored::Colorize;
-use tokio::sync::{broadcast, RwLock};
+use std::sync::{Arc, RwLock};
+use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::protocol::{ClientMessage, ServerMessage};
-use axio_core::{ElementId, WindowInfo};
-use std::sync::Arc;
+use axio::{ElementId, WindowInfo};
 
 /// Callback type for setting clickthrough on the overlay window
 pub type ClickthroughCallback = Arc<dyn Fn(bool) -> Result<(), String> + Send + Sync>;
@@ -22,6 +22,7 @@ pub type ClickthroughCallback = Arc<dyn Fn(bool) -> Result<(), String> + Send + 
 #[derive(Clone)]
 pub struct WebSocketState {
     pub sender: Arc<broadcast::Sender<String>>,
+    /// Cached windows for sending to newly connected clients
     pub current_windows: Arc<RwLock<Vec<WindowInfo>>>,
     /// Optional callback for setting clickthrough (provided by app layer)
     clickthrough_callback: Option<ClickthroughCallback>,
@@ -57,7 +58,7 @@ impl WebSocketState {
     }
 
     /// Broadcast a window root node to all connected clients
-    pub fn broadcast_window_root(&self, window_id: &str, root: axio_core::AXNode) {
+    pub fn broadcast_window_root(&self, window_id: &str, root: axio::AXNode) {
         let msg = ServerMessage::WindowRootUpdate {
             window_id: window_id.to_string(),
             root,
@@ -67,9 +68,11 @@ impl WebSocketState {
         }
     }
 
-    pub async fn update_windows(&self, windows: &[WindowInfo]) {
-        let mut current = self.current_windows.write().await;
-        *current = windows.to_vec();
+    /// Update cached windows (called from polling callback)
+    pub fn update_windows(&self, windows: &[WindowInfo]) {
+        if let Ok(mut current) = self.current_windows.write() {
+            *current = windows.to_vec();
+        }
     }
 }
 
@@ -109,12 +112,16 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
 
     println!("{}", "[client] connected".bright_black());
 
-    // Send initial window state immediately
-    {
-        let current_windows = ws_state.current_windows.read().await;
-        let msg = ServerMessage::WindowUpdate {
-            windows: current_windows.clone(),
-        };
+    // Send cached window state immediately so client doesn't have to wait for next update
+    let initial_windows = ws_state
+        .current_windows
+        .read()
+        .ok()
+        .map(|w| w.clone())
+        .filter(|w| !w.is_empty());
+
+    if let Some(windows) = initial_windows {
+        let msg = ServerMessage::WindowUpdate { windows };
         if let Ok(msg_json) = serde_json::to_string(&msg) {
             let _ = socket.send(Message::Text(msg_json)).await;
         }
@@ -182,7 +189,7 @@ async fn handle_client_message(
         ClientMessage::WriteToElement(req) => {
             let request_id = req.request_id;
             let element_id = ElementId::new(&req.element_id);
-            let (success, error) = match axio_core::api::write(&element_id, &req.text) {
+            let (success, error) = match axio::api::write(&element_id, &req.text) {
                 Ok(_) => (true, None),
                 Err(e) => (false, Some(e.to_string())),
             };
@@ -200,7 +207,7 @@ async fn handle_client_message(
         ClientMessage::ClickElement(req) => {
             let request_id = req.request_id;
             let element_id = ElementId::new(&req.element_id);
-            let (success, error) = match axio_core::api::click(&element_id) {
+            let (success, error) = match axio::api::click(&element_id) {
                 Ok(_) => (true, None),
                 Err(e) => (false, Some(e.to_string())),
             };
@@ -218,14 +225,11 @@ async fn handle_client_message(
         ClientMessage::GetChildren(req) => {
             let request_id = req.request_id;
             let element_id = ElementId::new(&req.element_id);
-            let (success, children, error) = match axio_core::api::tree(
-                &element_id,
-                req.max_depth,
-                req.max_children_per_level,
-            ) {
-                Ok(children) => (true, Some(children), None),
-                Err(e) => (false, None, Some(e.to_string())),
-            };
+            let (success, children, error) =
+                match axio::api::tree(&element_id, req.max_depth, req.max_children_per_level) {
+                    Ok(children) => (true, Some(children), None),
+                    Err(e) => (false, None, Some(e.to_string())),
+                };
             let response = crate::protocol::get_children::Response {
                 request_id,
                 success,
@@ -264,7 +268,7 @@ async fn handle_client_message(
         ClientMessage::WatchNode(req) => {
             let request_id = req.request_id;
             let element_id = ElementId::new(&req.element_id);
-            let (success, error) = match axio_core::api::watch(&element_id) {
+            let (success, error) = match axio::api::watch(&element_id) {
                 Ok(_) => (true, None),
                 Err(e) => (false, Some(e.to_string())),
             };
@@ -283,7 +287,7 @@ async fn handle_client_message(
         ClientMessage::UnwatchNode(req) => {
             let request_id = req.request_id;
             let element_id = ElementId::new(&req.element_id);
-            axio_core::api::unwatch(&element_id);
+            axio::api::unwatch(&element_id);
 
             let response = crate::protocol::unwatch_node::Response {
                 request_id,
@@ -297,7 +301,7 @@ async fn handle_client_message(
 
         ClientMessage::GetElementAtPosition(req) => {
             let request_id = req.request_id;
-            let (success, element, error) = match axio_core::api::element_at(req.x, req.y) {
+            let (success, element, error) = match axio::api::element_at(req.x, req.y) {
                 Ok(node) => (true, Some(node), None),
                 Err(e) => (false, None, Some(e.to_string())),
             };

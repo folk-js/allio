@@ -689,6 +689,12 @@ export class AXIO {
             console.log(
               `[AXIO] 📦 Attached root node to window ${message.window_id}`
             );
+
+            // If this is the focused window and it just got its root,
+            // re-notify focus listeners so they can display the tree
+            if (this.focused?.id === message.window_id) {
+              this.notifyFocusedWindowChange(this.focused);
+            }
           } else {
             console.warn(
               `[AXIO] ⚠️ Received root for unknown window ${message.window_id}`

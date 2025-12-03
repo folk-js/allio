@@ -11,7 +11,7 @@
  */
 use serde::{Deserialize, Serialize};
 
-use axio_core::{AXNode, ElementUpdate, WindowInfo};
+use axio::{AXNode, ElementUpdate, WindowInfo};
 
 // ============================================================================
 // Request/Response Pair Modules

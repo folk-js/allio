@@ -8,7 +8,7 @@ license = "MIT"
 
 [dependencies]
 # Core AXIO crate
-axio-core = { path = "../axio" }
+axio = { path = "../axio" }
 
 # WebSocket server
 axum = { version = "0.7", features = ["ws"] }

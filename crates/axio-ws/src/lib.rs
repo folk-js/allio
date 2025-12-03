@@ -21,4 +21,4 @@ pub use protocol::{ClientMessage, ServerMessage};
 pub use websocket::{start_ws_server, ClickthroughCallback, WebSocketState};
 
 // Re-export ElementUpdate from axio-core for convenience
-pub use axio_core::ElementUpdate;
+pub use axio::ElementUpdate;

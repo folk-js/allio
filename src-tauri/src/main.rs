@@ -15,10 +15,9 @@ use tauri::Manager;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 mod mouse;
-mod windows;
 
+use axio::windows::{get_main_screen_dimensions, PollingConfig, WindowEnumOptions};
 use axio_ws::WebSocketState;
-use windows::{get_all_windows_with_focus, get_main_screen_dimensions, window_polling_loop};
 
 // Dynamic overlay handling
 fn get_overlay_files() -> Vec<String> {
@@ -198,11 +197,11 @@ fn main() {
                 });
 
             // Initialize WebSocket state with clickthrough support
-            let ws_state = WebSocketState::new(sender.clone())
-                .with_clickthrough(clickthrough_callback);
+            let ws_state =
+                WebSocketState::new(sender.clone()).with_clickthrough(clickthrough_callback);
 
-            // Initialize ElementRegistry with broadcast sender
-            axio_core::element_registry::ElementRegistry::initialize(sender);
+            // Initialize ElementRegistry with broadcast sender (for element update events)
+            axio::element_registry::ElementRegistry::initialize(sender.clone());
 
             let (screen_width, screen_height) = get_main_screen_dimensions();
             if let Some(window) = app.get_webview_window("main") {
@@ -251,27 +250,29 @@ fn main() {
             // Start global mouse tracking (for automatic clickthrough)
             mouse::start_mouse_tracking(ws_state.clone());
 
-            // Start WebSocket server and window polling
+            // Start window polling (broadcasts to WebSocket via sender)
+            let current_pid = std::process::id();
+            let ws_state_for_polling = ws_state.clone();
+            axio::start_polling(PollingConfig {
+                enum_options: WindowEnumOptions {
+                    exclude_pid: Some(current_pid),
+                    filter_fullscreen: true,
+                    filter_offscreen: true,
+                },
+                broadcast_sender: Some(sender.clone()),
+                // Update WebSocketState's cached windows for initial client connections
+                on_windows_changed: Some(Box::new(move |windows, _, _| {
+                    ws_state_for_polling.update_windows(windows);
+                })),
+                ..Default::default()
+            });
+
+            // Start WebSocket server
             let ws_state_clone = ws_state.clone();
             thread::spawn(move || {
-                // Do an initial window poll to populate the state
-                let current_windows = get_all_windows_with_focus();
-
-                // Update WebSocket state with initial windows
                 let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
                 rt.block_on(async move {
-                    // Only update if we got a valid window list (overlay is visible)
-                    if let Some(windows) = current_windows {
-                        ws_state.update_windows(&windows).await;
-                    }
-
-                    // Start the WebSocket server
-                    tokio::spawn(async move {
-                        axio_ws::start_ws_server(ws_state_clone).await;
-                    });
-
-                    // Continue with the polling loop
-                    window_polling_loop(ws_state);
+                    axio_ws::start_ws_server(ws_state_clone).await;
                 });
             });
 

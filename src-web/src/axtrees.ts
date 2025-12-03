@@ -144,11 +144,13 @@ class AXTreeOverlay {
       return;
     }
 
-    // New window focused - display its tree
-    if (
-      !this.lastFocusedWindow ||
-      focusedWindow.id !== this.lastFocusedWindow.id
-    ) {
+    // Check if this is a new window or if root just arrived for current window
+    const isNewWindow =
+      !this.lastFocusedWindow || focusedWindow.id !== this.lastFocusedWindow.id;
+    const rootJustArrived =
+      focusedWindow.root && !this.lastFocusedWindow?.root && !isNewWindow;
+
+    if (isNewWindow || rootJustArrived) {
       console.log(`🎯 Focus changed to "${focusedWindow.title}"`);
       this.lastFocusedWindow = focusedWindow;
 

@@ -15,7 +15,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # AXIO crates (local workspace members)
-axio-core = { path = "../crates/axio" }
+axio = { path = "../crates/axio" }
 axio-ws = { path = "../crates/axio-ws" }
 
 # Tauri framework
@@ -25,16 +25,8 @@ tauri-plugin-shell = "2"
 # Async runtime (needed for WebSocket server)
 tokio = { version = "1", features = ["full"] }
 
-# Serialization
-serde = { version = "1", features = ["derive"] }
+# Serialization (for mouse position broadcast)
 serde_json = "1"
-
-# Window info (for polling)
-x-win = "5.0.1"
-
-# Utilities
-anyhow = "1.0"
-once_cell = "1.19"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.23"

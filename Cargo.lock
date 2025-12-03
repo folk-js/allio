@@ -329,26 +329,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "axio-app"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "axio-core",
- "axio-ws",
- "core-graphics 0.23.2",
- "once_cell",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-shell",
- "tokio",
- "x-win",
-]
-
-[[package]]
-name = "axio-core"
+name = "axio"
 version = "0.1.0"
 dependencies = [
  "accessibility",
@@ -361,13 +342,29 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "uuid",
+ "x-win",
+]
+
+[[package]]
+name = "axio-app"
+version = "0.0.1"
+dependencies = [
+ "axio",
+ "axio-ws",
+ "core-graphics 0.23.2",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-shell",
+ "tokio",
 ]
 
 [[package]]
 name = "axio-ws"
 version = "0.1.0"
 dependencies = [
- "axio-core",
+ "axio",
  "axum",
  "colored",
  "serde",
