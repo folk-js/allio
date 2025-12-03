@@ -20,4 +20,5 @@ Some technical challenges of this project are:
 - Making the trees 'reactive' and live
 - Handling tree and element lifecycle
 - Syncing between Rust and Web
+- Finding a good architecture
 - ...many more
