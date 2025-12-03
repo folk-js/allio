@@ -97,20 +97,35 @@ pub enum AXRole {
 // Node Structure
 // ============================================================================
 
-/// Core accessibility node
+/// Core accessibility element
 ///
 /// Represents a single element in the accessibility tree.
-/// Each node has a unique ID (UUID from ElementRegistry) for direct access.
-/// Forms a tree structure via the children field and parent_id.
+/// Each element has a unique ID (UUID from ElementRegistry) for direct access.
+///
+/// **Hydration semantics:**
+/// - `None` = "not fetched" (unknown)
+/// - `Some(value)` = "value when queried" (may be stale)
+///
+/// Only `id` and `role` are always present (required for identity).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AXNode {
-    // Identity - UUID from ElementRegistry (for direct lookup)
+    // ══════════════════════════════════════════════════════════════════
+    // IDENTITY (always present)
+    // ══════════════════════════════════════════════════════════════════
+    /// UUID from ElementRegistry (for direct lookup)
     pub id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_id: Option<String>, // UUID of parent element (None for root)
 
-    // Role information
+    /// ARIA-style role
     pub role: AXRole,
+
+    // ══════════════════════════════════════════════════════════════════
+    // OPTIONAL FIELDS (populated based on query type)
+    // ══════════════════════════════════════════════════════════════════
+    /// UUID of parent element (None for root or if not fetched)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+
+    /// Platform-specific subtype (or native role name for Unknown)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subrole: Option<String>,
 
@@ -125,16 +140,22 @@ pub struct AXNode {
     pub placeholder: Option<String>,
 
     // State
-    pub focused: bool,
-    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub focused: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected: Option<bool>,
 
-    // Geometry (optional, not all nodes have screen position)
+    // Geometry
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bounds: Option<Bounds>,
 
     // Tree structure
-    pub children_count: usize, // Total number of children (whether loaded or not)
-    pub children: Vec<AXNode>, // Loaded children (may be empty even if children_count > 0)
+    /// Total number of children (None if not fetched)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub children_count: Option<usize>,
+    /// Loaded children (None if not fetched, Some([]) if no children)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub children: Option<Vec<AXNode>>,
 }

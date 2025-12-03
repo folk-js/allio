@@ -116,19 +116,36 @@ export type AXRole =
 // ============================================================================
 
 /**
- * Core accessibility node
+ * Core accessibility element
  *
- * Each node has a unique ID (UUID from ElementRegistry) for direct access.
- * Forms a tree structure via the children field and parent_id.
+ * Each element has a unique ID (UUID from ElementRegistry) for direct access.
+ *
+ * **Hydration semantics:**
+ * - `undefined` = "not fetched" (unknown)
+ * - value present = "value when queried" (may be stale)
+ *
+ * Only `id` and `role` are always present (required for identity).
  */
 export interface AXNode {
-  // Identity - UUID from ElementRegistry (for direct lookup)
-  readonly id: string; // UUID from ElementRegistry
-  readonly parent_id?: string; // UUID of parent element (None for root)
+  // ════════════════════════════════════════════════════════════════════
+  // IDENTITY (always present)
+  // ════════════════════════════════════════════════════════════════════
 
-  // Role information
+  /** UUID from ElementRegistry (for direct lookup) */
+  readonly id: string;
+
+  /** ARIA-style role */
   readonly role: AXRole;
-  readonly subrole?: string; // Platform-specific subtype (or native name for unknown roles)
+
+  // ════════════════════════════════════════════════════════════════════
+  // OPTIONAL FIELDS (populated based on query type)
+  // ════════════════════════════════════════════════════════════════════
+
+  /** UUID of parent element (undefined for root or if not fetched) */
+  readonly parent_id?: string;
+
+  /** Platform-specific subtype (or native role name for Unknown) */
+  readonly subrole?: string;
 
   // Content
   readonly label?: string;
@@ -137,16 +154,18 @@ export interface AXNode {
   readonly placeholder?: string;
 
   // State
-  readonly focused: boolean;
-  readonly enabled: boolean;
+  readonly focused?: boolean;
+  readonly enabled?: boolean;
   readonly selected?: boolean;
 
-  // Geometry (optional, not all nodes have screen position)
+  // Geometry
   readonly bounds?: Bounds;
 
   // Tree structure
-  readonly children_count: number; // Total number of children (whether loaded or not)
-  readonly children: ReadonlyArray<AXNode>; // Loaded children (may be empty even if children_count > 0)
+  /** Total number of children (undefined if not fetched) */
+  readonly children_count?: number;
+  /** Loaded children (undefined if not fetched, [] if no children) */
+  readonly children?: ReadonlyArray<AXNode>;
 
   // Operations (set by AXIO when creating nodes)
   setValue?(text: string): Promise<void>;
@@ -389,7 +408,10 @@ export class AXIO {
       });
 
       // Build and send request with request_id
-      const message = config.buildRequest({ ...request, request_id: requestId });
+      const message = config.buildRequest({
+        ...request,
+        request_id: requestId,
+      });
       this.ws.send(JSON.stringify(message));
 
       // Timeout
@@ -628,7 +650,7 @@ export class AXIO {
       return node;
     }
 
-    for (const child of node.children) {
+    for (const child of node.children ?? []) {
       const found = this.findNodeInTree(child, elementId);
       if (found) return found;
     }

@@ -88,8 +88,7 @@ pub fn element_to_axnode(
     let enabled = element
         .attribute(&AXAttribute::enabled())
         .ok()
-        .and_then(|e| e.try_into().ok())
-        .unwrap_or(false);
+        .and_then(|e| e.try_into().ok());
 
     // Get description
     let description = element
@@ -121,8 +120,7 @@ pub fn element_to_axnode(
     let focused = element
         .attribute(&AXAttribute::focused())
         .ok()
-        .and_then(|f| f.try_into().ok())
-        .unwrap_or(false);
+        .and_then(|f| f.try_into().ok());
 
     // Get selected state (not available in all versions of accessibility crate)
     let selected = None;
@@ -134,12 +132,11 @@ pub fn element_to_axnode(
     let children_count = element
         .attribute(&AXAttribute::children())
         .ok()
-        .map(|children_array| children_array.len() as usize)
-        .unwrap_or(0);
+        .map(|children_array| children_array.len() as usize);
 
     // Get children (only if load_children is true)
     let children = if load_children {
-        get_element_children(
+        Some(get_element_children(
             element,
             window_id,
             pid,
@@ -148,9 +145,9 @@ pub fn element_to_axnode(
             max_depth,
             max_children_per_level,
             load_children,
-        )
+        ))
     } else {
-        Vec::new()
+        None
     };
 
     Some(AXNode {

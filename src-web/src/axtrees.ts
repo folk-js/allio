@@ -229,9 +229,11 @@ class AXTreeOverlay {
       nodeContent.className = "tree-node-content";
 
       // Expand/collapse/load indicator
-      const hasLoadedChildren = node.children && node.children.length > 0;
+      const childrenCount = node.children_count ?? 0;
+      const loadedChildren = node.children ?? [];
+      const hasLoadedChildren = loadedChildren.length > 0;
       const hasUnloadedChildren =
-        node.children_count > 0 && node.children.length === 0;
+        childrenCount > 0 && loadedChildren.length === 0;
       const isExpanded = this.expandedNodes.has(nodeId!);
       const isLoading = this.loadingNodes.has(nodeId!);
 
@@ -244,7 +246,7 @@ class AXTreeOverlay {
       } else if (hasUnloadedChildren) {
         indicator.textContent = "+"; // Unloaded children
         indicator.style.cursor = "pointer";
-        indicator.title = `Load ${node.children_count} children`;
+        indicator.title = `Load ${childrenCount} children`;
       } else if (hasLoadedChildren) {
         indicator.textContent = isExpanded ? "▾" : "▸"; // Expanded/collapsed
         indicator.style.cursor = "pointer";
@@ -344,7 +346,7 @@ class AXTreeOverlay {
         stateSpan.textContent = " [focused]";
         nodeInfo.appendChild(stateSpan);
       }
-      if (!node.enabled) {
+      if (node.enabled === false) {
         const stateSpan = document.createElement("span");
         stateSpan.className = "tree-state-disabled";
         stateSpan.textContent = " [disabled]";
@@ -355,9 +357,7 @@ class AXTreeOverlay {
       if (hasLoadedChildren || hasUnloadedChildren) {
         const childCountSpan = document.createElement("span");
         childCountSpan.className = "tree-count";
-        const count = hasLoadedChildren
-          ? node.children.length
-          : node.children_count;
+        const count = hasLoadedChildren ? loadedChildren.length : childrenCount;
         childCountSpan.textContent = ` (${count})`;
         nodeInfo.appendChild(childCountSpan);
       }
@@ -460,7 +460,7 @@ class AXTreeOverlay {
           childrenContainer.style.display = "none";
         }
 
-        for (const child of node.children) {
+        for (const child of loadedChildren) {
           childrenContainer.appendChild(this.createTreeElement(child));
         }
 
@@ -949,7 +949,8 @@ class AXTreeOverlay {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private filterEmptyGroups(node: AXNode): AXNode | null {
     // First, recursively filter children
-    const filteredChildren = node.children
+    const children = node.children ?? [];
+    const filteredChildren = children
       .map((child) => this.filterEmptyGroups(child))
       .filter((child): child is AXNode => child !== null);
 
@@ -961,7 +962,7 @@ class AXTreeOverlay {
       const hasDescription = node.description && node.description.trim() !== "";
       const hasPlaceholder = node.placeholder && node.placeholder.trim() !== "";
       const hasLoadedChildren = filteredChildren.length > 0;
-      const hasUnloadedChildren = node.children_count > 0; // Unloaded children to lazy-load
+      const hasUnloadedChildren = (node.children_count ?? 0) > 0; // Unloaded children to lazy-load
 
       // Keep the group only if it has some meaningful content or children (loaded or unloaded)
       if (
@@ -1132,7 +1133,9 @@ class AXTreeOverlay {
 
     try {
       console.log(
-        `📥 Loading children for ${node.role} (${node.children_count} children)`
+        `📥 Loading children for ${node.role} (${
+          node.children_count ?? "?"
+        } children)`
       );
 
       // Fetch children using the node's getChildren method

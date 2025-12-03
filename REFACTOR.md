@@ -692,29 +692,7 @@ fn main() {
 - Clear ownership - caller owns the `Axio` instance
 - Testable - can create isolated instances in tests
 
-### Proposal 4: **Add Request IDs to Protocol**
-
-```typescript
-// Before
-type ClientMessage =
-  | { type: "get_children"; element_id: string; ... }
-
-// After
-type ClientMessage =
-  | { type: "get_children"; request_id: string; element_id: string; ... }
-
-type ServerMessage =
-  | { type: "get_children_response"; request_id: string; ... }
-```
-
-This enables:
-
-- Proper request/response correlation
-- Concurrent requests without race conditions
-- Request timeouts per-request
-- Better debugging
-
-### Proposal 5: **Simplify TypeScript API with Immutable Updates**
+### Proposal 4: **Simplify TypeScript API with Immutable Updates**
 
 Instead of mutating nodes and attaching methods, use a functional approach:
 
@@ -976,17 +954,17 @@ pub struct Element {
 
 ### Phase 1: Core Refactoring (in place)
 
-1. **Implement Element type** - single type with Option fields as decided
+1. ~~**Implement Element type** - single type with Option fields as decided~~ ✓ Done
 2. **Instance-based state** - remove global statics, `Axio::new()` returns owned instance
 3. **Clear threading model** - start with `!Send` (single-threaded), document constraints
 4. **Push + pull pattern** - subscribe to AX notifications, on-demand getters
-5. **Protocol updates** - add request IDs for correlation
+5. ~~**Protocol updates** - add request IDs for correlation~~ ✓ Done
 
 ### Phase 2: TypeScript Client
 
 6. **Match new Element model** - single type with optional fields
 7. **Proper state management** - immutable updates, no mutation
-8. **Request correlation** - handle concurrent requests correctly
+8. **Request correlation** - handle concurrent requests correctly ✓ Done
 
 ### Phase 3: Crate Split
 
