@@ -34,12 +34,14 @@ export interface Window {
 /** Get children of an accessibility element */
 export namespace GetChildren {
   export interface Request {
+    request_id?: string;
     element_id: string;
     max_depth?: number;
     max_children_per_level?: number;
   }
 
   export interface Response {
+    request_id?: string;
     success: boolean;
     children?: AXNode[];
     error?: string;
@@ -49,11 +51,13 @@ export namespace GetChildren {
 /** Write text to an accessibility element */
 export namespace WriteToElement {
   export interface Request {
+    request_id?: string;
     element_id: string;
     text: string;
   }
 
   export interface Response {
+    request_id?: string;
     success: boolean;
     error?: string;
   }
@@ -62,10 +66,12 @@ export namespace WriteToElement {
 /** Click an accessibility element */
 export namespace ClickElement {
   export interface Request {
+    request_id?: string;
     element_id: string;
   }
 
   export interface Response {
+    request_id?: string;
     success: boolean;
     error?: string;
   }
@@ -74,10 +80,12 @@ export namespace ClickElement {
 /** Enable/disable click-through on overlay window */
 export namespace SetClickthrough {
   export interface Request {
+    request_id?: string;
     enabled: boolean;
   }
 
   export interface Response {
+    request_id?: string;
     success: boolean;
     enabled: boolean;
     error?: string;
@@ -87,11 +95,13 @@ export namespace SetClickthrough {
 /** Start watching an element for changes */
 export namespace WatchNode {
   export interface Request {
+    request_id?: string;
     element_id: string;
     node_id: string;
   }
 
   export interface Response {
+    request_id?: string;
     success: boolean;
     node_id: string;
     error?: string;
@@ -101,10 +111,12 @@ export namespace WatchNode {
 /** Stop watching an element */
 export namespace UnwatchNode {
   export interface Request {
+    request_id?: string;
     element_id: string;
   }
 
   export interface Response {
+    request_id?: string;
     success: boolean;
   }
 }
@@ -112,11 +124,13 @@ export namespace UnwatchNode {
 /** Get accessibility element at screen position */
 export namespace GetElementAtPosition {
   export interface Request {
+    request_id?: string;
     x: number;
     y: number;
   }
 
   export interface Response {
+    request_id?: string;
     success: boolean;
     element?: AXNode;
     error?: string;

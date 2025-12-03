@@ -1000,3 +1000,4 @@ pub struct Element {
 - **Z-order occlusion:** Use window `z_index` for CSS-driven occlusion in overlays
 - **Stable window identity** - replace bounds-matching with CGWindowID or similar
 - **Event-driven window tracking** - NSWorkspace notifications instead of polling
+- **Simplify TypeScript API** - possibly derive from Rust types

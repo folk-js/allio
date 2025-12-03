@@ -185,11 +185,23 @@ export class AXIO {
   private reconnectTimer: number | null = null;
   private readonly reconnectDelay = 1000;
 
+  // Request correlation
+  private requestCounter = 0;
+  private pendingRequests: Map<
+    string,
+    { resolve: (data: any) => void; reject: (error: Error) => void }
+  > = new Map();
+
   // Window state
   private windowsInternal: Window[] = [];
   public focused: Window | null = null;
 
   constructor(private readonly wsUrl: string = "ws://localhost:3030/ws") {}
+
+  /** Generate unique request ID */
+  private generateRequestId(): string {
+    return `r${++this.requestCounter}`;
+  }
 
   /**
    * Get current windows (with roots automatically populated)
@@ -350,50 +362,44 @@ export class AXIO {
 
   /**
    * Type-safe RPC method for request/response pairs
-   * Eliminates string-typing and provides compile-time safety
+   * Uses request_id for correlation to prevent race conditions
    */
   private async rpc<Req, Res extends { success: boolean; error?: string }>(
     config: RPCConfig<Req>,
     request: Req
   ): Promise<Res> {
     return new Promise((resolve, reject) => {
-      const handler = (responseData: any) => {
-        const listeners = this.listeners.get(config.responseType);
-        if (listeners) {
-          listeners.delete(handler);
-        }
-
-        if (responseData.success) {
-          resolve(responseData as Res);
-        } else {
-          reject(new Error(responseData.error || "Request failed"));
-        }
-      };
-
-      // Register temporary handler
-      if (!this.listeners.has(config.responseType)) {
-        this.listeners.set(config.responseType, new Set());
-      }
-      this.listeners.get(config.responseType)!.add(handler);
-
-      // Send request
-      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        const message = config.buildRequest(request);
-        this.ws.send(JSON.stringify(message));
-      } else {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
         reject(new Error("WebSocket not connected"));
         return;
       }
 
+      const requestId = this.generateRequestId();
+
+      // Store pending request handler
+      this.pendingRequests.set(requestId, {
+        resolve: (responseData: any) => {
+          if (responseData.success) {
+            resolve(responseData as Res);
+          } else {
+            reject(new Error(responseData.error || "Request failed"));
+          }
+        },
+        reject,
+      });
+
+      // Build and send request with request_id
+      const message = config.buildRequest({ ...request, request_id: requestId });
+      this.ws.send(JSON.stringify(message));
+
       // Timeout
       setTimeout(() => {
-        const listeners = this.listeners.get(config.responseType);
-        if (listeners) {
-          listeners.delete(handler);
+        if (this.pendingRequests.has(requestId)) {
+          this.pendingRequests.delete(requestId);
+          reject(
+            new Error(`Timeout waiting for ${config.responseType} response`)
+          );
         }
-        reject(
-          new Error(`Timeout waiting for ${config.responseType} response`)
-        );
       }, config.timeout || 5000);
     });
   }
@@ -690,20 +696,23 @@ export class AXIO {
           this.applyTreeUpdate(message.update);
           break;
 
-        // Response messages
+        // Response messages - handle via request_id correlation
         case "get_children_response":
         case "write_to_element_response":
         case "click_element_response":
         case "set_clickthrough_response":
         case "watch_node_response":
         case "unwatch_node_response":
-        case "get_element_at_position_response":
-          // These are handled by request/response pattern via rpc() method
-          const responseListeners = this.listeners.get(message.type);
-          if (responseListeners) {
-            responseListeners.forEach((callback) => callback(message));
+        case "get_element_at_position_response": {
+          // Try request_id correlation first (new pattern)
+          const requestId = (message as any).request_id;
+          if (requestId && this.pendingRequests.has(requestId)) {
+            const pending = this.pendingRequests.get(requestId)!;
+            this.pendingRequests.delete(requestId);
+            pending.resolve(message);
           }
           break;
+        }
 
         default:
           console.warn("[AXIO] Unhandled message type:", message);
