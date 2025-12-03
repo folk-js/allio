@@ -1,8 +1,6 @@
 // AXIO Client - TypeScript client for AXIO accessibility system
 // Types are auto-generated from Rust via ts-rs
 
-// Generated types from Rust
 export * from "./types";
-
 export { AXIO } from "./axio";
-export type { Window, AXNode } from "./axio";
+export type { Window } from "./axio";

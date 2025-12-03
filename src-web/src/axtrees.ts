@@ -31,7 +31,7 @@ class AXTreeOverlay {
    */
   private setupCursorTransparency() {
     // Listen for global mouse position from backend
-    this.axio.onMousePosition((x, y) => {
+    this.axio.on("mouse", ({ x, y }) => {
       // Check what element is at this position
       const elementUnderCursor = document.elementFromPoint(x, y);
 
@@ -88,25 +88,16 @@ class AXTreeOverlay {
 
   private async setupWebSocketListener() {
     try {
-      // Set up window update handler
-      this.axio.onWindowUpdate((windows) => {
-        this.updateWindows(windows);
-      });
-
-      // Set up focused window change handler
-      this.axio.onFocusedWindowChange((focusedWindow) => {
-        this.handleFocusedWindowChange(focusedWindow);
-      });
-
-      // Set up element update handler (receives AXObserver notifications)
-      this.axio.onElementUpdate((update) => {
+      this.axio.on("windows", (windows) => this.updateWindows(windows));
+      this.axio.on("focus", (focused) =>
+        this.handleFocusedWindowChange(focused)
+      );
+      this.axio.on("update", (update) => {
         console.log("🔄 Element updated:", update);
         this.handleElementUpdate(update);
       });
 
-      // Connect to websocket
       await this.axio.connect();
-
       console.log("📡 AXIO connected");
     } catch (error) {
       console.error("❌ Failed to connect AXIO:", error);
@@ -407,14 +398,11 @@ class AXTreeOverlay {
             e.preventDefault();
             e.stopPropagation();
 
-            // Use node's setValue method
-            if (node.setValue) {
-              try {
-                await node.setValue(textInput.value);
-                console.log(`✅ Wrote "${textInput.value}" to node`);
-              } catch (error) {
-                console.error("❌ Failed to write:", error);
-              }
+            try {
+              await this.axio.write(node.id, textInput.value);
+              console.log(`✅ Wrote "${textInput.value}" to node`);
+            } catch (error) {
+              console.error("❌ Failed to write:", error);
             }
           }
         });
@@ -476,8 +464,8 @@ class AXTreeOverlay {
       const isLeafNode = !hasLoadedChildren && !hasUnloadedChildren;
       if (isLeafNode && nodeId && node.id) {
         console.log(`👁️ Auto-watching leaf node: ${node.role}`);
-        this.axio.watchNodeByElementId(node.id, nodeId).catch((err) => {
-          console.error(`Failed to auto-watch leaf node ${nodeId}:`, err);
+        this.axio.watch(node.id).catch((err) => {
+          console.error(`Failed to auto-watch leaf node:`, err);
         });
       }
 
@@ -828,11 +816,9 @@ class AXTreeOverlay {
           replacement
         );
 
-        // Apply the change using node's setValue method
-        if (this.currentTargetElement!.node.setValue) {
-          await this.currentTargetElement!.node.setValue(result);
-          console.log(`✅ Applied regex to node`);
-        }
+        // Apply the change
+        await this.axio.write(this.currentTargetElement!.node.id, result);
+        console.log(`✅ Applied regex to node`);
 
         // Update stored current value
         this.currentTargetElement!.currentValue = result;
@@ -1081,8 +1067,8 @@ class AXTreeOverlay {
       // Unwatch this node (stop receiving updates)
       const stored = this.nodeElements.get(nodeId);
       if (stored) {
-        this.axio.unwatchNodeByElementId(stored.node.id).catch((err) => {
-          console.error(`Failed to unwatch node ${nodeId}:`, err);
+        this.axio.unwatch(stored.node.id).catch((err) => {
+          console.error(`Failed to unwatch node:`, err);
         });
       }
 
@@ -1100,8 +1086,8 @@ class AXTreeOverlay {
       // Watch this node (start receiving updates)
       const stored = this.nodeElements.get(nodeId);
       if (stored) {
-        this.axio.watchNodeByElementId(stored.node.id, nodeId).catch((err) => {
-          console.error(`Failed to watch node ${nodeId}:`, err);
+        this.axio.watch(stored.node.id).catch((err) => {
+          console.error(`Failed to watch node:`, err);
         });
       }
 
@@ -1139,12 +1125,8 @@ class AXTreeOverlay {
         } children)`
       );
 
-      // Fetch children using the node's getChildren method
-      if (!node.getChildren) {
-        throw new Error("Node does not have getChildren method");
-      }
-
-      const children = await node.getChildren();
+      // Fetch children
+      const children = await this.axio.tree(node.id, 1);
       console.log(`✅ Loaded ${children.length} children`);
 
       // Update the stored node with loaded children
@@ -1168,8 +1150,8 @@ class AXTreeOverlay {
       this.expandedNodes.add(nodeId);
 
       // Watch this node for changes (now that it's expanded)
-      this.axio.watchNodeByElementId(node.id, nodeId).catch((err) => {
-        console.error(`Failed to watch node ${nodeId}:`, err);
+      this.axio.watch(node.id).catch((err) => {
+        console.error(`Failed to watch node:`, err);
       });
 
       // Update indicator

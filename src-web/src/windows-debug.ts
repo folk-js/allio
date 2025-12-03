@@ -42,7 +42,7 @@ async function init() {
     output.innerHTML =
       '<div class="connecting">Connected. Waiting for windows...</div>';
 
-    axio.onWindowUpdate((windows) => {
+    axio.on("windows", (windows) => {
       renderWindows(windows);
     });
 

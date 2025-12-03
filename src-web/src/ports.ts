@@ -75,17 +75,9 @@ class PortsDemo {
 
   private async setupWebSocket() {
     try {
-      // Set up window update handler
-      this.axio.onWindowUpdate((windows) => {
-        this.updateWindows(windows);
-      });
+      this.axio.on("windows", (windows) => this.updateWindows(windows));
+      this.axio.on("update", (update) => this.handleElementUpdate(update));
 
-      // Set up element update handler for value propagation
-      this.axio.onElementUpdate((update) => {
-        this.handleElementUpdate(update);
-      });
-
-      // Connect to websocket
       await this.axio.connect();
       console.log("📡 Ports Demo connected");
     } catch (error) {
@@ -95,7 +87,7 @@ class PortsDemo {
 
   private setupMouseTracking() {
     // Listen for global mouse position from backend
-    this.axio.onMousePosition((x, y) => {
+    this.axio.on("mouse", ({ x, y }) => {
       // Update temp connection line if drawing
       if (this.connectingFromPort && this.tempConnectionLine) {
         this.updateTempConnection(x, y);
@@ -327,7 +319,7 @@ class PortsDemo {
     let lastMouseY = 0;
 
     // Track mouse position
-    this.axio.onMousePosition((x, y) => {
+    this.axio.on("mouse", ({ x, y }) => {
       lastMouseX = x;
       lastMouseY = y;
     });
@@ -354,10 +346,7 @@ class PortsDemo {
 
         // Get element at mouse position
         try {
-          const element = await this.axio.getElementAtPosition(
-            lastMouseX,
-            lastMouseY
-          );
+          const element = await this.axio.elementAt(lastMouseX, lastMouseY);
 
           if (element) {
             console.log(
@@ -435,7 +424,7 @@ class PortsDemo {
 
     // Watch the element for value changes
     if (element.id) {
-      this.axio.watchNodeByElementId(element.id, port.id).catch((err) => {
+      this.axio.watch(element.id).catch((err) => {
         console.error("Failed to watch port element:", err);
       });
     }
@@ -557,7 +546,7 @@ class PortsDemo {
 
     // Unwatch the element
     if (port.element.id) {
-      this.axio.unwatchNodeByElementId(port.element.id).catch((err) => {
+      this.axio.unwatch(port.element.id).catch((err) => {
         console.error("Failed to unwatch element:", err);
       });
     }
@@ -998,13 +987,11 @@ class PortsDemo {
     );
 
     // Write value to target element
-    if (targetElement.setValue) {
-      try {
-        await targetElement.setValue(valueStr);
-        console.log("✅ Value propagated successfully");
-      } catch (error) {
-        console.error("❌ Failed to propagate value:", error);
-      }
+    try {
+      await this.axio.write(targetElement.id, valueStr);
+      console.log("✅ Value propagated successfully");
+    } catch (error) {
+      console.error("❌ Failed to propagate value:", error);
     }
   }
 }

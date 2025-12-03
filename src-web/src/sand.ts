@@ -903,7 +903,7 @@ export class FolkSand extends HTMLElement {
   async #setupWebSocketConnection() {
     try {
       // Set up window update handler to refresh collision data
-      this.#axio.onWindowUpdate(() => {
+      this.#axio.on("windows", () => {
         console.log(
           `Sand overlay received window update: ${
             this.#axio.windows.length
@@ -913,7 +913,7 @@ export class FolkSand extends HTMLElement {
       });
 
       // Set up global mouse position handler for clickthrough (works even when unfocused)
-      this.#axio.onMousePosition((x, y) => {
+      this.#axio.on("mouse", ({ x, y }) => {
         this.#updateClickthrough(x, y);
       });
 
