@@ -10,7 +10,7 @@ use std::ffi::c_void;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
-use crate::axio::{AXValue, ElementId, WindowId};
+use crate::types::{AXValue, ElementId, WindowId};
 
 /// Context passed to AX observer callbacks
 /// Must match the definition used in element_registry.rs observer_callback
@@ -167,7 +167,7 @@ impl UIElement {
         load_children: bool,
         max_depth: usize,
         max_children: usize,
-    ) -> Option<crate::axio::AXNode> {
+    ) -> Option<crate::types::AXNode> {
         // Delegate to platform-specific conversion
         // This will call back into ElementRegistry to register child elements
         crate::platform::macos::element_to_axnode(

@@ -12,9 +12,8 @@ use tauri::Manager;
 use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::axio::ElementId;
 use crate::protocol::{ClientMessage, ServerMessage};
-use crate::windows::WindowInfo;
+use axio_core::{ElementId, WindowInfo};
 use std::sync::Arc;
 
 // WebSocket state for broadcasting to clients
@@ -170,7 +169,7 @@ async fn handle_client_message(
         ClientMessage::WriteToElement(req) => {
             let request_id = req.request_id;
             let element_id = ElementId::new(&req.element_id);
-            let (success, error) = match crate::api::write(&element_id, &req.text) {
+            let (success, error) = match axio_core::api::write(&element_id, &req.text) {
                 Ok(_) => (true, None),
                 Err(e) => (false, Some(e.to_string())),
             };
@@ -188,7 +187,7 @@ async fn handle_client_message(
         ClientMessage::ClickElement(req) => {
             let request_id = req.request_id;
             let element_id = ElementId::new(&req.element_id);
-            let (success, error) = match crate::api::click(&element_id) {
+            let (success, error) = match axio_core::api::click(&element_id) {
                 Ok(_) => (true, None),
                 Err(e) => (false, Some(e.to_string())),
             };
@@ -206,11 +205,14 @@ async fn handle_client_message(
         ClientMessage::GetChildren(req) => {
             let request_id = req.request_id;
             let element_id = ElementId::new(&req.element_id);
-            let (success, children, error) =
-                match crate::api::tree(&element_id, req.max_depth, req.max_children_per_level) {
-                    Ok(children) => (true, Some(children), None),
-                    Err(e) => (false, None, Some(e.to_string())),
-                };
+            let (success, children, error) = match axio_core::api::tree(
+                &element_id,
+                req.max_depth,
+                req.max_children_per_level,
+            ) {
+                Ok(children) => (true, Some(children), None),
+                Err(e) => (false, None, Some(e.to_string())),
+            };
             let response = crate::protocol::get_children::Response {
                 request_id,
                 success,
@@ -247,7 +249,7 @@ async fn handle_client_message(
         ClientMessage::WatchNode(req) => {
             let request_id = req.request_id;
             let element_id = ElementId::new(&req.element_id);
-            let (success, error) = match crate::api::watch(&element_id) {
+            let (success, error) = match axio_core::api::watch(&element_id) {
                 Ok(_) => (true, None),
                 Err(e) => (false, Some(e.to_string())),
             };
@@ -265,7 +267,7 @@ async fn handle_client_message(
 
         ClientMessage::UnwatchNode(req) => {
             let element_id = ElementId::new(&req.element_id);
-            crate::api::unwatch(&element_id);
+            axio_core::api::unwatch(&element_id);
 
             let response = crate::protocol::unwatch_node::Response {
                 request_id: req.request_id,
@@ -278,7 +280,7 @@ async fn handle_client_message(
 
         ClientMessage::GetElementAtPosition(req) => {
             let request_id = req.request_id;
-            let (success, element, error) = match crate::api::element_at(req.x, req.y) {
+            let (success, element, error) = match axio_core::api::element_at(req.x, req.y) {
                 Ok(element) => (true, Some(element), None),
                 Err(e) => (false, None, Some(e.to_string())),
             };

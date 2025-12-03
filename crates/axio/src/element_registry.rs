@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::axio::{ElementId, WindowId};
+use crate::types::{ElementId, ElementUpdate, WindowId};
 use crate::ui_element::{ObserverContext, UIElement};
 
 /// Check if two AXUIElements refer to the same UI element using CFEqual
@@ -349,7 +349,7 @@ impl ElementRegistry {
         element_id: &ElementId,
         max_depth: usize,
         max_children: usize,
-    ) -> Result<Vec<crate::axio::AXNode>, String> {
+    ) -> Result<Vec<crate::types::AXNode>, String> {
         Self::with_element(element_id, |_element| {
             crate::platform::macos::get_children_by_element_id(
                 element_id.as_str(),
@@ -402,7 +402,6 @@ fn handle_notification(
     element: &accessibility::AXUIElement,
     sender: &Arc<broadcast::Sender<String>>,
 ) {
-    use crate::protocol::{ElementUpdate, ServerMessage};
     use accessibility::AXAttribute;
     use core_foundation::base::TCFType;
     use core_foundation::string::CFString;
@@ -467,9 +466,21 @@ fn handle_notification(
         }
     };
 
-    // Broadcast typed update
+    // Broadcast the update (wrapped for wire protocol compatibility)
+    // The receiver (src-tauri websocket) will wrap this in ServerMessage
     if let Some(update) = update {
-        let message = ServerMessage::ElementUpdate { update };
+        // Wrap in a simple object with type tag for the receiver
+        #[derive(serde::Serialize)]
+        struct BroadcastMessage {
+            #[serde(rename = "type")]
+            msg_type: &'static str,
+            update: ElementUpdate,
+        }
+
+        let message = BroadcastMessage {
+            msg_type: "element_update", // snake_case to match TypeScript protocol
+            update,
+        };
 
         if let Ok(json_str) = serde_json::to_string(&message) {
             let _ = sender.send(json_str);

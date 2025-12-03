@@ -14,16 +14,13 @@ use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
-mod api;
-mod axio;
-mod element_registry;
 mod mouse;
-mod platform;
 mod protocol;
-mod ui_element;
 mod websocket;
-mod window_manager;
 mod windows;
+
+// Re-export axio_core for local use
+use axio_core as axio;
 
 use websocket::WebSocketState;
 use windows::{get_all_windows_with_focus, get_main_screen_dimensions, window_polling_loop};
@@ -35,13 +32,12 @@ fn get_overlay_files() -> Vec<String> {
         .parent()
         .expect("Executable path has no parent directory");
 
-    // In development: src-tauri/target/debug -> go up 3 levels to project root
+    // In development: target/debug -> go up 2 levels to project root (workspace layout)
     // In production: executable location varies
     let project_root = if exe_dir.ends_with("debug") || exe_dir.ends_with("release") {
         exe_dir
-            .parent()
-            .and_then(|p| p.parent())
-            .and_then(|p| p.parent())
+            .parent() // target/
+            .and_then(|p| p.parent()) // project root
             .expect("Failed to find project root from debug/release directory")
     } else {
         exe_dir
@@ -193,7 +189,7 @@ fn main() {
             let ws_state = WebSocketState::new(app.handle().clone());
 
             // Initialize ElementRegistry with broadcast sender
-            element_registry::ElementRegistry::initialize(ws_state.sender());
+            axio_core::element_registry::ElementRegistry::initialize(ws_state.sender());
 
             let (screen_width, screen_height) = get_main_screen_dimensions();
             if let Some(window) = app.get_webview_window("main") {

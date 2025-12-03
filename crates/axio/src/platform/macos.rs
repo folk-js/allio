@@ -9,7 +9,7 @@ use accessibility_sys::{kAXPositionAttribute, kAXSizeAttribute};
 use core_foundation::base::TCFType;
 use core_foundation::string::CFString;
 
-use crate::axio::{AXNode, AXRole, AXValue, Bounds, ElementId, Position, Size, WindowId};
+use crate::types::{AXNode, AXRole, AXValue, Bounds, ElementId, Position, Size, WindowId};
 
 /// Convert macOS AXUIElement to AXIO AXNode
 ///

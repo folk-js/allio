@@ -9,8 +9,7 @@ use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use crate::axio::WindowId;
-use crate::windows::WindowInfo;
+use crate::types::{WindowId, WindowInfo};
 
 /// Cached window data with AX element
 #[derive(Clone)]

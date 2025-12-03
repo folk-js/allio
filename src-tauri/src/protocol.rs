@@ -11,8 +11,7 @@
  */
 use serde::{Deserialize, Serialize};
 
-use crate::axio::{AXNode, AXValue};
-use crate::windows::WindowInfo;
+use axio_core::{AXNode, ElementUpdate, WindowInfo};
 
 // ============================================================================
 // Request/Response Pair Modules
@@ -207,20 +206,6 @@ pub enum ServerMessage {
     WatchNodeResponse(watch_node::Response),
     UnwatchNodeResponse(unwatch_node::Response),
     GetElementAtPositionResponse(get_element_at_position::Response),
-}
-
-// ============================================================================
-// Element Update Types (Server Push Events)
-// ============================================================================
-
-/// Update events for accessibility elements
-/// Moved from axio.rs - this is part of the protocol, not core AXIO types
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "update_type", rename_all = "PascalCase")]
-pub enum ElementUpdate {
-    ValueChanged { element_id: String, value: AXValue },
-    LabelChanged { element_id: String, label: String },
-    ElementDestroyed { element_id: String },
 }
 
 // ============================================================================

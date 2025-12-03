@@ -1,5 +1,4 @@
 use once_cell::sync::Lazy;
-use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     panic::{self},
@@ -8,75 +7,65 @@ use std::{
     time::{Duration, Instant},
 };
 
-// Cache for bundle ID lookups (PID -> Bundle ID)
-// Using once_cell::Lazy to avoid Option wrapper and simplify initialization
-static BUNDLE_ID_CACHE: Lazy<Mutex<HashMap<u32, Option<String>>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
-
 #[cfg(target_os = "macos")]
 use core_graphics::display::{
     CGDirectDisplayID, CGDisplayPixelsHigh, CGDisplayPixelsWide, CGMainDisplayID,
 };
 
-use crate::axio::WindowId;
+// Re-export from axio_core for local use
+use axio_core::window_manager::WindowManager;
+use axio_core::{WindowId, WindowInfo};
+
 use crate::websocket::WebSocketState;
+
+// Cache for bundle ID lookups (PID -> Bundle ID)
+// Using once_cell::Lazy to avoid Option wrapper and simplify initialization
+static BUNDLE_ID_CACHE: Lazy<Mutex<HashMap<u32, Option<String>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 // Constants - optimized polling rate
 const POLLING_INTERVAL_MS: u64 = 8; // ~120 FPS - fast enough for smooth tracking
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct WindowInfo {
-    pub id: String,
-    pub title: String,
-    pub app_name: String,
-    pub x: i32,
-    pub y: i32,
-    pub w: i32,
-    pub h: i32,
-    pub focused: bool,
-    pub process_id: u32,
+// Extension trait for WindowInfo with app-specific helpers
+trait WindowInfoExt {
+    fn is_fullscreen(&self) -> bool;
+    fn with_offset(self, offset_x: i32, offset_y: i32) -> Self;
 }
 
-// Convert x-win WindowInfo to our WindowInfo struct
-impl WindowInfo {
-    fn from_x_win(window: &x_win::WindowInfo, focused: bool) -> Self {
-        WindowInfo {
-            id: window.id.to_string(),
-            title: window.title.clone(),
-            app_name: window.info.name.clone(),
-            x: window.position.x,
-            y: window.position.y,
-            w: window.position.width,
-            h: window.position.height,
-            focused,
-            process_id: window.info.process_id,
-        }
-    }
-
-    /// Check if window is fullscreen (covers entire screen with no chrome)
-    ///
-    /// NOTE: We currently filter out ALL fullscreen windows to avoid issues with
-    /// screenshot/recording UIs. This might need to change in the future if we want
-    /// to support overlays on fullscreen apps (games, videos, etc).
+impl WindowInfoExt for WindowInfo {
     #[cfg(target_os = "macos")]
     fn is_fullscreen(&self) -> bool {
         let (screen_width, screen_height) = get_main_screen_dimensions();
-
-        // Check if window covers the entire screen exactly
         self.x == 0
             && self.y == 0
             && (self.w as f64) == screen_width
             && (self.h as f64) == screen_height
     }
+
+    #[cfg(not(target_os = "macos"))]
+    fn is_fullscreen(&self) -> bool {
+        false
+    }
+
     fn with_offset(mut self, offset_x: i32, offset_y: i32) -> Self {
         self.x -= offset_x;
         self.y -= offset_y;
         self
     }
+}
 
-    #[cfg(not(target_os = "macos"))]
-    fn is_fullscreen(&self) -> bool {
-        false
+/// Convert x-win WindowInfo to axio WindowInfo
+fn window_info_from_x_win(window: &x_win::WindowInfo, focused: bool) -> WindowInfo {
+    WindowInfo {
+        id: window.id.to_string(),
+        title: window.title.clone(),
+        app_name: window.info.name.clone(),
+        x: window.position.x,
+        y: window.position.y,
+        w: window.position.width,
+        h: window.position.height,
+        focused,
+        process_id: window.info.process_id,
     }
 }
 
@@ -200,7 +189,7 @@ pub fn get_all_windows_with_focus() -> Option<Vec<WindowInfo>> {
         .filter(|w| w.info.process_id != current_pid && !should_filter_process(w.info.process_id))
         .map(|w| {
             let focused = active_window_id.map_or(false, |id| id == w.id);
-            WindowInfo::from_x_win(w, focused).with_offset(overlay_offset.0, overlay_offset.1)
+            window_info_from_x_win(w, focused).with_offset(overlay_offset.0, overlay_offset.1)
         })
         .filter(|w| !w.is_fullscreen()) // Also filter out fullscreen windows
         .filter(|w| w.x <= (screen_width as i32 + 1)) // Filter out windows beyond screen width
@@ -211,8 +200,6 @@ pub fn get_all_windows_with_focus() -> Option<Vec<WindowInfo>> {
 
 // WebSocket-only polling loop
 pub fn window_polling_loop(ws_state: WebSocketState) {
-    use crate::window_manager::WindowManager;
-
     let mut last_windows: Option<Vec<WindowInfo>> = None;
 
     loop {
@@ -237,9 +224,8 @@ pub fn window_polling_loop(ws_state: WebSocketState) {
                 if let Some(focused_window) = current_windows.iter().find(|w| w.focused) {
                     // Get the root AX node for this window
                     let window_id = WindowId::new(&focused_window.id);
-                    if let Ok(root_node) = crate::platform::get_ax_tree_by_window_id(
-                        &window_id,
-                        1,     // Just the root, no children
+                    if let Ok(root_node) = axio_core::platform::get_ax_tree_by_window_id(
+                        &window_id, 1,     // Just the root, no children
                         0,     // No children
                         false, // Don't load full tree
                     ) {

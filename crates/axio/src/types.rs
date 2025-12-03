@@ -280,3 +280,37 @@ pub struct AXNode {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub children: Option<Vec<AXNode>>,
 }
+
+// ============================================================================
+// Window Information
+// ============================================================================
+
+/// Information about a visible window
+///
+/// This is the core window metadata type used throughout AXIO.
+/// It's populated from platform-specific APIs (x-win on macOS).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WindowInfo {
+    pub id: String,
+    pub title: String,
+    pub app_name: String,
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub focused: bool,
+    pub process_id: u32,
+}
+
+// ============================================================================
+// Events (for notification broadcasts)
+// ============================================================================
+
+/// Update event for an element (broadcast when changes are observed)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "update_type", rename_all = "PascalCase")]
+pub enum ElementUpdate {
+    ValueChanged { element_id: String, value: AXValue },
+    LabelChanged { element_id: String, label: String },
+    ElementDestroyed { element_id: String },
+}

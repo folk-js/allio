@@ -10,8 +10,8 @@
 
 #![allow(dead_code)] // API surface - not all functions used internally yet
 
-use crate::axio::{AXNode, AxioError, AxioResult, ElementId};
 use crate::element_registry::ElementRegistry;
+use crate::types::{AXNode, AxioError, AxioResult, ElementId};
 
 // ============================================================================
 // Public API
