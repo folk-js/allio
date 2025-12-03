@@ -5,7 +5,6 @@
  * Only fetches AX elements when windows are added, not on every poll.
  */
 use accessibility::AXUIElement;
-use colored::Colorize;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -86,11 +85,6 @@ impl WindowManager {
                     let (ax_element, ax_window_id) =
                         Self::fetch_ax_element_for_window(&window_info);
                     if ax_element.is_some() {
-                        println!(
-                            "{}",
-                            format!("Matched AX element for window '{}'", window_info.title)
-                                .green()
-                        );
                         existing.ax_element = ax_element;
                         existing.ax_window_id = ax_window_id;
                     }
@@ -136,28 +130,10 @@ impl WindowManager {
         // Get all window elements for this PID
         let window_elements = match get_window_elements(window.process_id) {
             Ok(elements) => elements,
-            Err(e) => {
-                println!(
-                    "{}",
-                    format!(
-                        "ERROR: Failed to get window elements for PID {} (window '{}'): {}",
-                        window.process_id, window.title, e
-                    )
-                    .red()
-                );
-                return (None, None);
-            }
+            Err(_) => return (None, None),
         };
 
         if window_elements.is_empty() {
-            println!(
-                "{}",
-                format!(
-                    "WARNING: No window elements found for PID {} (window '{}')",
-                    window.process_id, window.title
-                )
-                .yellow()
-            );
             return (None, None);
         }
 
@@ -203,18 +179,8 @@ impl WindowManager {
 
         // Fallback: If only 1 window element exists, use it
         if window_elements.len() == 1 {
-            let element = &window_elements[0];
-            println!(
-                "⚠️  Using only available window element for '{}' (PID: {})",
-                window.title, window.process_id
-            );
-            return (Some(element.clone()), None);
+            return (Some(window_elements[0].clone()), None);
         }
-
-        println!(
-            "❌ Could not match window '{}' to any AX element by bounds (found {} window elements for PID {})",
-            window.title, window_elements.len(), window.process_id
-        );
 
         (None, None)
     }

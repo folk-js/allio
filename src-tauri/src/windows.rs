@@ -235,22 +235,13 @@ pub fn window_polling_loop(ws_state: WebSocketState) {
                 // Broadcast root node for focused window
                 if let Some(focused_window) = current_windows.iter().find(|w| w.focused) {
                     // Get the root AX node for this window
-                    match crate::platform::get_ax_tree_by_window_id(
+                    if let Ok(root_node) = crate::platform::get_ax_tree_by_window_id(
                         &focused_window.id,
                         1,     // Just the root, no children
                         0,     // No children
                         false, // Don't load full tree
                     ) {
-                        Ok(root_node) => {
-                            ws_state.broadcast_window_root(&focused_window.id, root_node);
-                            println!("📤 Broadcasted root node for window {}", focused_window.id);
-                        }
-                        Err(e) => {
-                            println!(
-                                "❌ Failed to get root for window {}: {}",
-                                focused_window.id, e
-                            );
-                        }
+                        ws_state.broadcast_window_root(&focused_window.id, root_node);
                     }
                 }
 

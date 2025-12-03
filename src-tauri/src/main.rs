@@ -29,19 +29,19 @@ use windows::{get_all_windows_with_focus, get_main_screen_dimensions, window_pol
 
 // Dynamic overlay handling
 fn get_overlay_files() -> Vec<String> {
-    let exe_path = std::env::current_exe().unwrap();
-    let exe_dir = exe_path.parent().unwrap();
+    let exe_path = std::env::current_exe().expect("Failed to get current executable path");
+    let exe_dir = exe_path
+        .parent()
+        .expect("Executable path has no parent directory");
 
     // In development: src-tauri/target/debug -> go up 3 levels to project root
     // In production: executable location varies
     let project_root = if exe_dir.ends_with("debug") || exe_dir.ends_with("release") {
         exe_dir
             .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent())
+            .expect("Failed to find project root from debug/release directory")
     } else {
         exe_dir
     };
@@ -114,7 +114,7 @@ fn switch_overlay(
 
     let window = get_main_window(app)?;
     let url = get_overlay_url(filename);
-    window.navigate(url.parse().unwrap())?;
+    window.navigate(url.parse().expect(&format!("Invalid overlay URL: {}", url)))?;
     Ok(())
 }
 

@@ -306,10 +306,7 @@ pub fn get_window_elements(pid: u32) -> Result<Vec<AXUIElement>, String> {
     // Get children of the application element
     let children_array = match app_element.attribute(&AXAttribute::children()) {
         Ok(children) => children,
-        Err(_) => {
-            println!("⚠️  PID {} has no AXChildren attribute", pid);
-            return Ok(Vec::new());
-        }
+        Err(_) => return Ok(Vec::new()),
     };
 
     let child_count = children_array.len();
@@ -514,17 +511,6 @@ pub fn get_element_at_position(x: f64, y: f64) -> Result<AXNode, String> {
         // Get the actual window this element belongs to
         let window_id = get_window_id_for_element(&element)
             .unwrap_or_else(|| format!("orphan-{}-{}", pid, uuid::Uuid::new_v4()));
-
-        println!(
-            "📍 Element at ({}, {}): window_id={}, role={:?}",
-            x,
-            y,
-            window_id,
-            element
-                .attribute(&AXAttribute::role())
-                .ok()
-                .map(|r| r.to_string())
-        );
 
         // Convert to AXNode with the actual or unique window_id
         element_to_axnode(

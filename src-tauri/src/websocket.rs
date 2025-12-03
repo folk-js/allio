@@ -103,7 +103,7 @@ async fn websocket_handler(
 async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
     let mut rx = ws_state.sender.subscribe();
 
-    println!("{}", "Client connected".bright_black());
+    println!("{}", "[client] connected".bright_black());
 
     // Send initial window state immediately
     {
@@ -113,10 +113,6 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
         };
         if let Ok(msg_json) = serde_json::to_string(&msg) {
             let _ = socket.send(Message::Text(msg_json)).await;
-            println!(
-                "📡 Sent initial window state ({} windows) to client",
-                current_windows.len()
-            );
         }
     }
 
@@ -157,7 +153,7 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
     // Note: Element watches are now managed by ElementRegistry per window
     // They will be cleaned up automatically when windows close
 
-    println!("🔌 WebSocket client disconnected");
+    println!("{}", "[client] disconnected".bright_black());
 }
 
 async fn handle_client_message(
@@ -172,8 +168,6 @@ async fn handle_client_message(
     // Type-safe pattern matching with exhaustive checking
     match client_msg {
         ClientMessage::WriteToElement(req) => {
-            println!("✍️ Writing to element_id: {}", req.element_id);
-
             let response = match write_to_element_by_id(&req.element_id, &req.text) {
                 Ok(_) => crate::protocol::write_to_element::Response {
                     success: true,
@@ -191,8 +185,6 @@ async fn handle_client_message(
         }
 
         ClientMessage::ClickElement(req) => {
-            println!("🖱️ Clicking element_id: {}", req.element_id);
-
             let response = match crate::platform::click_element_by_id(&req.element_id) {
                 Ok(_) => crate::protocol::click_element::Response {
                     success: true,
@@ -210,32 +202,21 @@ async fn handle_client_message(
         }
 
         ClientMessage::GetChildren(req) => {
-            println!(
-                "👶 Requesting children for element_id: {} (max_depth: {}, max_children: {})",
-                req.element_id, req.max_depth, req.max_children_per_level
-            );
-
             let response = match get_children_by_element_id(
                 &req.element_id,
                 req.max_depth,
                 req.max_children_per_level,
             ) {
-                Ok(children) => {
-                    println!("✅ Sent children");
-                    crate::protocol::get_children::Response {
-                        success: true,
-                        children: Some(children),
-                        error: None,
-                    }
-                }
-                Err(e) => {
-                    println!("❌ Failed to get children");
-                    crate::protocol::get_children::Response {
-                        success: false,
-                        children: None,
-                        error: Some(e),
-                    }
-                }
+                Ok(children) => crate::protocol::get_children::Response {
+                    success: true,
+                    children: Some(children),
+                    error: None,
+                },
+                Err(e) => crate::protocol::get_children::Response {
+                    success: false,
+                    children: None,
+                    error: Some(e),
+                },
             };
 
             let msg = ServerMessage::GetChildrenResponse(response);
@@ -279,17 +260,11 @@ async fn handle_client_message(
                     node_id: req.node_id,
                     error: None,
                 },
-                Err(e) => {
-                    println!(
-                        "{}",
-                        format!("ERROR: Watch failed for {}: {}", req.node_id, e).red()
-                    );
-                    crate::protocol::watch_node::Response {
-                        success: false,
-                        node_id: req.node_id,
-                        error: Some(e),
-                    }
-                }
+                Err(e) => crate::protocol::watch_node::Response {
+                    success: false,
+                    node_id: req.node_id,
+                    error: Some(e),
+                },
             };
 
             let msg = ServerMessage::WatchNodeResponse(response);
@@ -298,8 +273,6 @@ async fn handle_client_message(
         }
 
         ClientMessage::UnwatchNode(req) => {
-            println!("🚫 Unwatching element_id: {}", req.element_id);
-
             use crate::element_registry::ElementRegistry;
             ElementRegistry::unwatch(&req.element_id);
 
@@ -310,8 +283,6 @@ async fn handle_client_message(
         }
 
         ClientMessage::GetElementAtPosition(req) => {
-            println!("📍 Getting element at position ({}, {})", req.x, req.y);
-
             let response = match crate::platform::get_element_at_position(req.x, req.y) {
                 Ok(element) => crate::protocol::get_element_at_position::Response {
                     success: true,

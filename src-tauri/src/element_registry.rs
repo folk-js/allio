@@ -112,7 +112,6 @@ impl ElementRegistry {
                 for element_id in window_elements {
                     if let Some(existing) = registry.elements.get(element_id) {
                         if ax_elements_equal(existing.ax_element(), &ax_element) {
-                            println!("🔄 Reusing existing element ID: {}", element_id);
                             return element_id.clone();
                         }
                     }
@@ -141,7 +140,6 @@ impl ElementRegistry {
                 .or_insert_with(HashSet::new)
                 .insert(id.clone());
 
-            println!("✨ Created new element ID: {}", id);
             id
         })
     }
@@ -226,8 +224,6 @@ impl ElementRegistry {
                 if let Some(window_elements) = registry.window_to_elements.get_mut(&window_id) {
                     window_elements.remove(element_id);
                 }
-
-                println!("🗑️  Removed destroyed element: {}", element_id);
             }
         });
     }
@@ -257,8 +253,6 @@ impl ElementRegistry {
 
                 // Remove observer
                 registry.observers.remove(window_id);
-
-                println!("🗑️  Cleaned up elements for window {}", window_id);
             }
         });
     }
@@ -368,9 +362,11 @@ unsafe extern "C" fn observer_callback(
     use core_foundation::base::TCFType;
     use core_foundation::string::CFString;
 
-    if refcon.is_null() {
-        return;
-    }
+    // refcon should never be null - we always pass a context when registering
+    assert!(
+        !refcon.is_null(),
+        "AXObserver callback received null refcon - this is a bug in AXIO"
+    );
 
     // Extract context (defined in ui_element.rs watch())
     #[derive(Clone)]
@@ -463,8 +459,7 @@ fn handle_notification(
         }
 
         _ => {
-            // Unhandled notification type
-            println!("⚠️  Unhandled notification: {}", notification);
+            // Unhandled notification type - ignore silently
             None
         }
     };
