@@ -50,4 +50,4 @@ mod websocket;
 pub use websocket::{start_ws_server, ClickthroughCallback, WebSocketState, WsEventSink};
 
 // Re-export axio types for convenience
-pub use axio::{AXNode, ElementUpdate, WindowInfo};
+pub use axio::{AXNode, AXWindow, ElementUpdate};

@@ -3,7 +3,7 @@
 //! Provides window discovery and tracking for the accessibility system.
 //! Uses x-win for cross-platform window enumeration.
 
-use crate::types::WindowInfo;
+use crate::types::AXWindow;
 use crate::window_manager::WindowManager;
 use crate::WindowId;
 use once_cell::sync::Lazy;
@@ -113,8 +113,8 @@ pub fn get_main_screen_dimensions() -> (f64, f64) {
 // Window Info Conversion
 // ============================================================================
 
-fn window_info_from_x_win(window: &x_win::WindowInfo, focused: bool) -> WindowInfo {
-    WindowInfo {
+fn window_from_x_win(window: &x_win::WindowInfo, focused: bool) -> AXWindow {
+    AXWindow {
         id: window.id.to_string(),
         title: window.title.clone(),
         app_name: window.info.name.clone(),
@@ -124,6 +124,7 @@ fn window_info_from_x_win(window: &x_win::WindowInfo, focused: bool) -> WindowIn
         h: window.position.height,
         focused,
         process_id: window.info.process_id,
+        root: None,
     }
 }
 
@@ -150,7 +151,7 @@ pub struct WindowEnumOptions {
 /// - Returns None if that process's window isn't found (overlay not visible)
 /// - Uses that window's position as coordinate offset (for overlay alignment)
 /// - Excludes that window from results
-pub fn get_windows(options: &WindowEnumOptions) -> Option<Vec<WindowInfo>> {
+pub fn get_windows(options: &WindowEnumOptions) -> Option<Vec<AXWindow>> {
     use std::panic;
 
     // Get all windows and active window
@@ -195,7 +196,7 @@ pub fn get_windows(options: &WindowEnumOptions) -> Option<Vec<WindowInfo>> {
         })
         .map(|w| {
             let focused = active_window_id.map_or(false, |id| id == w.id);
-            let mut info = window_info_from_x_win(w, focused);
+            let mut info = window_from_x_win(w, focused);
             // Apply offset from overlay window position
             info.x -= offset_x;
             info.y -= offset_y;
@@ -228,7 +229,7 @@ pub fn get_windows(options: &WindowEnumOptions) -> Option<Vec<WindowInfo>> {
 // ============================================================================
 
 /// Callback type for window updates
-pub type WindowUpdateCallback = Box<dyn Fn(&[WindowInfo], &[WindowId], &[WindowId]) + Send + Sync>;
+pub type WindowUpdateCallback = Box<dyn Fn(&[AXWindow], &[WindowId], &[WindowId]) + Send + Sync>;
 
 /// Callback type for focused window root updates
 pub type FocusedRootCallback = Box<dyn Fn(&str, &crate::AXNode) + Send + Sync>;
@@ -262,7 +263,7 @@ impl Default for PollingConfig {
 /// This runs in a background thread and never returns
 pub fn start_polling(config: PollingConfig) {
     thread::spawn(move || {
-        let mut last_windows: Option<Vec<WindowInfo>> = None;
+        let mut last_windows: Option<Vec<AXWindow>> = None;
 
         loop {
             let loop_start = Instant::now();

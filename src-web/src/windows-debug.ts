@@ -1,4 +1,4 @@
-import { AXIO, Window } from "@axio/client";
+import { AXIO, AXWindow } from "@axio/client";
 
 const axio = new AXIO();
 const output = document.getElementById("output")!;
@@ -8,7 +8,7 @@ function property(key: string, value: any): string {
   return `<div class="property"><span class="property-key">${key}</span><span class="property-value">${value}</span></div>`;
 }
 
-function renderWindows(windows: ReadonlyArray<Window>) {
+function renderWindows(windows: ReadonlyArray<AXWindow>) {
   if (windows.length === 0) {
     output.innerHTML = '<div class="connecting">No windows detected</div>';
     return;

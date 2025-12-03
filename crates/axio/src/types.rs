@@ -237,7 +237,7 @@ pub enum AXRole {
 /// - `Some(value)` = "value when queried" (may be stale)
 ///
 /// Only `id` and `role` are always present (required for identity).
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "packages/axio-client/src/types/")]
 pub struct AXNode {
     // ══════════════════════════════════════════════════════════════════
@@ -292,16 +292,16 @@ pub struct AXNode {
 }
 
 // ============================================================================
-// Window Information
+// Window
 // ============================================================================
 
-/// Information about a visible window
+/// A window with its accessibility tree root
 ///
-/// This is the core window metadata type used throughout AXIO.
-/// It's populated from platform-specific APIs (x-win on macOS).
+/// Combines OS window metadata with the accessibility tree.
+/// The root is populated asynchronously after window discovery.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "packages/axio-client/src/types/")]
-pub struct WindowInfo {
+pub struct AXWindow {
     pub id: String,
     pub title: String,
     pub app_name: String,
@@ -311,6 +311,8 @@ pub struct WindowInfo {
     pub h: i32,
     pub focused: bool,
     pub process_id: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root: Option<AXNode>,
 }
 
 // ============================================================================
@@ -325,4 +327,15 @@ pub enum ElementUpdate {
     ValueChanged { element_id: String, value: AXValue },
     LabelChanged { element_id: String, label: String },
     ElementDestroyed { element_id: String },
+}
+
+/// Server-sent events (WebSocket)
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(tag = "event", content = "data", rename_all = "snake_case")]
+#[ts(export, export_to = "packages/axio-client/src/types/")]
+pub enum ServerEvent {
+    WindowUpdate(Vec<AXWindow>),
+    WindowRoot { window_id: String, root: AXNode },
+    MousePosition { x: f64, y: f64 },
+    ElementUpdate(ElementUpdate),
 }

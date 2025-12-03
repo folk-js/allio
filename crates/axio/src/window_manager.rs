@@ -9,12 +9,12 @@ use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use crate::types::{WindowId, WindowInfo};
+use crate::types::{AXWindow, WindowId};
 
 /// Cached window data with AX element
 #[derive(Clone)]
 pub struct ManagedWindow {
-    pub info: WindowInfo,
+    pub info: AXWindow,
     pub ax_element: Option<AXUIElement>,
     pub ax_window_id: Option<u32>, // CGWindowID from _AXUIElementGetWindow
 }
@@ -42,7 +42,7 @@ impl WindowManager {
     ///
     /// Returns: (current_windows, added_ids, removed_ids)
     pub fn update_windows(
-        new_windows: Vec<WindowInfo>,
+        new_windows: Vec<AXWindow>,
     ) -> (Vec<ManagedWindow>, Vec<WindowId>, Vec<WindowId>) {
         let mut cache = WINDOW_CACHE.lock().unwrap();
 
@@ -120,7 +120,7 @@ impl WindowManager {
     /// - Use AXUIElement equality/hashing if available
     /// - Match by window layer number or other attributes
     /// - Investigate if there's a public API we're missing
-    fn fetch_ax_element_for_window(window: &WindowInfo) -> (Option<AXUIElement>, Option<u32>) {
+    fn fetch_ax_element_for_window(window: &AXWindow) -> (Option<AXUIElement>, Option<u32>) {
         use crate::platform::get_window_elements;
         use accessibility::AXAttribute;
         use accessibility_sys::kAXPositionAttribute;

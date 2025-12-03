@@ -3,4 +3,3 @@
 
 export * from "./types";
 export { AXIO } from "./axio";
-export type { Window } from "./axio";

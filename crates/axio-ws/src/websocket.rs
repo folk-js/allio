@@ -3,7 +3,7 @@
 //! Provides a thin WebSocket layer over AXIO's RPC dispatch.
 //! Events are broadcast to all connected clients via the EventSink trait.
 
-use axio::{ElementUpdate, EventSink, WindowInfo};
+use axio::{AXWindow, ElementUpdate, EventSink};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -28,7 +28,7 @@ pub struct WebSocketState {
     /// Broadcast sender for outgoing messages
     pub sender: Arc<broadcast::Sender<String>>,
     /// Cached windows for initial client connections
-    pub current_windows: Arc<RwLock<Vec<WindowInfo>>>,
+    pub current_windows: Arc<RwLock<Vec<AXWindow>>>,
     /// Optional callback for setting clickthrough (provided by app layer)
     clickthrough_callback: Option<ClickthroughCallback>,
 }
@@ -54,7 +54,7 @@ impl WebSocketState {
     }
 
     /// Update cached windows (called from polling callback)
-    pub fn update_windows(&self, windows: &[WindowInfo]) {
+    pub fn update_windows(&self, windows: &[AXWindow]) {
         if let Ok(mut current) = self.current_windows.write() {
             *current = windows.to_vec();
         }
@@ -83,7 +83,7 @@ impl EventSink for WsEventSink {
         let _ = self.sender.send(msg.to_string());
     }
 
-    fn on_window_update(&self, windows: &[WindowInfo]) {
+    fn on_window_update(&self, windows: &[AXWindow]) {
         let msg = json!({
             "event": "window_update",
             "data": windows

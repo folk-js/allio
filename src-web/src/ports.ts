@@ -1,4 +1,4 @@
-import { AXIO, AXNode, Window } from "@axio/client";
+import { AXIO, AXNode, AXWindow } from "@axio/client";
 
 /**
  * Port Types
@@ -37,7 +37,7 @@ class PortsDemo {
   private axio: AXIO;
 
   // State
-  private windows: Window[] = [];
+  private windows: AXWindow[] = [];
   private ports: Map<string, Port> = new Map(); // portId -> Port
   private connections: Connection[] = [];
   private windowContainers: Map<string, HTMLElement> = new Map(); // windowId -> container
@@ -136,7 +136,7 @@ class PortsDemo {
     return false;
   }
 
-  private updateWindows(windows: Window[]) {
+  private updateWindows(windows: AXWindow[]) {
     this.windows = windows;
 
     // Detect closed windows and clean up
@@ -191,7 +191,7 @@ class PortsDemo {
     );
   }
 
-  private updateToolbar(window: Window) {
+  private updateToolbar(window: AXWindow) {
     // Check if we already have a container for this window
     let windowContainer = this.windowContainers.get(window.id);
     let edgeGroups = this.edgeGroups.get(window.id);
@@ -371,7 +371,7 @@ class PortsDemo {
     });
   }
 
-  private getWindowAtPosition(x: number, y: number): Window | null {
+  private getWindowAtPosition(x: number, y: number): AXWindow | null {
     // Check which window contains the given point
     for (const window of this.windows) {
       if (
@@ -433,7 +433,7 @@ class PortsDemo {
   }
 
   private calculatePortPosition(
-    window: Window,
+    window: AXWindow,
     type: PortType
   ): { x: number; y: number } {
     // Calculate where the port will be positioned in screen coordinates

@@ -8,5 +8,6 @@ export type { Bounds } from "./Bounds";
 export type { ElementId } from "./ElementId";
 export type { ElementUpdate } from "./ElementUpdate";
 export type { Position } from "./Position";
+export type { ServerEvent } from "./ServerEvent";
 export type { Size } from "./Size";
-export type { WindowInfo } from "./WindowInfo";
+export type { AXWindow } from "./AXWindow";

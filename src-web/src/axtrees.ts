@@ -1,10 +1,9 @@
-import { AXIO, AXNode, ElementUpdate, Window } from "@axio/client";
+import { AXIO, AXNode, AXWindow, ElementUpdate } from "@axio/client";
 
 class AXTreeOverlay {
   private windowContainer: HTMLElement;
   private axio: AXIO;
   private treeContainer: HTMLElement | null = null;
-  private lastFocusedWindow: Window | null = null;
   private regexPanel: HTMLElement | null = null;
   private currentTargetElement: {
     node: AXNode;
@@ -104,60 +103,38 @@ class AXTreeOverlay {
     }
   }
 
-  private updateWindows(windows: Window[]) {
-    // Just update the tree position if the window geometry changed
-    // Focus changes are now handled by onFocusedWindowChange
-    if (this.lastFocusedWindow) {
-      const currentWindow = windows.find(
-        (w) => w.id === this.lastFocusedWindow!.id
-      );
-      if (currentWindow) {
-        this.lastFocusedWindow = currentWindow;
-        this.updateTreePosition();
-      }
-    }
-  }
+  private updateWindows(_windows: AXWindow[]) {
+    const focused = this.axio.focused;
+    if (!focused) return;
 
-  /**
-   * Handle focused window changes (called by AXIO when focus changes)
-   */
-  private handleFocusedWindowChange(focusedWindow: Window | null) {
-    // No focused window means either:
-    // - The overlay itself is focused (most common)
-    // - Desktop or other non-application window is focused
-    // In either case, preserve the last tree for interaction
-    if (!focusedWindow) {
-      if (this.treeContainer && this.lastFocusedWindow) {
-        console.log("🖱️ No focused window - preserving last tree");
-        this.updateTreePosition();
-      }
+    // Display tree if focused window has root and we haven't displayed yet
+    if (focused.root && !this.treeContainer) {
+      console.log(`🎯 Root arrived for "${focused.title}"`);
+      this.displayAccessibilityTree(focused.root, focused);
       return;
     }
 
-    // Check if this is a new window or if root just arrived for current window
-    const isNewWindow =
-      !this.lastFocusedWindow || focusedWindow.id !== this.lastFocusedWindow.id;
-    const rootJustArrived =
-      focusedWindow.root && !this.lastFocusedWindow?.root && !isNewWindow;
+    // Update position if window moved
+    this.updateTreePosition();
+  }
 
-    if (isNewWindow || rootJustArrived) {
-      console.log(`🎯 Focus changed to "${focusedWindow.title}"`);
-      this.lastFocusedWindow = focusedWindow;
+  /** Handle focused window changes */
+  private handleFocusedWindowChange(focused: AXWindow | null) {
+    if (!focused) return;
 
-      // Root is automatically populated by the backend
-      if (focusedWindow.root) {
-        this.displayAccessibilityTree(focusedWindow.root, focusedWindow);
-      } else {
-        console.log("⏳ Waiting for root to be pushed by backend...");
-      }
+    console.log(`🎯 Focus changed to "${focused.title}"`);
+
+    // Clear existing tree for new window
+    this.clearAccessibilityTree();
+
+    if (focused.root) {
+      this.displayAccessibilityTree(focused.root, focused);
     } else {
-      // Same window still focused - just update position in case window moved
-      this.lastFocusedWindow = focusedWindow;
-      this.updateTreePosition();
+      console.log("⏳ Waiting for root...");
     }
   }
 
-  private displayAccessibilityTree(tree: AXNode, window: Window) {
+  private displayAccessibilityTree(tree: AXNode, window: AXWindow) {
     // Clear existing tree and reset state
     this.clearAccessibilityTree();
 
@@ -478,15 +455,13 @@ class AXTreeOverlay {
   }
 
   private updateTreePosition() {
-    if (this.treeContainer && this.lastFocusedWindow) {
-      const rightX = this.lastFocusedWindow.x + this.lastFocusedWindow.w + 10;
+    const focused = this.axio.focused;
+    if (this.treeContainer && focused) {
+      const rightX = focused.x + focused.w + 10;
       this.treeContainer.style.left = `${rightX}px`;
-      this.treeContainer.style.top = `${this.lastFocusedWindow.y}px`;
-      // Set height to match window height exactly
-      this.treeContainer.style.height = `${this.lastFocusedWindow.h}px`;
+      this.treeContainer.style.top = `${focused.y}px`;
+      this.treeContainer.style.height = `${focused.h}px`;
     }
-
-    // Also update regex panel position if it's open
     this.updateRegexPanelPosition();
   }
 
@@ -494,7 +469,7 @@ class AXTreeOverlay {
     if (
       this.regexPanel &&
       this.regexPanel.classList.contains("positioned-relative") &&
-      this.lastFocusedWindow
+      this.axio.focused
     ) {
       // Get the target element's position and size from when the panel was opened
       if (this.currentTargetElement) {

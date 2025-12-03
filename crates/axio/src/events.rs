@@ -3,7 +3,7 @@
 //! Provides a trait-based event system that decouples the core from
 //! any specific notification mechanism (WebSocket, channels, etc.)
 
-use crate::types::{AXNode, ElementUpdate, WindowInfo};
+use crate::types::{AXNode, AXWindow, ElementUpdate};
 
 /// Trait for receiving events from AXIO
 ///
@@ -15,7 +15,7 @@ pub trait EventSink: Send + Sync + 'static {
     fn on_element_update(&self, update: ElementUpdate);
 
     /// Called when the window list changes
-    fn on_window_update(&self, windows: &[WindowInfo]);
+    fn on_window_update(&self, windows: &[AXWindow]);
 
     /// Called when a focused window's accessibility tree root is available
     fn on_window_root(&self, window_id: &str, root: &AXNode);
@@ -29,7 +29,7 @@ pub struct NoopEventSink;
 
 impl EventSink for NoopEventSink {
     fn on_element_update(&self, _update: ElementUpdate) {}
-    fn on_window_update(&self, _windows: &[WindowInfo]) {}
+    fn on_window_update(&self, _windows: &[AXWindow]) {}
     fn on_window_root(&self, _window_id: &str, _root: &AXNode) {}
     fn on_mouse_position(&self, _x: f64, _y: f64) {}
 }
@@ -69,7 +69,7 @@ pub(crate) fn emit_element_update(update: ElementUpdate) {
     }
 }
 
-pub(crate) fn emit_window_update(windows: &[WindowInfo]) {
+pub(crate) fn emit_window_update(windows: &[AXWindow]) {
     if let Some(sink) = EVENT_SINK.get() {
         sink.on_window_update(windows);
     }

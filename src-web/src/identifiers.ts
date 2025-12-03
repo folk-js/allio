@@ -1,4 +1,4 @@
-import { AXIO, Window } from "@axio/client";
+import { AXIO, AXWindow } from "@axio/client";
 
 interface Rectangle {
   x: number;
@@ -59,7 +59,7 @@ class WindowOverlay {
     }
   }
 
-  private updateWindowRectangles(windows: Window[]) {
+  private updateWindowRectangles(windows: AXWindow[]) {
     // Filter out very small windows
     const visibleWindows = windows.filter((w) => w.w >= 50 && w.h >= 50);
 
@@ -83,7 +83,7 @@ class WindowOverlay {
     this.updateUnifiedBorders(visibleWindows);
   }
 
-  private updateWindowLabel(window: Window) {
+  private updateWindowLabel(window: AXWindow) {
     let labelElement = this.windowElements.get(window.id);
 
     // Create new label element if it doesn't exist
@@ -123,7 +123,7 @@ class WindowOverlay {
     labelElement.style.display = "block";
   }
 
-  private updateUnifiedBorders(windows: Window[]) {
+  private updateUnifiedBorders(windows: AXWindow[]) {
     // Clear existing border groups
     this.borderGroups.forEach((path) => path.remove());
     this.borderGroups.clear();
@@ -165,7 +165,7 @@ class WindowOverlay {
     });
   }
 
-  private updateLabelVisibility(windows: Window[], polygon: Point[]) {
+  private updateLabelVisibility(windows: AXWindow[], polygon: Point[]) {
     for (const window of windows) {
       const labelElement = this.windowElements.get(window.id);
       if (!labelElement) continue;
@@ -203,8 +203,8 @@ class WindowOverlay {
     return inside;
   }
 
-  private groupOverlappingWindows(windows: Window[]): Window[][] {
-    const groups: Window[][] = [];
+  private groupOverlappingWindows(windows: AXWindow[]): AXWindow[][] {
+    const groups: AXWindow[][] = [];
     const visited = new Set<string>();
 
     for (const window of windows) {
@@ -238,7 +238,7 @@ class WindowOverlay {
     return groups;
   }
 
-  private doWindowsOverlap(a: Window, b: Window): boolean {
+  private doWindowsOverlap(a: AXWindow, b: AXWindow): boolean {
     return !(
       a.x + a.w <= b.x ||
       b.x + b.w <= a.x ||
@@ -511,7 +511,7 @@ class WindowOverlay {
     return false;
   }
 
-  private getBorderStyleForGroup(windows: Window[]): string {
+  private getBorderStyleForGroup(windows: AXWindow[]): string {
     // Priority: focused > has-client > default
     if (windows.some((w) => w.focused)) {
       return "focused";
