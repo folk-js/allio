@@ -16,7 +16,7 @@ use core_graphics::display::{
 use axio_core::window_manager::WindowManager;
 use axio_core::{WindowId, WindowInfo};
 
-use crate::websocket::WebSocketState;
+use axio_ws::WebSocketState;
 
 // Cache for bundle ID lookups (PID -> Bundle ID)
 // Using once_cell::Lazy to avoid Option wrapper and simplify initialization

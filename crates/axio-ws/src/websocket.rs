@@ -8,7 +8,6 @@ use axum::{
     Router,
 };
 use colored::Colorize;
-use tauri::Manager;
 use tokio::sync::{broadcast, RwLock};
 use tower_http::cors::{Any, CorsLayer};
 
@@ -16,59 +15,65 @@ use crate::protocol::{ClientMessage, ServerMessage};
 use axio_core::{ElementId, WindowInfo};
 use std::sync::Arc;
 
+/// Callback type for setting clickthrough on the overlay window
+pub type ClickthroughCallback = Arc<dyn Fn(bool) -> Result<(), String> + Send + Sync>;
+
 // WebSocket state for broadcasting to clients
 #[derive(Clone)]
 pub struct WebSocketState {
     pub sender: Arc<broadcast::Sender<String>>,
     pub current_windows: Arc<RwLock<Vec<WindowInfo>>>,
-    pub app_handle: tauri::AppHandle,
+    /// Optional callback for setting clickthrough (provided by app layer)
+    clickthrough_callback: Option<ClickthroughCallback>,
 }
 
 impl WebSocketState {
-    pub fn new(app_handle: tauri::AppHandle) -> Self {
-        let (sender, _) = broadcast::channel(1000);
-        let sender_arc = Arc::new(sender);
-
+    pub fn new(sender: Arc<broadcast::Sender<String>>) -> Self {
         Self {
-            sender: sender_arc,
+            sender,
             current_windows: Arc::new(RwLock::new(Vec::new())),
-            app_handle,
+            clickthrough_callback: None,
         }
+    }
+
+    /// Set the clickthrough callback (called by app layer)
+    pub fn with_clickthrough(mut self, callback: ClickthroughCallback) -> Self {
+        self.clickthrough_callback = Some(callback);
+        self
+    }
+
+    /// Get a clone of the sender for external broadcasting
+    pub fn sender(&self) -> Arc<broadcast::Sender<String>> {
+        self.sender.clone()
     }
 
     pub fn broadcast(&self, windows: &[WindowInfo]) {
         let msg = ServerMessage::WindowUpdate {
             windows: windows.to_vec(),
         };
-        if let Ok(json) = serde_json::to_string(&msg) {
-            let _ = self.sender.send(json);
+        if let Ok(msg_json) = serde_json::to_string(&msg) {
+            let _ = self.sender.send(msg_json);
         }
     }
 
     /// Broadcast a window root node to all connected clients
-    pub fn broadcast_window_root(&self, window_id: &str, root: crate::axio::AXNode) {
+    pub fn broadcast_window_root(&self, window_id: &str, root: axio_core::AXNode) {
         let msg = ServerMessage::WindowRootUpdate {
             window_id: window_id.to_string(),
             root,
         };
-        if let Ok(json) = serde_json::to_string(&msg) {
-            let _ = self.sender.send(json);
+        if let Ok(msg_json) = serde_json::to_string(&msg) {
+            let _ = self.sender.send(msg_json);
         }
     }
 
-    /// Get the broadcast sender (for ElementRegistry initialization)
-    pub fn sender(&self) -> Arc<broadcast::Sender<String>> {
-        self.sender.clone()
-    }
-
-    // Store current windows for polling loop
     pub async fn update_windows(&self, windows: &[WindowInfo]) {
-        let mut current_windows = self.current_windows.write().await;
-        *current_windows = windows.to_vec();
+        let mut current = self.current_windows.write().await;
+        *current = windows.to_vec();
     }
 }
 
-pub async fn start_websocket_server(ws_state: WebSocketState) {
+pub async fn start_ws_server(ws_state: WebSocketState) {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
@@ -127,45 +132,53 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
                             println!("❌ Error handling message: {}", e);
                         }
                     }
-                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(Message::Close(_))) => {
+                        println!("{}", "[client] closed connection".bright_black());
+                        break;
+                    }
                     Some(Err(e)) => {
                         println!("❌ WebSocket error: {}", e);
                         break;
                     }
-                    _ => {}
+                    None => {
+                        println!("{}", "[client] disconnected".bright_black());
+                        break;
+                    }
+                    _ => {} // Ignore ping/pong/binary
                 }
             }
-            // Send window updates to client
-            update = rx.recv() => {
-                match update {
-                    Ok(data) => {
-                        if socket.send(Message::Text(data)).await.is_err() {
+
+            // Handle broadcasts from other parts of the system
+            broadcast_result = rx.recv() => {
+                match broadcast_result {
+                    Ok(msg) => {
+                        // Send broadcast message to client
+                        if socket.send(Message::Text(msg)).await.is_err() {
                             break;
                         }
                     }
-                    Err(_) => break,
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        // Client is too slow, skip messages
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        break;
+                    }
                 }
             }
         }
     }
-
-    // Note: Element watches are now managed by ElementRegistry per window
-    // They will be cleaned up automatically when windows close
-
-    println!("{}", "[client] disconnected".bright_black());
 }
 
 async fn handle_client_message(
-    message: &str,
+    text: &str,
     _current_window_id: &mut Option<String>,
     ws_state: &WebSocketState,
     socket: &mut WebSocket,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Parse message to strongly-typed ClientMessage enum
-    let client_msg: ClientMessage = serde_json::from_str(message)?;
+    let message: ClientMessage = serde_json::from_str(text)?;
 
-    // Type-safe pattern matching with exhaustive checking
-    match client_msg {
+    match message {
         ClientMessage::WriteToElement(req) => {
             let request_id = req.request_id;
             let element_id = ElementId::new(&req.element_id);
@@ -227,13 +240,15 @@ async fn handle_client_message(
 
         ClientMessage::SetClickthrough(req) => {
             let request_id = req.request_id;
-            let (success, enabled, error) = match ws_state.app_handle.get_webview_window("main") {
-                Some(window) => match window.set_ignore_cursor_events(req.enabled) {
-                    Ok(_) => (true, req.enabled, None),
-                    Err(e) => (false, false, Some(e.to_string())),
-                },
-                None => (false, false, Some("Main window not found".to_string())),
-            };
+            let (success, enabled, error) =
+                if let Some(ref callback) = ws_state.clickthrough_callback {
+                    match callback(req.enabled) {
+                        Ok(_) => (true, req.enabled, None),
+                        Err(e) => (false, false, Some(e)),
+                    }
+                } else {
+                    (false, false, Some("Clickthrough not supported".to_string()))
+                };
             let response = crate::protocol::set_clickthrough::Response {
                 request_id,
                 success,
@@ -266,13 +281,15 @@ async fn handle_client_message(
         }
 
         ClientMessage::UnwatchNode(req) => {
+            let request_id = req.request_id;
             let element_id = ElementId::new(&req.element_id);
             axio_core::api::unwatch(&element_id);
 
             let response = crate::protocol::unwatch_node::Response {
-                request_id: req.request_id,
+                request_id,
                 success: true,
             };
+
             let msg = ServerMessage::UnwatchNodeResponse(response);
             let json = serde_json::to_string(&msg)?;
             socket.send(Message::Text(json)).await.ok();
@@ -281,7 +298,7 @@ async fn handle_client_message(
         ClientMessage::GetElementAtPosition(req) => {
             let request_id = req.request_id;
             let (success, element, error) = match axio_core::api::element_at(req.x, req.y) {
-                Ok(element) => (true, Some(element), None),
+                Ok(node) => (true, Some(node), None),
                 Err(e) => (false, None, Some(e.to_string())),
             };
             let response = crate::protocol::get_element_at_position::Response {

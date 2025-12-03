@@ -12,7 +12,7 @@ use core_graphics::event::CGEvent;
 #[cfg(target_os = "macos")]
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
-use crate::websocket::WebSocketState;
+use axio_ws::{ServerMessage, WebSocketState};
 
 /// Get current mouse position (macOS)
 #[cfg(target_os = "macos")]
@@ -55,7 +55,7 @@ pub fn start_mouse_tracking(ws_state: WebSocketState) {
                     last_position = Some((x, y));
 
                     // Broadcast to all connected clients
-                    let message = crate::protocol::ServerMessage::MousePosition { x, y };
+                    let message = ServerMessage::MousePosition { x, y };
 
                     if let Ok(json) = serde_json::to_string(&message) {
                         let _ = ws_state.sender.send(json);

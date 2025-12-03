@@ -15,14 +15,9 @@ use tauri::Manager;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 mod mouse;
-mod protocol;
-mod websocket;
 mod windows;
 
-// Re-export axio_core for local use
-use axio_core as axio;
-
-use websocket::WebSocketState;
+use axio_ws::WebSocketState;
 use windows::{get_all_windows_with_focus, get_main_screen_dimensions, window_polling_loop};
 
 // Dynamic overlay handling
@@ -185,11 +180,29 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .manage(AppState::default())
         .setup(|app| {
-            // Initialize WebSocket state
-            let ws_state = WebSocketState::new(app.handle().clone());
+            // Create broadcast channel for element updates
+            let (sender, _) = tokio::sync::broadcast::channel(1000);
+            let sender = std::sync::Arc::new(sender);
+
+            // Create clickthrough callback that captures the app handle
+            let app_handle = app.handle().clone();
+            let clickthrough_callback: axio_ws::ClickthroughCallback =
+                std::sync::Arc::new(move |enabled| {
+                    use tauri::Manager;
+                    match app_handle.get_webview_window("main") {
+                        Some(window) => window
+                            .set_ignore_cursor_events(enabled)
+                            .map_err(|e| e.to_string()),
+                        None => Err("Main window not found".to_string()),
+                    }
+                });
+
+            // Initialize WebSocket state with clickthrough support
+            let ws_state = WebSocketState::new(sender.clone())
+                .with_clickthrough(clickthrough_callback);
 
             // Initialize ElementRegistry with broadcast sender
-            axio_core::element_registry::ElementRegistry::initialize(ws_state.sender());
+            axio_core::element_registry::ElementRegistry::initialize(sender);
 
             let (screen_width, screen_height) = get_main_screen_dimensions();
             if let Some(window) = app.get_webview_window("main") {
@@ -254,7 +267,7 @@ fn main() {
 
                     // Start the WebSocket server
                     tokio::spawn(async move {
-                        websocket::start_websocket_server(ws_state_clone).await;
+                        axio_ws::start_ws_server(ws_state_clone).await;
                     });
 
                     // Continue with the polling loop

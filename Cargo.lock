@@ -334,8 +334,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "axio-core",
- "axum",
- "colored",
+ "axio-ws",
  "core-graphics 0.23.2",
  "once_cell",
  "serde",
@@ -345,7 +344,6 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-shell",
  "tokio",
- "tower-http 0.5.2",
  "x-win",
 ]
 
@@ -363,6 +361,19 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "axio-ws"
+version = "0.1.0"
+dependencies = [
+ "axio-core",
+ "axum",
+ "colored",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http 0.5.2",
 ]
 
 [[package]]

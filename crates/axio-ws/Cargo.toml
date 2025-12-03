@@ -1,0 +1,23 @@
+[package]
+name = "axio-ws"
+version = "0.1.0"
+edition = "2021"
+description = "WebSocket server for AXIO accessibility system"
+authors = ["Orion Reed"]
+license = "MIT"
+
+[dependencies]
+# Core AXIO crate
+axio-core = { path = "../axio" }
+
+# WebSocket server
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1", features = ["sync", "rt-multi-thread"] }
+tower-http = { version = "0.5", features = ["cors"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging
+colored = "3.0"
