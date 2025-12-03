@@ -6,6 +6,6 @@ This lets you augment existing interfaces, link apps together, use window geomet
 
 For more background check out our [paper](https://folkjs.org/live-2025/).
 
-![Interlay architecture diagram](/docs/interlay_architecture.png)
+![AXIO architecture diagram](/docs/axio_architecture.png)
 
 Check out the [Contributing Guide](/CONTRIBUTING.md) to setting up the repo.
