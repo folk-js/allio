@@ -123,21 +123,26 @@ pub enum AXRole {
     Unknown,
 }
 
-/// Accessibility element node.
-/// Hydration: None = "not fetched", Some = "value when queried" (may be stale).
-/// Only `id` and `role` are always present.
+/// The unified element type - stored in registry and returned from API.
+/// Flat structure: children are IDs, not nested. Trees derived client-side.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "packages/axio-client/src/types/")]
-pub struct AXNode {
+pub struct AXElement {
+    // Identity
     pub id: ElementId,
-    pub role: AXRole,
+    pub window_id: String,
 
+    // Relationships (flat, not nested)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<ElementId>,
-    /// Platform-specific subtype (or native role name for Unknown)
+    /// None = children not yet discovered, Some([]) = no children
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub children_ids: Option<Vec<ElementId>>,
+
+    // Attributes
+    pub role: AXRole,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subrole: Option<String>,
-
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -146,24 +151,15 @@ pub struct AXNode {
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub placeholder: Option<String>,
-
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bounds: Option<Bounds>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub focused: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub selected: Option<bool>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bounds: Option<Bounds>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub children_count: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub children: Option<Vec<AXNode>>,
 }
 
-/// Window with accessibility tree root (root populated client-side from WindowRoot event).
+/// Window info from x-win. Root element ID populated from WindowRoot event.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "packages/axio-client/src/types/")]
 pub struct AXWindow {
@@ -176,27 +172,23 @@ pub struct AXWindow {
     pub h: i32,
     pub focused: bool,
     pub process_id: u32,
+    /// Root element ID (client looks up from element registry)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub root: Option<AXNode>,
+    pub root_element_id: Option<ElementId>,
 }
 
 // Events
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[serde(tag = "update_type", rename_all = "PascalCase")]
-#[ts(export, export_to = "packages/axio-client/src/types/")]
-pub enum ElementUpdate {
-    ValueChanged { element_id: String, value: AXValue },
-    LabelChanged { element_id: String, label: String },
-    ElementDestroyed { element_id: String },
-}
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(tag = "event", content = "data", rename_all = "snake_case")]
 #[ts(export, export_to = "packages/axio-client/src/types/")]
 pub enum ServerEvent {
+    /// Window list changed
     WindowUpdate(Vec<AXWindow>),
-    WindowRoot { window_id: String, root: AXNode },
+    /// Elements discovered/updated (batch)
+    Elements(Vec<AXElement>),
+    /// Element destroyed
+    ElementDestroyed { element_id: ElementId },
+    /// Mouse position
     MousePosition { x: f64, y: f64 },
-    ElementUpdate(ElementUpdate),
 }

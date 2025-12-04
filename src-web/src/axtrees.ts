@@ -1,4 +1,4 @@
-import { AXIO, AXNode, AXWindow, ElementUpdate } from "@axio/client";
+import { AXIO, AXElement, AXWindow } from "@axio/client";
 
 class AXTreeOverlay {
   private windowContainer: HTMLElement;
@@ -6,16 +6,18 @@ class AXTreeOverlay {
   private treeContainer: HTMLElement | null = null;
   private regexPanel: HTMLElement | null = null;
   private currentTargetElement: {
-    node: AXNode;
+    element: AXElement;
     currentValue: string;
   } | null = null;
-  private renderedNodeCount: number = 0; // Track rendered DOM elements
-  private hoverOutline: HTMLElement | null = null; // Visual outline for hovered elements
-  private expandedNodes: Set<string> = new Set(); // Track which nodes are expanded
-  private loadingNodes: Set<string> = new Set(); // Track which nodes are currently loading
-  private nodeElements: Map<string, { element: HTMLElement; node: AXNode }> =
-    new Map(); // Track rendered nodes
-  private isClickthroughEnabled: boolean = true; // Track current clickthrough state (start enabled)
+  private renderedNodeCount: number = 0;
+  private hoverOutline: HTMLElement | null = null;
+  private expandedNodes: Set<string> = new Set();
+  private loadingNodes: Set<string> = new Set();
+  private nodeElements: Map<
+    string,
+    { domElement: HTMLElement; element: AXElement }
+  > = new Map();
+  private isClickthroughEnabled: boolean = true;
 
   constructor() {
     this.windowContainer = document.getElementById("windowContainer")!;
@@ -24,25 +26,13 @@ class AXTreeOverlay {
     this.setupCursorTransparency();
   }
 
-  /**
-   * Setup automatic cursor transparency based on whether mouse is over interactive elements
-   * Uses global mouse position from backend (works even when window is not focused)
-   */
   private setupCursorTransparency() {
-    // Listen for global mouse position from backend
     this.axio.on("mouse", ({ x, y }) => {
-      // Check what element is at this position
       const elementUnderCursor = document.elementFromPoint(x, y);
-
-      // Check if cursor is over sidebar or regex panel
       const isOverSidebar =
         elementUnderCursor && this.isElementInSidebar(elementUnderCursor);
-
-      // Enable clickthrough when NOT over sidebar (transparent to apps below)
-      // Disable clickthrough when over sidebar (interactive)
       const shouldEnableClickthrough = !isOverSidebar;
 
-      // Only update if state changed (avoid spamming backend)
       if (shouldEnableClickthrough !== this.isClickthroughEnabled) {
         this.isClickthroughEnabled = shouldEnableClickthrough;
         this.axio.setClickthrough(shouldEnableClickthrough).catch((err) => {
@@ -52,13 +42,9 @@ class AXTreeOverlay {
     });
   }
 
-  /**
-   * Check if element is inside sidebar or regex panel
-   */
   private isElementInSidebar(element: Element): boolean {
     let current: Element | null = element;
     while (current) {
-      // Check if it's the tree container or regex panel
       if (current === this.treeContainer || current === this.regexPanel) {
         return true;
       }
@@ -67,21 +53,15 @@ class AXTreeOverlay {
     return false;
   }
 
-  /**
-   * Extract position tuple from AXNode bounds
-   */
-  private getPosition(node: AXNode): [number, number] | undefined {
-    return node.bounds
-      ? [node.bounds.position.x, node.bounds.position.y]
+  private getPosition(element: AXElement): [number, number] | undefined {
+    return element.bounds
+      ? [element.bounds.position.x, element.bounds.position.y]
       : undefined;
   }
 
-  /**
-   * Extract size tuple from AXNode bounds
-   */
-  private getSize(node: AXNode): [number, number] | undefined {
-    return node.bounds
-      ? [node.bounds.size.width, node.bounds.size.height]
+  private getSize(element: AXElement): [number, number] | undefined {
+    return element.bounds
+      ? [element.bounds.size.width, element.bounds.size.height]
       : undefined;
   }
 
@@ -91,9 +71,14 @@ class AXTreeOverlay {
       this.axio.on("focus", (focused) =>
         this.handleFocusedWindowChange(focused)
       );
-      this.axio.on("update", (update) => {
-        console.log("🔄 Element updated:", update);
-        this.handleElementUpdate(update);
+      this.axio.on("elements", (elements) => {
+        for (const element of elements) {
+          this.handleElementUpdate(element);
+        }
+        this.checkForRoot();
+      });
+      this.axio.on("destroyed", (elementId) => {
+        this.handleElementDestroyed(elementId);
       });
 
       await this.axio.connect();
@@ -104,52 +89,39 @@ class AXTreeOverlay {
   }
 
   private updateWindows(_windows: AXWindow[]) {
-    const focused = this.axio.focused;
-    if (!focused) return;
-
-    // Display tree if focused window has root and we haven't displayed yet
-    if (focused.root && !this.treeContainer) {
-      console.log(`🎯 Root arrived for "${focused.title}"`);
-      this.displayAccessibilityTree(focused.root, focused);
-      return;
-    }
-
-    // Update position if window moved
+    this.checkForRoot();
     this.updateTreePosition();
   }
 
-  /** Handle focused window changes */
-  private handleFocusedWindowChange(focused: AXWindow | null) {
-    if (!focused) return;
+  /** Check if we now have a root for the focused window and display tree */
+  private checkForRoot() {
+    const focused = this.axio.focused;
+    if (!focused || this.treeContainer) return;
 
-    console.log(`🎯 Focus changed to "${focused.title}"`);
-
-    // Clear existing tree for new window
-    this.clearAccessibilityTree();
-
-    if (focused.root) {
-      this.displayAccessibilityTree(focused.root, focused);
-    } else {
-      console.log("⏳ Waiting for root...");
+    const root = this.axio.getRoot(focused);
+    if (root) {
+      this.displayAccessibilityTree(root, focused);
     }
   }
 
-  private displayAccessibilityTree(tree: AXNode, window: AXWindow) {
-    // Clear existing tree and reset state
+  private handleFocusedWindowChange(focused: AXWindow | null) {
+    this.clearAccessibilityTree();
+    if (focused) {
+      this.checkForRoot();
+    }
+  }
+
+  private displayAccessibilityTree(root: AXElement, window: AXWindow) {
     this.clearAccessibilityTree();
 
-    // Create tree container positioned to the right of the focused window
     this.treeContainer = document.createElement("div");
     this.treeContainer.className = "accessibility-tree";
 
-    // Position to the right of the window
-    const rightX = window.x + window.w + 10; // 10px margin
+    const rightX = window.x + window.w + 10;
     this.treeContainer.style.left = `${rightX}px`;
     this.treeContainer.style.top = `${window.y}px`;
-    // Set height to match window height exactly
     this.treeContainer.style.height = `${window.h}px`;
 
-    // Add color key legend
     const legend = document.createElement("div");
     legend.className = "tree-legend";
     legend.innerHTML = `
@@ -163,233 +135,192 @@ class AXTreeOverlay {
     `;
     this.treeContainer.appendChild(legend);
 
-    // Create scrollable content wrapper
     const contentWrapper = document.createElement("div");
     contentWrapper.className = "tree-content";
 
-    // Create tree content and add it to the wrapper
     console.log(`🏗️ Starting tree element creation...`);
-    this.renderedNodeCount = 0; // Reset counter
-    const treeContent = this.createTreeElement(tree);
+    this.renderedNodeCount = 0;
+    const treeContent = this.createTreeElement(root);
     console.log(`🎯 Rendered ${this.renderedNodeCount} DOM elements`);
     contentWrapper.appendChild(treeContent);
 
-    // Add wrapper to container
     this.treeContainer.appendChild(contentWrapper);
-
     this.windowContainer.appendChild(this.treeContainer);
     console.log(`✅ Displayed accessibility tree for ${window.title}`);
   }
 
-  private createTreeElement(node: AXNode, nodeId?: string): HTMLElement {
+  private createTreeElement(element: AXElement): HTMLElement {
     try {
-      // Use node's ID or generate one
-      if (!nodeId) {
-        nodeId =
-          node.id || `${node.role}-${Math.random().toString(36).substr(2, 9)}`;
-      }
-
       const nodeElement = document.createElement("div");
       nodeElement.className = "tree-node";
-      // Note: AXNode doesn't have depth; indentation is handled by CSS tree-children padding
 
-      // Create node content
       const nodeContent = document.createElement("div");
       nodeContent.className = "tree-node-content";
 
-      // Expand/collapse/load indicator
-      const childrenCount = node.children_count ?? 0;
-      const loadedChildren = node.children ?? [];
-      const hasLoadedChildren = loadedChildren.length > 0;
-      const hasUnloadedChildren =
-        childrenCount > 0 && loadedChildren.length === 0;
-      const isExpanded = this.expandedNodes.has(nodeId!);
-      const isLoading = this.loadingNodes.has(nodeId!);
+      // Determine children state
+      const children = this.axio.getChildren(element);
+      const hasDiscoveredChildren = this.axio.hasDiscoveredChildren(element);
+      const hasLoadedChildren = children.length > 0;
+      const hasUndiscoveredChildren = !hasDiscoveredChildren;
+      const isExpanded = this.expandedNodes.has(element.id);
+      const isLoading = this.loadingNodes.has(element.id);
 
       const indicator = document.createElement("span");
       indicator.className = "tree-indicator";
 
       if (isLoading) {
-        indicator.textContent = "⋯"; // Loading indicator
+        indicator.textContent = "⋯";
         indicator.style.cursor = "default";
-      } else if (hasUnloadedChildren) {
-        indicator.textContent = "+"; // Unloaded children
+      } else if (hasUndiscoveredChildren) {
+        indicator.textContent = "+";
         indicator.style.cursor = "pointer";
-        indicator.title = `Load ${childrenCount} children`;
+        indicator.title = "Load children";
       } else if (hasLoadedChildren) {
-        indicator.textContent = isExpanded ? "▾" : "▸"; // Expanded/collapsed
+        indicator.textContent = isExpanded ? "▾" : "▸";
         indicator.style.cursor = "pointer";
         indicator.title = isExpanded ? "Collapse" : "Expand";
       } else {
-        indicator.textContent = "•"; // Leaf node
+        indicator.textContent = "•";
         indicator.style.cursor = "default";
       }
 
-      // Add click handler for expand/collapse/load
-      if (hasUnloadedChildren || hasLoadedChildren) {
+      if (hasUndiscoveredChildren || hasLoadedChildren) {
         indicator.addEventListener("click", async (e) => {
           e.stopPropagation();
 
-          if (hasUnloadedChildren && !isLoading) {
-            // Load children
-            await this.loadNodeChildren(nodeId!, node, nodeElement);
+          if (hasUndiscoveredChildren && !isLoading) {
+            await this.loadNodeChildren(element, nodeElement);
           } else if (hasLoadedChildren) {
-            // Toggle expand/collapse
-            this.toggleNodeExpansion(nodeId!, nodeElement);
+            this.toggleNodeExpansion(element.id, nodeElement);
           }
         });
       }
 
       nodeContent.appendChild(indicator);
 
-      // Node info container
       const nodeInfo = document.createElement("span");
       nodeInfo.style.flex = "1";
 
-      // Role (always present)
       const roleSpan = document.createElement("span");
       roleSpan.className = "tree-role";
-      roleSpan.textContent = node.role;
+      roleSpan.textContent = element.role;
       nodeInfo.appendChild(roleSpan);
 
-      // Subrole (if present and different from role)
-      if (node.subrole && node.subrole !== node.role) {
+      if (element.subrole && element.subrole !== element.role) {
         const subroleSpan = document.createElement("span");
         subroleSpan.className = "tree-subrole";
-        subroleSpan.textContent = `:${node.subrole}`;
+        subroleSpan.textContent = `:${element.subrole}`;
         nodeInfo.appendChild(subroleSpan);
       }
 
-      // Label (if present)
-      if (node.label) {
+      if (element.label) {
         const labelSpan = document.createElement("span");
         labelSpan.className = "tree-label";
-        labelSpan.textContent = ` "${node.label}"`;
+        labelSpan.textContent = ` "${element.label}"`;
         nodeInfo.appendChild(labelSpan);
       }
 
-      // Value (if present) - with type-specific colors
-      if (node.value) {
+      if (element.value) {
         const valueSpan = document.createElement("span");
-
-        // Set color based on type
-        switch (node.value.type) {
+        switch (element.value.type) {
           case "String":
             valueSpan.className = "tree-value-string";
-            valueSpan.textContent = ` = "${String(node.value.value)}"`;
+            valueSpan.textContent = ` = "${String(element.value.value)}"`;
             break;
           case "Integer":
           case "Float":
             valueSpan.className = "tree-value-number";
-            valueSpan.textContent = ` = ${node.value.value}`;
+            valueSpan.textContent = ` = ${element.value.value}`;
             break;
           case "Boolean":
             valueSpan.className = "tree-value-boolean";
-            valueSpan.textContent = ` = ${String(node.value.value)}`;
+            valueSpan.textContent = ` = ${String(element.value.value)}`;
             break;
         }
-
         nodeInfo.appendChild(valueSpan);
       }
 
-      // Placeholder (if present)
-      if (node.placeholder) {
+      if (element.placeholder) {
         const placeholderSpan = document.createElement("span");
         placeholderSpan.className = "tree-placeholder";
-        placeholderSpan.textContent = ` placeholder:"${node.placeholder}"`;
+        placeholderSpan.textContent = ` placeholder:"${element.placeholder}"`;
         nodeInfo.appendChild(placeholderSpan);
       }
 
-      // Description (if present)
-      if (node.description) {
+      if (element.description) {
         const descSpan = document.createElement("span");
         descSpan.className = "tree-description";
-        descSpan.textContent = ` desc:"${node.description}"`;
+        descSpan.textContent = ` desc:"${element.description}"`;
         nodeInfo.appendChild(descSpan);
       }
 
-      // State indicators - simplified
-      if (node.focused) {
+      if (element.focused) {
         const stateSpan = document.createElement("span");
         stateSpan.className = "tree-state-focused";
         stateSpan.textContent = " [focused]";
         nodeInfo.appendChild(stateSpan);
       }
-      if (node.enabled === false) {
+      if (element.enabled === false) {
         const stateSpan = document.createElement("span");
         stateSpan.className = "tree-state-disabled";
         stateSpan.textContent = " [disabled]";
         nodeInfo.appendChild(stateSpan);
       }
 
-      // Children count for nodes with children (loaded or unloaded)
-      if (hasLoadedChildren || hasUnloadedChildren) {
+      if (hasLoadedChildren || hasUndiscoveredChildren) {
         const childCountSpan = document.createElement("span");
         childCountSpan.className = "tree-count";
-        const count = hasLoadedChildren ? loadedChildren.length : childrenCount;
+        const count = hasLoadedChildren ? children.length : "?";
         childCountSpan.textContent = ` (${count})`;
         nodeInfo.appendChild(childCountSpan);
       }
 
       nodeContent.appendChild(nodeInfo);
 
-      // Add hover outline for elements with position/size data
-      const position = this.getPosition(node);
-      const size = this.getSize(node);
+      const position = this.getPosition(element);
+      const size = this.getSize(element);
       if (position && size) {
         nodeContent.style.cursor = "pointer";
-
         nodeContent.addEventListener("mouseenter", () => {
           this.showHoverOutline(position, size);
         });
-
         nodeContent.addEventListener("mouseleave", () => {
           this.hideHoverOutline();
         });
       }
 
-      // Add live text input for writable elements
       if (
-        node.id &&
-        (node.role === "textbox" ||
-          node.role === "searchbox" ||
-          node.role === "unknown") // temporary: accept unknown for unmapped roles
+        element.id &&
+        (element.role === "textbox" ||
+          element.role === "searchbox" ||
+          element.role === "unknown")
       ) {
-        // Container for input and regex button
         const inputContainer = document.createElement("div");
         inputContainer.className = "tree-input-container";
 
-        // Live text input
         const textInput = document.createElement("input");
         textInput.className = "tree-text-input";
         textInput.type = "text";
 
-        // Use the raw value for editing
-        const cleanValue = node.value ? String(node.value.value) : "";
+        const cleanValue = element.value ? String(element.value.value) : "";
         textInput.value = cleanValue;
         textInput.placeholder = "Enter text...";
 
-        // Add write functionality on Enter key
         textInput.addEventListener("keydown", async (e) => {
           if (e.key === "Enter") {
             e.preventDefault();
             e.stopPropagation();
-
             try {
-              await this.axio.write(node.id, textInput.value);
-              console.log(`✅ Wrote "${textInput.value}" to node`);
+              await this.axio.write(element.id, textInput.value);
+              console.log(`✅ Wrote "${textInput.value}" to element`);
             } catch (error) {
               console.error("❌ Failed to write:", error);
             }
           }
         });
 
-        // Prevent input clicks from affecting tree expansion
-        textInput.addEventListener("click", (e) => {
-          e.stopPropagation();
-        });
+        textInput.addEventListener("click", (e) => e.stopPropagation());
 
-        // Regex button
         const regexButton = document.createElement("button");
         regexButton.className = "tree-regex-button";
         regexButton.textContent = ".*";
@@ -397,60 +328,49 @@ class AXTreeOverlay {
 
         regexButton.addEventListener("click", (e) => {
           e.stopPropagation();
-
-          // Use raw parsed value for regex operations (not role-formatted)
-          this.openRegexPanel(node, cleanValue, position, size);
+          this.openRegexPanel(element, cleanValue, position, size);
         });
 
-        // Add elements to container
         inputContainer.appendChild(textInput);
         inputContainer.appendChild(regexButton);
-
-        // Prevent container clicks from affecting tree expansion
-        inputContainer.addEventListener("click", (e) => {
-          e.stopPropagation();
-        });
+        inputContainer.addEventListener("click", (e) => e.stopPropagation());
 
         nodeContent.appendChild(inputContainer);
       }
 
       nodeElement.appendChild(nodeContent);
 
-      // Add children container
       if (hasLoadedChildren) {
         const childrenContainer = document.createElement("div");
         childrenContainer.className = "tree-children";
 
-        // Hide children if not expanded
         if (!isExpanded) {
           childrenContainer.style.display = "none";
         }
 
-        for (const child of loadedChildren) {
+        for (const child of children) {
           childrenContainer.appendChild(this.createTreeElement(child));
         }
 
         nodeElement.appendChild(childrenContainer);
       }
 
-      // Store node element for later updates
-      this.nodeElements.set(nodeId!, { element: nodeElement, node });
+      this.nodeElements.set(element.id, { domElement: nodeElement, element });
 
-      // Auto-watch leaf nodes (nodes with no children) since they can't be expanded
-      // This ensures text fields and other leaf elements get watched for changes
-      const isLeafNode = !hasLoadedChildren && !hasUnloadedChildren;
-      if (isLeafNode && nodeId && node.id) {
-        console.log(`👁️ Auto-watching leaf node: ${node.role}`);
-        this.axio.watch(node.id).catch((err) => {
+      // Auto-watch leaf nodes
+      const isLeafNode = !hasLoadedChildren && hasDiscoveredChildren;
+      if (isLeafNode && element.id) {
+        console.log(`👁️ Auto-watching leaf node: ${element.role}`);
+        this.axio.watch(element.id).catch((err) => {
           console.error(`Failed to auto-watch leaf node:`, err);
         });
       }
 
-      this.renderedNodeCount++; // Increment counter for each node rendered
+      this.renderedNodeCount++;
       return nodeElement;
     } catch (error) {
       console.error("Error creating tree element:", error);
-      return document.createElement("div"); // Return a placeholder to avoid breaking rendering
+      return document.createElement("div");
     }
   }
 
@@ -471,24 +391,19 @@ class AXTreeOverlay {
       this.regexPanel.classList.contains("positioned-relative") &&
       this.axio.focused
     ) {
-      // Get the target element's position and size from when the panel was opened
       if (this.currentTargetElement) {
-        const node = this.currentTargetElement.node;
+        const element = this.currentTargetElement.element;
+        if (element.bounds) {
+          const x = element.bounds.position.x;
+          const y = element.bounds.position.y;
+          const width = element.bounds.size.width;
+          const height = element.bounds.size.height;
 
-        // Use the node's bounds directly
-        if (node.bounds) {
-          const x = node.bounds.position.x;
-          const y = node.bounds.position.y;
-          const width = node.bounds.size.width;
-          const height = node.bounds.size.height;
+          const panelX = Math.max(10, x + width / 2 - 140);
+          const panelY = y + height + 6;
 
-          // Calculate new position (consistent with openRegexPanel)
-          const panelX = Math.max(10, x + width / 2 - 140); // Center panel (280px wide / 2 = 140px offset)
-          const panelY = y + height + 6; // 6px below the element
-
-          // Ensure panel doesn't go off-screen
-          const maxX = window.screen.width - 300; // Panel width + margin
-          const maxY = window.screen.height - 180; // Estimated panel height + margin
+          const maxX = window.screen.width - 300;
+          const maxY = window.screen.height - 180;
 
           const finalX = Math.min(panelX, maxX);
           const finalY = Math.min(panelY, maxY);
@@ -505,16 +420,13 @@ class AXTreeOverlay {
       this.treeContainer.remove();
       this.treeContainer = null;
     }
-    // Clear hover outline
     this.hideHoverOutline();
-    // Clear node tracking state
     this.expandedNodes.clear();
     this.loadingNodes.clear();
     this.nodeElements.clear();
   }
 
   private showHoverOutline(position: [number, number], size: [number, number]) {
-    // Create outline element if it doesn't exist
     if (!this.hoverOutline) {
       this.hoverOutline = document.createElement("div");
       this.hoverOutline.style.cssText = `
@@ -528,7 +440,6 @@ class AXTreeOverlay {
       this.windowContainer.appendChild(this.hoverOutline);
     }
 
-    // Update position and size
     const [x, y] = position;
     const [width, height] = size;
 
@@ -546,21 +457,18 @@ class AXTreeOverlay {
   }
 
   private openRegexPanel(
-    node: AXNode,
+    element: AXElement,
     currentValue: string,
     elementPosition?: [number, number],
     elementSize?: [number, number]
   ) {
-    // Close existing panel if open
     this.closeRegexPanel();
 
-    this.currentTargetElement = { node, currentValue };
+    this.currentTargetElement = { element, currentValue };
 
-    // Create regex panel
     this.regexPanel = document.createElement("div");
     this.regexPanel.className = "regex-panel";
 
-    // Calculate position - prefer positioning below the element if position is available
     let panelStyle = `
       position: fixed;
       background: rgba(30, 30, 30, 0.98);
@@ -579,17 +487,14 @@ class AXTreeOverlay {
     `;
 
     if (elementPosition && elementSize) {
-      // Position the panel below the element, centered horizontally
       const [x, y] = elementPosition;
       const [width, height] = elementSize;
 
-      // Calculate position below the element
-      const panelX = Math.max(10, x + width / 2 - 140); // Center panel (280px wide / 2 = 140px offset)
-      const panelY = y + height + 6; // 6px below the element
+      const panelX = Math.max(10, x + width / 2 - 140);
+      const panelY = y + height + 6;
 
-      // Ensure panel doesn't go off-screen
-      const maxX = window.screen.width - 300; // Panel width + margin
-      const maxY = window.screen.height - 180; // Estimated panel height + margin
+      const maxX = window.screen.width - 300;
+      const maxY = window.screen.height - 180;
 
       const finalX = Math.min(panelX, maxX);
       const finalY = Math.min(panelY, maxY);
@@ -600,26 +505,17 @@ class AXTreeOverlay {
         transform: none;
       `;
 
-      // Add class for element-relative positioning animation
       this.regexPanel.classList.add("positioned-relative");
-
-      console.log(
-        `🎯 Positioning regex panel at (${finalX}, ${finalY}) below element at (${x}, ${y})`
-      );
     } else {
-      // Fallback to center positioning
       panelStyle += `
         top: 50%;
         left: 50%;
         transform: translate(-50%, -50%);
       `;
-
-      console.log(`📍 No element position available, centering regex panel`);
     }
 
     this.regexPanel.style.cssText = panelStyle;
 
-    // Panel header
     const header = document.createElement("div");
     header.style.cssText = `
       display: flex;
@@ -662,7 +558,6 @@ class AXTreeOverlay {
     header.appendChild(title);
     header.appendChild(closeButton);
 
-    // Pattern input
     const patternLabel = document.createElement("label");
     patternLabel.textContent = "Pattern:";
     patternLabel.style.cssText = `
@@ -689,7 +584,6 @@ class AXTreeOverlay {
       box-sizing: border-box;
     `;
 
-    // Replace input
     const replaceLabel = document.createElement("label");
     replaceLabel.textContent = "Replace:";
     replaceLabel.style.cssText = `
@@ -715,7 +609,6 @@ class AXTreeOverlay {
       box-sizing: border-box;
     `;
 
-    // Buttons
     const buttonContainer = document.createElement("div");
     buttonContainer.style.cssText = `
       display: flex;
@@ -764,7 +657,6 @@ class AXTreeOverlay {
     });
     cancelButton.addEventListener("click", () => this.closeRegexPanel());
 
-    // Apply regex function
     const applyRegex = async () => {
       const pattern = patternInput.value.trim();
       const replacement = replaceInput.value;
@@ -772,43 +664,33 @@ class AXTreeOverlay {
       if (!pattern) return;
 
       try {
-        // Parse regex pattern with flags (e.g., /pattern/gi)
         let regex: RegExp;
         const regexMatch = pattern.match(/^\/(.+)\/([gimuy]*)$/);
 
         if (regexMatch) {
-          // Full regex format with flags
           regex = new RegExp(regexMatch[1], regexMatch[2]);
         } else {
-          // Plain pattern, default to global
           regex = new RegExp(pattern, "g");
         }
 
-        // Enhanced replacement with transformation support
         const result = this.applyRegexWithTransforms(
           this.currentTargetElement!.currentValue,
           regex,
           replacement
         );
 
-        // Apply the change
-        await this.axio.write(this.currentTargetElement!.node.id, result);
-        console.log(`✅ Applied regex to node`);
+        await this.axio.write(this.currentTargetElement!.element.id, result);
+        console.log(`✅ Applied regex to element`);
 
-        // Update stored current value
         this.currentTargetElement!.currentValue = result;
-
-        // Close panel
         this.closeRegexPanel();
       } catch (e) {
         console.error("Regex application failed:", e);
       }
     };
 
-    // Event listeners
     applyButton.addEventListener("click", applyRegex);
 
-    // Handle Enter key
     const handleEnter = (e: KeyboardEvent) => {
       if (e.key === "Enter") {
         e.preventDefault();
@@ -821,7 +703,6 @@ class AXTreeOverlay {
     patternInput.addEventListener("keydown", handleEnter);
     replaceInput.addEventListener("keydown", handleEnter);
 
-    // Assemble panel
     buttonContainer.appendChild(cancelButton);
     buttonContainer.appendChild(applyButton);
 
@@ -833,8 +714,6 @@ class AXTreeOverlay {
     this.regexPanel.appendChild(buttonContainer);
 
     document.body.appendChild(this.regexPanel);
-
-    // Focus the pattern input
     patternInput.focus();
   }
 
@@ -851,27 +730,22 @@ class AXTreeOverlay {
     regex: RegExp,
     replacement: string
   ): string {
-    // Check if replacement contains transformation syntax like $1:upper, $1:lower, $1:title
     const hasTransforms = /\$\d+:(upper|lower|title|capitalize)/i.test(
       replacement
     );
 
     if (!hasTransforms) {
-      // Simple replacement without transforms
       return text.replace(regex, replacement);
     }
 
-    // Use function-based replacement for transformations
     return text.replace(regex, (...args) => {
-      const captures = args.slice(1, -2); // Captured groups (exclude offset and input string)
-
+      const captures = args.slice(1, -2);
       let result = replacement;
 
-      // Replace each transformation
       result = result.replace(
         /\$(\d+):(upper|lower|title|capitalize)/gi,
         (transformMatch, groupNum, transform) => {
-          const groupIndex = parseInt(groupNum) - 1; // Convert to 0-based index
+          const groupIndex = parseInt(groupNum) - 1;
 
           if (groupIndex >= 0 && groupIndex < captures.length) {
             const capturedText = captures[groupIndex];
@@ -891,12 +765,10 @@ class AXTreeOverlay {
                 return capturedText;
             }
           }
-
-          return transformMatch; // Return original if group not found
+          return transformMatch;
         }
       );
 
-      // Replace standard group references like $1, $2, etc.
       result = result.replace(/\$(\d+)/g, (groupMatch, groupNum) => {
         const groupIndex = parseInt(groupNum) - 1;
         return groupIndex >= 0 && groupIndex < captures.length
@@ -908,165 +780,96 @@ class AXTreeOverlay {
     });
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  private filterEmptyGroups(node: AXNode): AXNode | null {
-    // First, recursively filter children
-    const children = node.children ?? [];
-    const filteredChildren = children
-      .map((child) => this.filterEmptyGroups(child))
-      .filter((child): child is AXNode => child !== null);
-
-    // Check if this is an empty group that should be filtered out
-    if (node.role === "group") {
-      // Filter out group if it has no meaningful content
-      const hasLabel = node.label && node.label.trim() !== "";
-      const hasValue = node.value !== undefined;
-      const hasDescription = node.description && node.description.trim() !== "";
-      const hasPlaceholder = node.placeholder && node.placeholder.trim() !== "";
-      const hasLoadedChildren = filteredChildren.length > 0;
-      const hasUnloadedChildren = (node.children_count ?? 0) > 0; // Unloaded children to lazy-load
-
-      // Keep the group only if it has some meaningful content or children (loaded or unloaded)
-      if (
-        !hasLabel &&
-        !hasValue &&
-        !hasDescription &&
-        !hasPlaceholder &&
-        !hasLoadedChildren &&
-        !hasUnloadedChildren
-      ) {
-        return null; // Filter out this empty group
-      }
-    }
-
-    // Return the node with filtered children
-    return { ...node, children: filteredChildren };
-  }
-
-  /**
-   * Handle typed element update from AXObserver (backend push notification)
-   * Updates the node data and DOM elements based on the update type
-   */
-  private handleElementUpdate(update: ElementUpdate) {
-    const stored = this.nodeElements.get(update.element_id);
+  private handleElementUpdate(element: AXElement) {
+    const stored = this.nodeElements.get(element.id);
 
     if (!stored) {
-      console.warn(`Element ${update.element_id} not found in rendered nodes`);
       return;
     }
 
-    const { element, node } = stored;
+    const { domElement } = stored;
 
-    switch (update.update_type) {
-      case "ValueChanged":
-        // Update the node's value
-        (node as any).value = update.value;
-        console.log(
-          `  ✏️  Value changed for ${update.element_id}:`,
-          update.value
-        );
+    // Update value display
+    if (element.value) {
+      const valueSpan = domElement.querySelector(
+        ".tree-node-content .tree-value-string, .tree-node-content .tree-value-number, .tree-node-content .tree-value-boolean"
+      ) as HTMLElement;
 
-        // Update the value display in the DOM
-        const valueSpan = element.querySelector(
-          ".tree-node-content .tree-value-string, .tree-node-content .tree-value-number, .tree-node-content .tree-value-boolean"
-        ) as HTMLElement;
-
-        if (valueSpan) {
-          switch (update.value.type) {
-            case "String":
-              valueSpan.className = "tree-value-string";
-              valueSpan.textContent = ` = "${String(update.value.value)}"`;
-              break;
-            case "Integer":
-            case "Float":
-              valueSpan.className = "tree-value-number";
-              valueSpan.textContent = ` = ${update.value.value}`;
-              break;
-            case "Boolean":
-              valueSpan.className = "tree-value-boolean";
-              valueSpan.textContent = ` = ${String(update.value.value)}`;
-              break;
-          }
+      if (valueSpan) {
+        switch (element.value.type) {
+          case "String":
+            valueSpan.className = "tree-value-string";
+            valueSpan.textContent = ` = "${String(element.value.value)}"`;
+            break;
+          case "Integer":
+          case "Float":
+            valueSpan.className = "tree-value-number";
+            valueSpan.textContent = ` = ${element.value.value}`;
+            break;
+          case "Boolean":
+            valueSpan.className = "tree-value-boolean";
+            valueSpan.textContent = ` = ${String(element.value.value)}`;
+            break;
         }
+      }
 
-        // Also update input fields if present
-        const inputField = element.querySelector(
-          ".tree-text-input"
-        ) as HTMLInputElement;
-        if (inputField) {
-          inputField.value = String(update.value.value);
-        }
-        break;
+      const inputField = domElement.querySelector(
+        ".tree-text-input"
+      ) as HTMLInputElement;
+      if (inputField) {
+        inputField.value = String(element.value.value);
+      }
+    }
 
-      case "LabelChanged":
-        // Update the node's label
-        (node as any).label = update.label;
-        console.log(
-          `  🏷️  Label changed for ${update.element_id}:`,
-          update.label
-        );
+    // Update label
+    if (element.label) {
+      const labelSpan = domElement.querySelector(".tree-label") as HTMLElement;
+      if (labelSpan) {
+        labelSpan.textContent = ` "${element.label}"`;
+      }
+    }
 
-        // Update label in DOM
-        const labelSpan = element.querySelector(".tree-label") as HTMLElement;
-        if (labelSpan) {
-          labelSpan.textContent = ` "${update.label}"`;
-        }
-        break;
+    // Update stored element reference
+    stored.element = element;
+  }
 
-      case "ElementDestroyed":
-        // Remove element from DOM and tracking
-        console.log(`  💀 Element destroyed: ${update.element_id}`);
-        element.remove();
-        this.nodeElements.delete(update.element_id);
-        break;
+  private handleElementDestroyed(elementId: string) {
+    const stored = this.nodeElements.get(elementId);
+    if (stored) {
+      stored.domElement.remove();
+      this.nodeElements.delete(elementId);
     }
   }
 
-  /**
-   * Toggle expansion of a node's children
-   */
-
-  private toggleNodeExpansion(nodeId: string, nodeElement: HTMLElement) {
+  private toggleNodeExpansion(elementId: string, nodeElement: HTMLElement) {
     const childrenContainer = nodeElement.querySelector(
       ".tree-children"
     ) as HTMLElement;
     if (!childrenContainer) return;
 
-    const isExpanded = this.expandedNodes.has(nodeId);
+    const isExpanded = this.expandedNodes.has(elementId);
 
     if (isExpanded) {
-      // Collapse
-      this.expandedNodes.delete(nodeId);
+      this.expandedNodes.delete(elementId);
       childrenContainer.style.display = "none";
 
-      // Unwatch this node (stop receiving updates)
-      const stored = this.nodeElements.get(nodeId);
-      if (stored) {
-        this.axio.unwatch(stored.node.id).catch((err) => {
-          console.error(`Failed to unwatch node:`, err);
-        });
-      }
+      this.axio.unwatch(elementId).catch((err) => {
+        console.error(`Failed to unwatch element:`, err);
+      });
 
-      // Update indicator
       const indicator = nodeElement.querySelector(".tree-indicator");
       if (indicator) {
         indicator.textContent = "▸";
         indicator.setAttribute("title", "Expand");
       }
     } else {
-      // Expand
-      this.expandedNodes.add(nodeId);
+      this.expandedNodes.add(elementId);
       childrenContainer.style.display = "block";
 
-      // Watch this node (start receiving updates)
-      const stored = this.nodeElements.get(nodeId);
-      if (stored) {
-        this.axio.watch(stored.node.id).catch((err) => {
-          console.error(`Failed to watch node:`, err);
-        });
-      }
+      this.axio.watch(elementId).catch((err) => {
+        console.error(`Failed to watch element:`, err);
+      });
 
-      // Update indicator
       const indicator = nodeElement.querySelector(".tree-indicator");
       if (indicator) {
         indicator.textContent = "▾";
@@ -1075,18 +878,9 @@ class AXTreeOverlay {
     }
   }
 
-  /**
-   * Load children for a node using lazy loading
-   */
-  private async loadNodeChildren(
-    nodeId: string,
-    node: AXNode,
-    nodeElement: HTMLElement
-  ) {
-    // Mark as loading
-    this.loadingNodes.add(nodeId);
+  private async loadNodeChildren(element: AXElement, nodeElement: HTMLElement) {
+    this.loadingNodes.add(element.id);
 
-    // Update indicator
     const indicator = nodeElement.querySelector(".tree-indicator");
     if (indicator) {
       indicator.textContent = "⋯";
@@ -1094,24 +888,20 @@ class AXTreeOverlay {
     }
 
     try {
-      console.log(
-        `📥 Loading children for ${node.role} (${
-          node.children_count ?? "?"
-        } children)`
-      );
+      console.log(`📥 Loading children for ${element.role}`);
 
-      // Fetch children
-      const children = await this.axio.tree(node.id, 1);
+      const children = await this.axio.children(element.id);
       console.log(`✅ Loaded ${children.length} children`);
 
-      // Update the stored node with loaded children
-      const updatedNode = { ...node, children };
-      this.nodeElements.set(nodeId, {
-        element: nodeElement,
-        node: updatedNode,
-      });
+      // Update stored element reference
+      const updatedElement = this.axio.get(element.id);
+      if (updatedElement) {
+        this.nodeElements.set(element.id, {
+          domElement: nodeElement,
+          element: updatedElement,
+        });
+      }
 
-      // Create and add children container
       const childrenContainer = document.createElement("div");
       childrenContainer.className = "tree-children";
 
@@ -1121,15 +911,12 @@ class AXTreeOverlay {
 
       nodeElement.appendChild(childrenContainer);
 
-      // Auto-expand after loading
-      this.expandedNodes.add(nodeId);
+      this.expandedNodes.add(element.id);
 
-      // Watch this node for changes (now that it's expanded)
-      this.axio.watch(node.id).catch((err) => {
-        console.error(`Failed to watch node:`, err);
+      this.axio.watch(element.id).catch((err) => {
+        console.error(`Failed to watch element:`, err);
       });
 
-      // Update indicator
       if (indicator && indicator instanceof HTMLElement) {
         indicator.textContent = "▾";
         indicator.setAttribute("title", "Collapse");
@@ -1138,18 +925,16 @@ class AXTreeOverlay {
     } catch (error) {
       console.error("Failed to load children:", error);
 
-      // Update indicator to show error
       if (indicator) {
         indicator.textContent = "✗";
         indicator.setAttribute("title", `Failed to load: ${error}`);
       }
     } finally {
-      this.loadingNodes.delete(nodeId);
+      this.loadingNodes.delete(element.id);
     }
   }
 }
 
-// Initialize the overlay when DOM is loaded
 document.addEventListener("DOMContentLoaded", () => {
   new AXTreeOverlay();
 });

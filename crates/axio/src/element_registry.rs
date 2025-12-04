@@ -1,17 +1,15 @@
-//! Element registry - windows own elements, with reverse index for lookup.
+//! Element registry - stores AXElement with macOS handles. Windows own elements.
 
-use crate::types::{AxioError, AxioResult, ElementId, WindowId};
-use crate::ui_element::UIElement;
+use crate::platform::macos::{AXNotification, ObserverContext};
+use crate::types::{AXElement, AxioError, AxioResult, ElementId, WindowId};
+use accessibility::AXUIElement;
 use accessibility_sys::AXObserverRef;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
+use std::ffi::c_void;
 use std::sync::Mutex;
-use uuid::Uuid;
 
-fn ax_elements_equal(
-    elem1: &accessibility::AXUIElement,
-    elem2: &accessibility::AXUIElement,
-) -> bool {
+fn ax_elements_equal(elem1: &AXUIElement, elem2: &AXUIElement) -> bool {
     use accessibility_sys::AXUIElementRef;
     use core_foundation::base::{CFEqual, TCFType};
 
@@ -21,23 +19,44 @@ fn ax_elements_equal(
     unsafe { CFEqual(ref1 as _, ref2 as _) != 0 }
 }
 
-/// Per-window state: elements and their shared observer.
+/// Watch state for an element (notification subscriptions).
+struct WatchState {
+    observer_context: *mut c_void,
+    notifications: Vec<AXNotification>,
+}
+
+/// Internal storage - AXElement plus macOS handle and watch state.
+pub struct StoredElement {
+    /// The element data (what we return)
+    pub element: AXElement,
+    /// macOS accessibility handle
+    pub ax_element: AXUIElement,
+    /// Process ID
+    pub pid: u32,
+    /// Platform role string (for watch notifications)
+    pub platform_role: String,
+    /// Watch state if subscribed
+    watch_state: Option<WatchState>,
+}
+
+// SAFETY: AXUIElement is a CFTypeRef (reference-counted, immutable).
+// All mutable state is behind Mutex.
+unsafe impl Send for StoredElement {}
+unsafe impl Sync for StoredElement {}
+
+/// Per-window state: elements and shared observer.
 struct WindowState {
-    elements: HashMap<ElementId, UIElement>,
+    elements: HashMap<ElementId, StoredElement>,
     observer: Option<AXObserverRef>,
 }
 
-// TODO: Could be moved to app state instead of global singleton
 static ELEMENT_REGISTRY: Lazy<Mutex<Option<ElementRegistry>>> = Lazy::new(|| Mutex::new(None));
 
 pub struct ElementRegistry {
-    /// Windows own their elements
     windows: HashMap<WindowId, WindowState>,
-    /// Reverse index for O(1) element lookup
     element_to_window: HashMap<ElementId, WindowId>,
 }
 
-// SAFETY: All access is synchronized via Mutex
 unsafe impl Send for ElementRegistry {}
 unsafe impl Sync for ElementRegistry {}
 
@@ -59,17 +78,12 @@ impl ElementRegistry {
         f(registry)
     }
 
-    /// Register element, returning existing ID if equivalent element exists (via CFEqual).
-    /// This ensures stable IDs across multiple tree queries.
-    // TODO: Duplicate check is O(n) per window. Investigate if CFHash could enable O(1) lookup.
-    pub fn register(
-        ax_element: accessibility::AXUIElement,
-        window_id: &WindowId,
-        pid: u32,
-        parent_id: Option<&ElementId>,
-        role: &str,
-    ) -> ElementId {
+    /// Register element, returning existing if equivalent (stable IDs).
+    // TODO: Duplicate check is O(n) per window. Investigate CFHash for O(1).
+    pub fn register(element: AXElement, ax_element: AXUIElement, pid: u32, platform_role: &str) -> AXElement {
         Self::with(|registry| {
+            let window_id = WindowId::new(element.window_id.clone());
+
             let window_state = registry
                 .windows
                 .entry(window_id.clone())
@@ -78,35 +92,66 @@ impl ElementRegistry {
                     observer: None,
                 });
 
-            // Check for existing equivalent element (stable IDs)
-            for (element_id, existing) in &window_state.elements {
-                if ax_elements_equal(existing.ax_element(), &ax_element) {
-                    return element_id.clone();
+            // Return existing if equivalent element found
+            for stored in window_state.elements.values() {
+                if ax_elements_equal(&stored.ax_element, &ax_element) {
+                    return stored.element.clone();
                 }
             }
 
-            let id = ElementId::new(Uuid::new_v4().to_string());
-            let ui_element = UIElement::new(
-                id.clone(),
-                window_id.clone(),
-                parent_id.cloned(),
+            let stored = StoredElement {
+                element: element.clone(),
                 ax_element,
                 pid,
-                role.to_string(),
-            );
+                platform_role: platform_role.to_string(),
+                watch_state: None,
+            };
 
-            window_state.elements.insert(id.clone(), ui_element);
-            registry
-                .element_to_window
-                .insert(id.clone(), window_id.clone());
+            window_state.elements.insert(element.id.clone(), stored);
+            registry.element_to_window.insert(element.id.clone(), window_id);
 
-            id
+            element
         })
     }
 
-    pub fn with_element<F, R>(element_id: &ElementId, f: F) -> AxioResult<R>
+    /// Get element by ID (cached).
+    pub fn get(element_id: &ElementId) -> AxioResult<AXElement> {
+        Self::with(|registry| {
+            let window_id = registry
+                .element_to_window
+                .get(element_id)
+                .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))?;
+
+            registry
+                .windows
+                .get(window_id)
+                .and_then(|w| w.elements.get(element_id))
+                .map(|s| s.element.clone())
+                .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))
+        })
+    }
+
+    /// Get multiple elements by ID.
+    pub fn get_many(element_ids: &[ElementId]) -> Vec<AXElement> {
+        Self::with(|registry| {
+            element_ids
+                .iter()
+                .filter_map(|id| {
+                    let window_id = registry.element_to_window.get(id)?;
+                    registry
+                        .windows
+                        .get(window_id)
+                        .and_then(|w| w.elements.get(id))
+                        .map(|s| s.element.clone())
+                })
+                .collect()
+        })
+    }
+
+    /// Access stored element (for internal ops like click, write).
+    pub fn with_stored<F, R>(element_id: &ElementId, f: F) -> AxioResult<R>
     where
-        F: FnOnce(&UIElement) -> R,
+        F: FnOnce(&StoredElement) -> R,
     {
         Self::with(|registry| {
             let window_id = registry
@@ -123,6 +168,46 @@ impl ElementRegistry {
         })
     }
 
+    /// Update element's cached data (e.g., after refresh).
+    pub fn update(element_id: &ElementId, updated: AXElement) -> AxioResult<()> {
+        Self::with(|registry| {
+            let window_id = registry
+                .element_to_window
+                .get(element_id)
+                .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))?
+                .clone();
+
+            let stored = registry
+                .windows
+                .get_mut(&window_id)
+                .and_then(|w| w.elements.get_mut(element_id))
+                .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))?;
+
+            stored.element = updated;
+            Ok(())
+        })
+    }
+
+    /// Update children_ids for an element.
+    pub fn set_children_ids(element_id: &ElementId, children_ids: Vec<ElementId>) -> AxioResult<()> {
+        Self::with(|registry| {
+            let window_id = registry
+                .element_to_window
+                .get(element_id)
+                .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))?
+                .clone();
+
+            let stored = registry
+                .windows
+                .get_mut(&window_id)
+                .and_then(|w| w.elements.get_mut(element_id))
+                .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))?;
+
+            stored.element.children_ids = Some(children_ids);
+            Ok(())
+        })
+    }
+
     pub fn remove_element(element_id: &ElementId) {
         Self::with(|registry| {
             let Some(window_id) = registry.element_to_window.remove(element_id) else {
@@ -133,63 +218,59 @@ impl ElementRegistry {
                 return;
             };
 
-            if let Some(mut element) = window_state.elements.remove(element_id) {
+            if let Some(mut stored) = window_state.elements.remove(element_id) {
                 if let Some(observer) = window_state.observer {
-                    element.unwatch(observer);
+                    unwatch_element(&mut stored, observer);
                 }
             }
         });
     }
 
-    /// Called when a window closes - cleans up all elements and observer.
     pub fn remove_window_elements(window_id: &WindowId) {
         Self::with(|registry| {
             let Some(mut window_state) = registry.windows.remove(window_id) else {
                 return;
             };
 
-            // Unwatch all elements if observer exists
             if let Some(observer) = window_state.observer {
-                for (_, mut element) in window_state.elements.drain() {
-                    element.unwatch(observer);
+                for (_, mut stored) in window_state.elements.drain() {
+                    unwatch_element(&mut stored, observer);
                 }
             }
 
-            // Clean up reverse index
             registry.element_to_window.retain(|_, wid| wid != window_id);
         });
     }
 
     pub fn write(element_id: &ElementId, text: &str) -> AxioResult<()> {
-        Self::with_element(element_id, |element| element.set_value(text))?
+        Self::with_stored(element_id, |stored| write_value(stored, text))?
     }
 
-    /// Subscribe to notifications for element's role. One AXObserver per window.
+    pub fn click(element_id: &ElementId) -> AxioResult<()> {
+        Self::with_stored(element_id, |stored| click_element(stored))?
+    }
+
     pub fn watch(element_id: &ElementId) -> AxioResult<()> {
         Self::with(|registry| {
-            // Get window_id and pid from element
-            let (window_id, pid) = {
-                let window_id = registry
-                    .element_to_window
-                    .get(element_id)
-                    .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))?
-                    .clone();
+            let window_id = registry
+                .element_to_window
+                .get(element_id)
+                .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))?
+                .clone();
 
-                let window_state = registry
-                    .windows
-                    .get(&window_id)
-                    .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))?;
+            let window_state = registry
+                .windows
+                .get_mut(&window_id)
+                .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))?;
 
-                let element = window_state
-                    .elements
-                    .get(element_id)
-                    .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))?;
+            let stored = window_state
+                .elements
+                .get(element_id)
+                .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))?;
 
-                (window_id, element.pid())
-            };
+            let pid = stored.pid;
 
-            // Get or create observer for this window
-            let window_state = registry.windows.get_mut(&window_id).unwrap();
+            // Get or create observer
             let observer = if let Some(obs) = window_state.observer {
                 obs
             } else {
@@ -198,9 +279,8 @@ impl ElementRegistry {
                 obs
             };
 
-            // Watch the element
-            let element = window_state.elements.get_mut(element_id).unwrap();
-            element.watch(observer)
+            let stored = window_state.elements.get_mut(element_id).unwrap();
+            watch_element(stored, observer)
         })
     }
 
@@ -218,9 +298,136 @@ impl ElementRegistry {
                 return;
             };
 
-            if let Some(element) = window_state.elements.get_mut(element_id) {
-                element.unwatch(observer);
+            if let Some(stored) = window_state.elements.get_mut(element_id) {
+                unwatch_element(stored, observer);
             }
         });
     }
+}
+
+// --- Element operations ---
+
+fn write_value(stored: &StoredElement, text: &str) -> AxioResult<()> {
+    use accessibility::AXAttribute;
+    use core_foundation::base::TCFType;
+    use core_foundation::string::CFString;
+
+    const WRITABLE_ROLES: &[&str] = &[
+        "AXTextField", "AXTextArea", "AXComboBox", "AXSecureTextField", "AXSearchField"
+    ];
+
+    if !WRITABLE_ROLES.contains(&stored.platform_role.as_str()) {
+        return Err(AxioError::NotSupported(format!(
+            "Element with role '{}' is not writable",
+            stored.platform_role
+        )));
+    }
+
+    let cf_string = CFString::new(text);
+    stored
+        .ax_element
+        .set_attribute(&AXAttribute::value(), cf_string.as_CFType())
+        .map_err(|e| AxioError::AccessibilityError(format!("Failed to set value: {:?}", e)))?;
+
+    Ok(())
+}
+
+fn click_element(stored: &StoredElement) -> AxioResult<()> {
+    use accessibility_sys::{kAXPressAction, AXUIElementPerformAction};
+    use core_foundation::base::TCFType;
+    use core_foundation::string::CFString;
+
+    let action = CFString::new(kAXPressAction);
+    let result = unsafe {
+        AXUIElementPerformAction(
+            stored.ax_element.as_concrete_TypeRef(),
+            action.as_concrete_TypeRef(),
+        )
+    };
+
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(AxioError::AccessibilityError(format!(
+            "AXUIElementPerformAction failed with code {}",
+            result
+        )))
+    }
+}
+
+fn watch_element(stored: &mut StoredElement, observer: AXObserverRef) -> AxioResult<()> {
+    use accessibility_sys::{AXObserverAddNotification, AXUIElementRef};
+    use core_foundation::base::TCFType;
+    use core_foundation::string::CFString;
+
+    if stored.watch_state.is_some() {
+        return Ok(());
+    }
+
+    let notifications = AXNotification::for_role(&stored.platform_role);
+    if notifications.is_empty() {
+        return Ok(());
+    }
+
+    let context = Box::new(ObserverContext {
+        element_id: stored.element.id.clone(),
+    });
+    let context_ptr = Box::into_raw(context) as *mut c_void;
+    let element_ref = stored.ax_element.as_concrete_TypeRef() as AXUIElementRef;
+
+    let mut registered = Vec::new();
+    for notification in &notifications {
+        let notif_cfstring = CFString::new(notification.as_str());
+        let result = unsafe {
+            AXObserverAddNotification(
+                observer,
+                element_ref,
+                notif_cfstring.as_concrete_TypeRef() as _,
+                context_ptr,
+            )
+        };
+        if result == 0 {
+            registered.push(*notification);
+        }
+    }
+
+    if registered.is_empty() {
+        unsafe { let _ = Box::from_raw(context_ptr); }
+        return Err(AxioError::ObserverError(format!(
+            "Failed to register notifications for element {} (role: {})",
+            stored.element.id, stored.platform_role
+        )));
+    }
+
+    stored.watch_state = Some(WatchState {
+        observer_context: context_ptr,
+        notifications: registered,
+    });
+
+    Ok(())
+}
+
+fn unwatch_element(stored: &mut StoredElement, observer: AXObserverRef) {
+    use accessibility_sys::{AXObserverRemoveNotification, AXUIElementRef};
+    use core_foundation::base::TCFType;
+    use core_foundation::string::CFString;
+
+    let Some(watch_state) = stored.watch_state.take() else {
+        return;
+    };
+
+    let element_ref = stored.ax_element.as_concrete_TypeRef() as AXUIElementRef;
+
+    for notification in &watch_state.notifications {
+        let notif_cfstring = CFString::new(notification.as_str());
+        unsafe {
+            let _ = AXObserverRemoveNotification(
+                observer,
+                element_ref,
+                notif_cfstring.as_concrete_TypeRef() as _,
+            );
+        }
+    }
+
+    unsafe { let _ = Box::from_raw(watch_state.observer_context); }
 }

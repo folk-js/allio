@@ -1,4 +1,4 @@
-import { AXIO, AXNode, AXWindow } from "@axio/client";
+import { AXIO, AXElement, AXWindow } from "@axio/client";
 
 /**
  * Port Types
@@ -8,7 +8,7 @@ type PortType = "input" | "output";
 interface Port {
   id: string;
   windowId: string;
-  element: AXNode;
+  element: AXElement;
   type: PortType;
   x: number; // Screen position of the port circle
   y: number;
@@ -76,7 +76,9 @@ class PortsDemo {
   private async setupWebSocket() {
     try {
       this.axio.on("windows", (windows) => this.updateWindows(windows));
-      this.axio.on("update", (update) => this.handleElementUpdate(update));
+      this.axio.on("elements", (elements) =>
+        this.handleElementsUpdate(elements)
+      );
 
       await this.axio.connect();
       console.log("📡 Ports Demo connected");
@@ -386,7 +388,7 @@ class PortsDemo {
     return null;
   }
 
-  private createPort(windowId: string, element: AXNode, type: PortType) {
+  private createPort(windowId: string, element: AXElement, type: PortType) {
     // Check if port of this type already exists for this element
     const existingPort = Array.from(this.ports.values()).find(
       (p) => p.element.id === element.id && p.type === type
@@ -946,29 +948,26 @@ class PortsDemo {
     }
   }
 
-  private handleElementUpdate(update: any) {
-    // When an element value changes, propagate to connected inputs
-    if (update.update_type !== "ValueChanged") return;
+  private handleElementsUpdate(elements: AXElement[]) {
+    // When elements are updated, check if any are output ports and propagate
+    for (const element of elements) {
+      const sourcePort = Array.from(this.ports.values()).find(
+        (p) => p.element.id === element.id && p.type === "output"
+      );
 
-    // Find port for this element
-    const sourcePort = Array.from(this.ports.values()).find(
-      (p) => p.element.id === update.element_id && p.type === "output"
-    );
+      if (!sourcePort) continue;
 
-    if (!sourcePort) return;
+      // Update the port's element reference
+      sourcePort.element = element;
 
-    // Update the port's element value
-    if (sourcePort.element.value) {
-      (sourcePort.element.value as any).value = update.value.value;
-    }
+      // Find connections from this port and propagate
+      const connections = this.connections.filter(
+        (c) => c.sourcePort.id === sourcePort.id
+      );
 
-    // Find connections from this port
-    const connections = this.connections.filter(
-      (c) => c.sourcePort.id === sourcePort.id
-    );
-
-    for (const connection of connections) {
-      this.propagateValue(connection);
+      for (const connection of connections) {
+        this.propagateValue(connection);
+      }
     }
   }
 

@@ -1,21 +1,25 @@
-//! Trait-based event system decoupled from transport (WebSocket, channels, etc.)
+//! Trait-based event system decoupled from transport.
 
-use crate::types::{AXNode, AXWindow, ElementUpdate};
+use crate::types::{AXElement, AXWindow, ElementId};
 
 /// Implement to receive AXIO events.
 pub trait EventSink: Send + Sync + 'static {
-    fn on_element_update(&self, update: ElementUpdate);
+    /// Window list changed
     fn on_window_update(&self, windows: &[AXWindow]);
-    fn on_window_root(&self, window_id: &str, root: &AXNode);
+    /// Elements discovered or updated
+    fn on_elements(&self, elements: &[AXElement]);
+    /// Element destroyed
+    fn on_element_destroyed(&self, element_id: &ElementId);
+    /// Mouse position update
     fn on_mouse_position(&self, x: f64, y: f64);
 }
 
 pub struct NoopEventSink;
 
 impl EventSink for NoopEventSink {
-    fn on_element_update(&self, _update: ElementUpdate) {}
     fn on_window_update(&self, _windows: &[AXWindow]) {}
-    fn on_window_root(&self, _window_id: &str, _root: &AXNode) {}
+    fn on_elements(&self, _elements: &[AXElement]) {}
+    fn on_element_destroyed(&self, _element_id: &ElementId) {}
     fn on_mouse_position(&self, _x: f64, _y: f64) {}
 }
 
@@ -30,14 +34,14 @@ pub fn set_event_sink(new_sink: impl EventSink) -> bool {
     EVENT_SINK.set(Box::new(new_sink)).is_ok()
 }
 
-pub(crate) fn emit_element_update(update: ElementUpdate) {
-    sink().on_element_update(update);
-}
-
 pub(crate) fn emit_window_update(windows: &[AXWindow]) {
     sink().on_window_update(windows);
 }
 
-pub(crate) fn emit_window_root(window_id: &str, root: &AXNode) {
-    sink().on_window_root(window_id, root);
+pub(crate) fn emit_elements(elements: Vec<AXElement>) {
+    sink().on_elements(&elements);
+}
+
+pub(crate) fn emit_element_destroyed(element_id: &ElementId) {
+    sink().on_element_destroyed(element_id);
 }

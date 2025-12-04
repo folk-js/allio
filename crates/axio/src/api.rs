@@ -1,44 +1,57 @@
 //! Public API for AXIO operations.
 
 use crate::element_registry::ElementRegistry;
-use crate::types::{AXNode, AxioResult, ElementId};
+use crate::types::{AXElement, AxioResult, ElementId};
 
-/// Get the deepest accessibility element at screen coordinates.
-pub fn element_at(x: f64, y: f64) -> AxioResult<AXNode> {
+/// Discover element at screen coordinates.
+pub fn element_at(x: f64, y: f64) -> AxioResult<AXElement> {
     crate::platform::get_element_at_position(x, y)
 }
 
-/// Get the accessibility tree rooted at an element.
-/// `max_depth`: 0 = just this element, 1 = immediate children, etc.
-pub fn tree(
-    element_id: &ElementId,
-    max_depth: usize,
-    max_children: usize,
-) -> AxioResult<Vec<AXNode>> {
-    crate::platform::macos::get_children_by_element_id(&element_id.0, max_depth, max_children)
+/// Get cached element by ID.
+pub fn get(element_id: &ElementId) -> AxioResult<AXElement> {
+    ElementRegistry::get(element_id)
 }
 
-/// Watch an element for changes (value, title, destruction).
-pub fn watch(element_id: &ElementId) -> AxioResult<()> {
-    ElementRegistry::watch(element_id)
+/// Get multiple cached elements by ID.
+pub fn get_many(element_ids: &[ElementId]) -> Vec<AXElement> {
+    ElementRegistry::get_many(element_ids)
 }
 
-/// Stop watching an element.
-pub fn unwatch(element_id: &ElementId) {
-    ElementRegistry::unwatch(element_id)
+/// Discover children of element (registers them, updates parent's children_ids).
+pub fn children(element_id: &ElementId, max_children: usize) -> AxioResult<Vec<AXElement>> {
+    crate::platform::macos::discover_children(element_id, max_children)
 }
 
-/// Write text to an element. Only works on text fields.
+/// Refresh elements from macOS (re-fetch attributes).
+pub fn refresh(element_ids: &[ElementId]) -> AxioResult<Vec<AXElement>> {
+    element_ids
+        .iter()
+        .map(|id| crate::platform::macos::refresh_element(id))
+        .collect()
+}
+
+/// Write text to an element.
 pub fn write(element_id: &ElementId, text: &str) -> AxioResult<()> {
     ElementRegistry::write(element_id, text)
 }
 
 /// Click an element.
 pub fn click(element_id: &ElementId) -> AxioResult<()> {
-    crate::platform::click_element_by_id(&element_id.0)
+    ElementRegistry::click(element_id)
 }
 
-/// Initialize the AXIO system. Must be called once at startup.
+/// Watch element for changes.
+pub fn watch(element_id: &ElementId) -> AxioResult<()> {
+    ElementRegistry::watch(element_id)
+}
+
+/// Stop watching element.
+pub fn unwatch(element_id: &ElementId) {
+    ElementRegistry::unwatch(element_id)
+}
+
+/// Initialize the AXIO system.
 pub fn initialize() {
     ElementRegistry::initialize();
 }

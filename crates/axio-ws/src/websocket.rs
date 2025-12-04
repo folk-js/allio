@@ -1,6 +1,6 @@
 //! WebSocket server - thin transport layer over axio.
 
-use axio::{AXWindow, ElementUpdate, EventSink, ServerEvent};
+use axio::{AXElement, AXWindow, ElementId, EventSink, ServerEvent};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -22,11 +22,9 @@ fn send_event(sender: &broadcast::Sender<String>, event: ServerEvent) {
 }
 
 /// Handler for app-specific RPC methods not in axio core.
-/// Return Some(response_json) to handle, None to fall through to axio::rpc.
 pub type CustomRpcHandler = Arc<dyn Fn(&str, &Value) -> Option<Value> + Send + Sync>;
 
 /// WebSocket state: broadcasts events to clients, handles RPC requests.
-/// Implements EventSink to receive axio events.
 #[derive(Clone)]
 pub struct WebSocketState {
     sender: Arc<broadcast::Sender<String>>,
@@ -48,20 +46,19 @@ impl WebSocketState {
 }
 
 impl EventSink for WebSocketState {
-    fn on_element_update(&self, update: ElementUpdate) {
-        send_event(&self.sender, ServerEvent::ElementUpdate(update));
-    }
-
     fn on_window_update(&self, windows: &[AXWindow]) {
         send_event(&self.sender, ServerEvent::WindowUpdate(windows.to_vec()));
     }
 
-    fn on_window_root(&self, window_id: &str, root: &axio::AXNode) {
+    fn on_elements(&self, elements: &[AXElement]) {
+        send_event(&self.sender, ServerEvent::Elements(elements.to_vec()));
+    }
+
+    fn on_element_destroyed(&self, element_id: &ElementId) {
         send_event(
             &self.sender,
-            ServerEvent::WindowRoot {
-                window_id: window_id.to_string(),
-                root: root.clone(),
+            ServerEvent::ElementDestroyed {
+                element_id: element_id.clone(),
             },
         );
     }
@@ -105,7 +102,7 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
 
     println!("[client] connected");
 
-    // Send current window state from axio's cache
+    // Send current window state
     let windows = axio::get_current_windows();
     if !windows.is_empty() {
         if let Ok(msg) = serde_json::to_string(&ServerEvent::WindowUpdate(windows)) {
@@ -164,7 +161,7 @@ fn handle_request(request: &str, ws_state: &WebSocketState) -> String {
     let method = req["method"].as_str().unwrap_or("");
     let args = req.get("args").unwrap_or(&Value::Null);
 
-    // Try custom handler first (for app-specific methods like set_clickthrough)
+    // Try custom handler first
     if let Some(ref handler) = ws_state.custom_handler {
         if let Some(result) = handler(method, args) {
             let mut response = result;
@@ -178,3 +175,4 @@ fn handle_request(request: &str, ws_state: &WebSocketState) -> String {
     response["id"] = id;
     response.to_string()
 }
+

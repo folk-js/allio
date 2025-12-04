@@ -106,7 +106,7 @@ fn window_from_x_win(window: &x_win::WindowInfo, focused: bool) -> AXWindow {
         h: window.position.height,
         focused,
         process_id: window.info.process_id,
-        root: None, // Populated client-side from WindowRoot event
+        root_element_id: None,
     }
 }
 
@@ -202,26 +202,35 @@ impl Default for PollingConfig {
 pub fn start_polling(config: PollingConfig) {
     thread::spawn(move || {
         let mut last_windows: Option<Vec<AXWindow>> = None;
+        let mut last_focused_id: Option<String> = None;
 
         loop {
             let loop_start = Instant::now();
 
-            if let Some(current_windows) = get_windows(&config.enum_options) {
-                if last_windows.as_ref() != Some(&current_windows) {
-                    // Update cache
-                    *CURRENT_WINDOWS.write().unwrap() = current_windows.clone();
+            if let Some(mut current_windows) = get_windows(&config.enum_options) {
+                // Update WindowManager first so get_window_root can find the window
+                let _ = WindowManager::update_windows(current_windows.clone());
 
-                    let _ = WindowManager::update_windows(current_windows.clone());
-                    crate::events::emit_window_update(&current_windows);
+                // Find focused window from our window list (not desktop/other apps not in list)
+                let focused_window = current_windows.iter_mut().find(|w| w.focused);
+                let current_focused_id = focused_window.as_ref().map(|w| w.id.clone());
 
-                    if let Some(focused) = current_windows.iter().find(|w| w.focused) {
+                // Only emit root when focus changes to a new window
+                let focus_changed = current_focused_id != last_focused_id;
+                if focus_changed {
+                    if let Some(focused) = focused_window {
                         let window_id = WindowId::new(focused.id.clone());
-                        if let Ok(root) =
-                            crate::platform::get_ax_tree_by_window_id(&window_id, 1, 0, false)
-                        {
-                            crate::events::emit_window_root(&focused.id, &root);
+                        if let Ok(root) = crate::platform::macos::get_window_root(&window_id) {
+                            focused.root_element_id = Some(root.id.clone());
+                            crate::events::emit_elements(vec![root]);
                         }
                     }
+                    last_focused_id = current_focused_id;
+                }
+
+                if last_windows.as_ref() != Some(&current_windows) {
+                    *CURRENT_WINDOWS.write().unwrap() = current_windows.clone();
+                    crate::events::emit_window_update(&current_windows);
 
                     last_windows = Some(current_windows);
                 }

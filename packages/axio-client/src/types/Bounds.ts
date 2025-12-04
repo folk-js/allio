@@ -2,7 +2,4 @@
 import type { Position } from "./Position";
 import type { Size } from "./Size";
 
-/**
- * Geometric bounds (position + size)
- */
 export type Bounds = { position: Position, size: Size, };

@@ -1,16 +1,17 @@
 /**
  * macOS Platform Implementation
  *
- * Converts macOS Accessibility API elements directly to AXIO format.
+ * Converts macOS Accessibility API elements to AXElement format.
  * All macOS-specific knowledge is encapsulated here.
  */
 use accessibility::*;
 use accessibility_sys::{kAXPositionAttribute, kAXSizeAttribute};
 use core_foundation::base::TCFType;
 use core_foundation::string::CFString;
+use uuid::Uuid;
 
 use crate::types::{
-    AXNode, AXRole, AXValue, AxioError, AxioResult, Bounds, ElementId, Position, Size, WindowId,
+    AXElement, AXRole, AXValue, AxioError, AxioResult, Bounds, ElementId, Position, Size, WindowId,
 };
 
 // ============================================================================
@@ -86,7 +87,6 @@ impl AXNotification {
 // AXObserver Creation and Callbacks
 // ============================================================================
 
-use crate::types::ElementUpdate;
 use accessibility_sys::{AXObserverCreate, AXObserverGetRunLoopSource, AXObserverRef};
 use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopSource};
 
@@ -151,214 +151,259 @@ unsafe extern "C" fn observer_callback(
     handle_notification(&context.element_id, &notification_name, &changed_element);
 }
 
-fn handle_notification(element_id: &ElementId, notification: &str, element: &AXUIElement) {
+fn handle_notification(element_id: &ElementId, notification: &str, ax_element: &AXUIElement) {
     use crate::element_registry::ElementRegistry;
 
     let Some(notification_type) = AXNotification::from_str(notification) else {
         return;
     };
 
-    let update = match notification_type {
+    match notification_type {
         AXNotification::ValueChanged => {
-            if let Ok(value_attr) = element.attribute(&AXAttribute::value()) {
-                let role = element
+            // Get fresh value and update cached element
+            if let Ok(value_attr) = ax_element.attribute(&AXAttribute::value()) {
+                let role = ax_element
                     .attribute(&AXAttribute::role())
                     .ok()
-                    .and_then(|r| unsafe {
-                        let cf_string = CFString::wrap_under_get_rule(r.as_CFTypeRef() as *const _);
-                        Some(cf_string.to_string())
-                    });
+                    .map(|r| r.to_string());
 
-                extract_value(&value_attr, role.as_deref()).map(|value| {
-                    ElementUpdate::ValueChanged {
-                        element_id: element_id.to_string(),
-                        value,
+                if let Some(value) = extract_value(&value_attr, role.as_deref()) {
+                    // Update cached element and emit
+                    if let Ok(mut element) = ElementRegistry::get(element_id) {
+                        element.value = Some(value);
+                        let _ = ElementRegistry::update(element_id, element.clone());
+                        crate::events::emit_elements(vec![element]);
                     }
-                })
-            } else {
-                None
+                }
             }
         }
 
-        AXNotification::TitleChanged => element
-            .attribute(&AXAttribute::title())
-            .ok()
-            .map(|t| t.to_string())
-            .filter(|s| !s.is_empty())
-            .map(|label| ElementUpdate::LabelChanged {
-                element_id: element_id.to_string(),
-                label,
-            }),
+        AXNotification::TitleChanged => {
+            if let Ok(title) = ax_element.attribute(&AXAttribute::title()) {
+                let label = title.to_string();
+                if !label.is_empty() {
+                    if let Ok(mut element) = ElementRegistry::get(element_id) {
+                        element.label = Some(label);
+                        let _ = ElementRegistry::update(element_id, element.clone());
+                        crate::events::emit_elements(vec![element]);
+                    }
+                }
+            }
+        }
 
         AXNotification::UIElementDestroyed => {
             ElementRegistry::remove_element(element_id);
-            Some(ElementUpdate::ElementDestroyed {
-                element_id: element_id.to_string(),
-            })
+            crate::events::emit_element_destroyed(element_id);
         }
 
-        _ => None,
-    };
-
-    if let Some(update) = update {
-        crate::events::emit_element_update(update);
+        _ => {}
     }
 }
 
 // ============================================================================
-// AXUIElement to AXNode Conversion
+// AXUIElement to AXElement Conversion
 // ============================================================================
 
-/// Convert macOS AXUIElement to AXIO AXNode
-///
-/// This is the main conversion function that maps macOS accessibility
-/// elements to our platform-agnostic AXIO format.
-///
-/// Phase 3: Now registers elements in ElementRegistry and uses element_id instead of path.
-///
-/// If `load_children` is false, children_count is populated but children array is empty.
-pub fn element_to_axnode(
-    element: &AXUIElement,
+/// Build an AXElement from a macOS AXUIElement and register it.
+/// Returns the registered element (may be existing if duplicate).
+pub fn build_element(
+    ax_element: &AXUIElement,
     window_id: &WindowId,
     pid: u32,
     parent_id: Option<&ElementId>,
-    depth: usize,
-    max_depth: usize,
-    max_children_per_level: usize,
-    load_children: bool,
-) -> Option<AXNode> {
+) -> AXElement {
     use crate::element_registry::ElementRegistry;
 
-    // Stop traversal past max depth
-    // Note: max_depth is inclusive (max_depth=1 means depths 0 and 1 are allowed)
-    if depth > max_depth {
-        return None;
-    }
-
-    // Get role for registration
-    let platform_role = element
+    let platform_role = ax_element
         .attribute(&AXAttribute::role())
         .ok()
         .map(|r| r.to_string())
         .unwrap_or_else(|| "Unknown".to_string());
 
-    // Register this element and get its UUID
-    let element_id =
-        ElementRegistry::register(element.clone(), window_id, pid, parent_id, &platform_role);
-
-    // Convert role to AXIO format
     let role = map_platform_role(&platform_role);
 
-    // Get subrole (platform-specific subtype)
-    // For unknown roles, use the platform role as the subrole for debugging
     let subrole = if matches!(role, AXRole::Unknown) {
         Some(platform_role.clone())
     } else {
-        element
+        ax_element
             .attribute(&AXAttribute::subrole())
             .ok()
             .map(|sr| sr.to_string())
             .filter(|s| !s.is_empty())
     };
 
-    // Get label (ARIA term for title/label attribute)
-    let label = element.attribute(&AXAttribute::title()).ok().and_then(|t| {
-        let s = t.to_string();
-        if s.is_empty() {
-            None
-        } else {
-            Some(s)
-        }
-    });
+    let label = ax_element
+        .attribute(&AXAttribute::title())
+        .ok()
+        .and_then(|t| {
+            let s = t.to_string();
+            if s.is_empty() { None } else { Some(s) }
+        });
 
-    // Get value (with role context for proper type conversion)
-    let value = element
+    let value = ax_element
         .attribute(&AXAttribute::value())
         .ok()
         .and_then(|v| extract_value(&v, Some(&platform_role)));
 
-    // Get enabled state
-    let enabled = element
-        .attribute(&AXAttribute::enabled())
-        .ok()
-        .and_then(|e| e.try_into().ok());
-
-    // Get description
-    let description = element
+    let description = ax_element
         .attribute(&AXAttribute::description())
         .ok()
         .and_then(|d| {
             let s = d.to_string();
-            if s.is_empty() {
-                None
-            } else {
-                Some(s)
-            }
+            if s.is_empty() { None } else { Some(s) }
         });
 
-    // Get placeholder text
-    let placeholder = element
+    let placeholder = ax_element
         .attribute(&AXAttribute::placeholder_value())
         .ok()
         .and_then(|p| {
             let s = p.to_string();
-            if s.is_empty() {
-                None
-            } else {
-                Some(s)
-            }
+            if s.is_empty() { None } else { Some(s) }
         });
 
-    // Get focused state
-    let focused = element
-        .attribute(&AXAttribute::focused())
-        .ok()
-        .and_then(|f| f.try_into().ok());
+    let bounds = get_element_bounds(ax_element);
+    let focused = ax_element.attribute(&AXAttribute::focused()).ok().and_then(|f| f.try_into().ok());
+    let enabled = ax_element.attribute(&AXAttribute::enabled()).ok().and_then(|e| e.try_into().ok());
 
-    // Get selected state (not available in all versions of accessibility crate)
-    let selected = None;
-
-    // Get geometry (position and size)
-    let bounds = get_element_bounds(element);
-
-    // Get children count (always, regardless of load_children flag)
-    let children_count = element
-        .attribute(&AXAttribute::children())
-        .ok()
-        .map(|children_array| children_array.len() as usize);
-
-    // Get children (only if load_children is true)
-    let children = if load_children {
-        Some(get_element_children(
-            element,
-            window_id,
-            pid,
-            Some(&element_id), // Pass element_id as parent_id
-            depth,
-            max_depth,
-            max_children_per_level,
-            load_children,
-        ))
-    } else {
-        None
-    };
-
-    Some(AXNode {
-        id: element_id,
+    let element = AXElement {
+        id: ElementId::new(Uuid::new_v4().to_string()),
+        window_id: window_id.0.clone(),
         parent_id: parent_id.cloned(),
+        children_ids: None, // Discovered separately
         role,
         subrole,
         label,
         value,
         description,
         placeholder,
+        bounds,
         focused,
         enabled,
-        selected,
+    };
+
+    // Register (returns existing if duplicate)
+    ElementRegistry::register(element, ax_element.clone(), pid, &platform_role)
+}
+
+/// Discover and register children of an element. Updates parent's children_ids.
+/// Returns the child elements.
+pub fn discover_children(
+    parent_id: &ElementId,
+    max_children: usize,
+) -> AxioResult<Vec<AXElement>> {
+    use crate::element_registry::ElementRegistry;
+
+    let (ax_element, window_id, pid) = ElementRegistry::with_stored(parent_id, |stored| {
+        (
+            stored.ax_element.clone(),
+            WindowId::new(stored.element.window_id.clone()),
+            stored.pid,
+        )
+    })?;
+
+    let children_array = match ax_element.attribute(&AXAttribute::children()) {
+        Ok(children) => children,
+        Err(_) => {
+            ElementRegistry::set_children_ids(parent_id, vec![])?;
+            return Ok(vec![]);
+        }
+    };
+
+    let child_count = children_array.len();
+    let mut children = Vec::new();
+    let mut children_ids = Vec::new();
+
+    for i in 0..child_count.min(max_children as isize) {
+        if let Some(child_ref) = children_array.get(i) {
+            let child = build_element(&child_ref, &window_id, pid, Some(parent_id));
+            children_ids.push(child.id.clone());
+            children.push(child);
+        }
+    }
+
+    ElementRegistry::set_children_ids(parent_id, children_ids)?;
+    Ok(children)
+}
+
+/// Refresh an element's attributes from macOS.
+pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
+    use crate::element_registry::ElementRegistry;
+
+    let (ax_element, window_id, _pid, parent_id, children_ids, platform_role) = 
+        ElementRegistry::with_stored(element_id, |stored| {
+            (
+                stored.ax_element.clone(),
+                stored.element.window_id.clone(),
+                stored.pid,
+                stored.element.parent_id.clone(),
+                stored.element.children_ids.clone(),
+                stored.platform_role.clone(),
+            )
+        })?;
+
+    let role = map_platform_role(&platform_role);
+
+    let subrole = if matches!(role, AXRole::Unknown) {
+        Some(platform_role.clone())
+    } else {
+        ax_element
+            .attribute(&AXAttribute::subrole())
+            .ok()
+            .map(|sr| sr.to_string())
+            .filter(|s| !s.is_empty())
+    };
+
+    let label = ax_element
+        .attribute(&AXAttribute::title())
+        .ok()
+        .and_then(|t| {
+            let s = t.to_string();
+            if s.is_empty() { None } else { Some(s) }
+        });
+
+    let value = ax_element
+        .attribute(&AXAttribute::value())
+        .ok()
+        .and_then(|v| extract_value(&v, Some(&platform_role)));
+
+    let description = ax_element
+        .attribute(&AXAttribute::description())
+        .ok()
+        .and_then(|d| {
+            let s = d.to_string();
+            if s.is_empty() { None } else { Some(s) }
+        });
+
+    let placeholder = ax_element
+        .attribute(&AXAttribute::placeholder_value())
+        .ok()
+        .and_then(|p| {
+            let s = p.to_string();
+            if s.is_empty() { None } else { Some(s) }
+        });
+
+    let bounds = get_element_bounds(&ax_element);
+    let focused = ax_element.attribute(&AXAttribute::focused()).ok().and_then(|f| f.try_into().ok());
+    let enabled = ax_element.attribute(&AXAttribute::enabled()).ok().and_then(|e| e.try_into().ok());
+
+    let updated = AXElement {
+        id: element_id.clone(),
+        window_id,
+        parent_id,
+        children_ids,
+        role,
+        subrole,
+        label,
+        value,
+        description,
+        placeholder,
         bounds,
-        children_count,
-        children,
-    })
+        focused,
+        enabled,
+    };
+
+    ElementRegistry::update(element_id, updated.clone())?;
+    Ok(updated)
 }
 
 /// Map macOS AX* roles to ARIA-based AXIO roles
@@ -439,44 +484,6 @@ fn get_element_bounds(element: &AXUIElement) -> Option<Bounds> {
     })
 }
 
-/// Get children of an element, recursively converting to AXNode
-fn get_element_children(
-    element: &AXUIElement,
-    window_id: &WindowId,
-    pid: u32,
-    parent_id: Option<&ElementId>,
-    depth: usize,
-    max_depth: usize,
-    max_children_per_level: usize,
-    load_children: bool,
-) -> Vec<AXNode> {
-    let children_array = match element.attribute(&AXAttribute::children()) {
-        Ok(children) => children,
-        Err(_) => return Vec::new(),
-    };
-
-    let child_count = children_array.len();
-    let mut result = Vec::new();
-
-    for i in 0..child_count.min(max_children_per_level as isize) {
-        if let Some(child_ref) = children_array.get(i) {
-            if let Some(child_node) = element_to_axnode(
-                &(*child_ref),
-                window_id,
-                pid,
-                parent_id,
-                depth + 1,
-                max_depth,
-                max_children_per_level,
-                load_children,
-            ) {
-                result.push(child_node);
-            }
-        }
-    }
-
-    result
-}
 
 /// Get accessibility tree for an application by PID
 ///
@@ -523,137 +530,23 @@ pub fn get_window_elements(pid: u32) -> AxioResult<Vec<AXUIElement>> {
     Ok(result)
 }
 
-/// Get accessibility tree using a window element from the cache
-///
-/// This is the NEW approach - uses the cached window element as root.
-/// The window element is the correct root for a window's accessibility tree.
-pub fn get_ax_tree_from_element(
-    window_element: &AXUIElement,
-    window_id: &WindowId,
-    pid: u32,
-    max_depth: usize,
-    max_children_per_level: usize,
-    load_children: bool,
-) -> AxioResult<AXNode> {
-    element_to_axnode(
-        window_element,
-        window_id,
-        pid,
-        None, // Root element has no parent
-        0,
-        max_depth,
-        max_children_per_level,
-        load_children,
-    )
-    .ok_or_else(|| AxioError::Internal("Failed to convert window element to AXNode".to_string()))
-}
-
-/// Get accessibility tree by window ID (uses cached window element)
-///
-/// This is the preferred method - looks up the window in the cache and uses its element.
-pub fn get_ax_tree_by_window_id(
-    window_id: &WindowId,
-    max_depth: usize,
-    max_children_per_level: usize,
-    load_children: bool,
-) -> AxioResult<AXNode> {
+/// Get the root element for a window.
+pub fn get_window_root(window_id: &WindowId) -> AxioResult<AXElement> {
     use crate::window_manager::WindowManager;
 
-    // Get the cached window (includes the AX element)
     let managed_window = WindowManager::get_window(window_id)
         .ok_or_else(|| AxioError::WindowNotFound(window_id.clone()))?;
 
-    // Get the window element
     let window_element = managed_window
         .ax_element
         .ok_or_else(|| AxioError::Internal(format!("Window {} has no AX element", window_id)))?;
 
-    // Build tree from the window element (not app element!)
-    get_ax_tree_from_element(
-        &window_element,
-        window_id,
-        managed_window.info.process_id,
-        max_depth,
-        max_children_per_level,
-        load_children,
-    )
-}
-
-/// Get children of a specific node by element ID
-///
-/// Returns the children of the node, with their own children_count populated
-/// but not their children (unless max_depth > 1).
-pub fn get_children_by_element_id(
-    element_id: &str,
-    max_depth: usize,
-    max_children_per_level: usize,
-) -> AxioResult<Vec<AXNode>> {
-    use crate::element_registry::ElementRegistry;
-
-    let element_id = ElementId::new(element_id.to_string());
-
-    // Get the window_id and pid from the element
-    let (ax_element, window_id, pid) = ElementRegistry::with_element(&element_id, |element| {
-        (
-            element.ax_element().clone(),
-            element.window_id().clone(),
-            element.pid(),
-        )
-    })?;
-
-    // Get children of this node
-    // Depth = 0 means we're getting immediate children with their counts, but not grandchildren
-    let children = get_element_children(
-        &ax_element,
-        &window_id,
-        pid,
-        Some(&element_id), // Pass element_id as parent_id
-        0,                 // Start depth at 0 for children
-        max_depth,
-        max_children_per_level,
-        max_depth > 1, // Only load grandchildren if max_depth > 1
-    );
-
-    Ok(children)
-}
-
-/// Click/press a specific element (identified by element ID)
-/// Performs the AXPress action on the element
-pub fn click_element_by_id(element_id: &str) -> AxioResult<()> {
-    use crate::element_registry::ElementRegistry;
-    use accessibility_sys::{kAXPressAction, AXUIElementPerformAction};
-    use core_foundation::base::TCFType;
-    use core_foundation::string::CFString;
-
-    let element_id = ElementId::new(element_id.to_string());
-
-    // Get the element from registry and perform press action
-    ElementRegistry::with_element(&element_id, |element| {
-        let ax_element = element.ax_element();
-        let action = CFString::new(kAXPressAction);
-
-        unsafe {
-            let result = AXUIElementPerformAction(
-                ax_element.as_concrete_TypeRef(),
-                action.as_concrete_TypeRef(),
-            );
-            if result == 0 {
-                Ok(())
-            } else {
-                Err(AxioError::AccessibilityError(format!(
-                    "AXUIElementPerformAction failed with code {}",
-                    result
-                )))
-            }
-        }
-    })?
+    Ok(build_element(&window_element, window_id, managed_window.info.process_id, None))
 }
 
 /// Get the accessibility element at a specific screen position.
-///
-/// The element must belong to a tracked window. Returns an error if the
-/// element's window is not being tracked by WindowManager.
-pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXNode> {
+/// Element must belong to a tracked window.
+pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
     use accessibility_sys::{AXUIElementGetPid, AXUIElementRef};
     use core_foundation::base::TCFType;
     use std::ptr;
@@ -683,7 +576,7 @@ pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXNode> {
             )));
         }
 
-        let mut element = AXUIElement::wrap_under_create_rule(element_ref);
+        let mut ax_element = AXUIElement::wrap_under_create_rule(element_ref);
 
         let mut pid: i32 = 0;
         let pid_result = AXUIElementGetPid(element_ref, &mut pid);
@@ -695,10 +588,10 @@ pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXNode> {
         }
 
         // Traverse down to find the leafmost (deepest) element
-        element = find_leafmost_element_at_position(&element, x, y);
+        ax_element = find_leafmost_element_at_position(&ax_element, x, y);
 
         // Element must belong to a tracked window
-        let window_id_str = get_window_id_for_element(&element).ok_or_else(|| {
+        let window_id_str = get_window_id_for_element(&ax_element).ok_or_else(|| {
             AxioError::WindowNotFound(WindowId::new(format!(
                 "untracked-window-at-{:.0}-{:.0}",
                 x, y
@@ -706,14 +599,7 @@ pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXNode> {
         })?;
         let window_id = WindowId::new(window_id_str);
 
-        element_to_axnode(&element, &window_id, pid as u32, None, 0, 0, 100, false).ok_or_else(
-            || {
-                AxioError::Internal(format!(
-                    "Failed to convert element at ({}, {}) to AXNode",
-                    x, y
-                ))
-            },
-        )
+        Ok(build_element(&ax_element, &window_id, pid as u32, None))
     }
 }
 
