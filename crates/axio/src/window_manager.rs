@@ -142,4 +142,23 @@ impl WindowManager {
         let cache = WINDOW_CACHE.lock().unwrap();
         cache.windows.get(window_id).cloned()
     }
+
+    /// Find a tracked window by its bounds (position and size).
+    /// Used to match an AXWindow element back to its real window ID.
+    pub fn find_window_id_by_bounds(x: f64, y: f64, w: f64, h: f64) -> Option<WindowId> {
+        let cache = WINDOW_CACHE.lock().unwrap();
+        const MARGIN: f64 = 2.0;
+
+        for (window_id, managed) in cache.windows.iter() {
+            let info = &managed.info;
+            let pos_ok = (info.x as f64 - x).abs() <= MARGIN && (info.y as f64 - y).abs() <= MARGIN;
+            let size_ok =
+                (info.w as f64 - w).abs() <= MARGIN && (info.h as f64 - h).abs() <= MARGIN;
+
+            if pos_ok && size_ok {
+                return Some(window_id.clone());
+            }
+        }
+        None
+    }
 }

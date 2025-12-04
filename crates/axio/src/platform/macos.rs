@@ -649,19 +649,16 @@ pub fn click_element_by_id(element_id: &str) -> AxioResult<()> {
     })?
 }
 
-/// Get the accessibility element at a specific screen position
+/// Get the accessibility element at a specific screen position.
 ///
-/// This uses the macOS Accessibility API to find the topmost element at the given coordinates.
-/// Returns the element as an AXNode with orphan tracking (element not part of any window tree).
-///
-/// The element is registered in the ElementRegistry with a unique orphan window_id.
+/// The element must belong to a tracked window. Returns an error if the
+/// element's window is not being tracked by WindowManager.
 pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXNode> {
     use accessibility_sys::{AXUIElementGetPid, AXUIElementRef};
     use core_foundation::base::TCFType;
     use std::ptr;
 
     unsafe {
-        // Use the system-wide accessibility element as the starting point
         let system_element = AXUIElement::system_wide();
 
         let mut element_ref: AXUIElementRef = ptr::null_mut();
@@ -686,10 +683,8 @@ pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXNode> {
             )));
         }
 
-        // Wrap the element
         let mut element = AXUIElement::wrap_under_create_rule(element_ref);
 
-        // Get the PID of the element's application
         let mut pid: i32 = 0;
         let pid_result = AXUIElementGetPid(element_ref, &mut pid);
         if pid_result != 0 {
@@ -699,28 +694,26 @@ pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXNode> {
             )));
         }
 
-        // Traverse down to find the leafmost (deepest) element at this position
+        // Traverse down to find the leafmost (deepest) element
         element = find_leafmost_element_at_position(&element, x, y);
 
-        // Get the actual window this element belongs to
-        let window_id_str = get_window_id_for_element(&element)
-            .unwrap_or_else(|| format!("orphan-{}-{}", pid, uuid::Uuid::new_v4()));
+        // Element must belong to a tracked window
+        let window_id_str = get_window_id_for_element(&element).ok_or_else(|| {
+            AxioError::WindowNotFound(WindowId::new(format!(
+                "untracked-window-at-{:.0}-{:.0}",
+                x, y
+            )))
+        })?;
         let window_id = WindowId::new(window_id_str);
 
-        // Convert to AXNode with the actual or unique window_id
-        element_to_axnode(
-            &element, &window_id, pid as u32, None,  // No parent
-            0,     // Depth 0
-            0,     // Don't load children (max_depth = 0)
-            100,   // Max children (not used since max_depth = 0)
-            false, // Don't load children
+        element_to_axnode(&element, &window_id, pid as u32, None, 0, 0, 100, false).ok_or_else(
+            || {
+                AxioError::Internal(format!(
+                    "Failed to convert element at ({}, {}) to AXNode",
+                    x, y
+                ))
+            },
         )
-        .ok_or_else(|| {
-            AxioError::Internal(format!(
-                "Failed to convert element at ({}, {}) to AXNode",
-                x, y
-            ))
-        })
     }
 }
 
@@ -785,37 +778,32 @@ fn element_contains_point(element: &AXUIElement, x: f64, y: f64) -> bool {
     x >= position.0 && x <= position.0 + size.0 && y >= position.1 && y <= position.1 + size.1
 }
 
-/// Get the window ID for an element by traversing up to find its parent window
+/// Get the window ID for an element by traversing up to find its parent window.
+/// Matches the found AXWindow to a tracked window in WindowManager.
 fn get_window_id_for_element(element: &AXUIElement) -> Option<String> {
-    // Try to find the window by traversing up the accessibility tree
+    use crate::window_manager::WindowManager;
+
     let mut current = element.clone();
 
     for _ in 0..20 {
-        // Limit traversal depth
-        // Check if this is a window
         if let Ok(role) = current.attribute(&AXAttribute::role()) {
-            let role_str = role.to_string();
-            if role_str == "AXWindow" {
-                // Found the window! Now try to match it to a known window
-                // Get the window's position and size to match with WindowManager
+            if role.to_string() == "AXWindow" {
+                // Found the window - try to match it to a tracked window by bounds
                 if let Some(bounds) = get_element_bounds(&current) {
-                    // Try to find matching window by comparing this AX element
-                    // We'll check if the WindowManager has this exact window element
-                    // by comparing positions (since we can't compare elements directly)
-
-                    // For now, just construct a pseudo window ID based on the window's bounds
-                    // This ensures different windows get different IDs even if elements are similar
-                    let window_pseudo_id = format!(
-                        "window-{:.0}x{:.0}-{:.0}x{:.0}",
-                        bounds.position.x, bounds.position.y, bounds.size.width, bounds.size.height
-                    );
-                    return Some(window_pseudo_id);
+                    if let Some(window_id) = WindowManager::find_window_id_by_bounds(
+                        bounds.position.x,
+                        bounds.position.y,
+                        bounds.size.width,
+                        bounds.size.height,
+                    ) {
+                        return Some(window_id.0);
+                    }
                 }
+                // Window not tracked by WindowManager - will become orphan
                 break;
             }
         }
 
-        // Try to get parent
         match current.attribute(&AXAttribute::parent()) {
             Ok(parent) => current = parent,
             Err(_) => break,
