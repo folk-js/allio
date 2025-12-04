@@ -80,7 +80,12 @@ impl ElementRegistry {
 
     /// Register element, returning existing if equivalent (stable IDs).
     // TODO: Duplicate check is O(n) per window. Investigate CFHash for O(1).
-    pub fn register(element: AXElement, ax_element: AXUIElement, pid: u32, platform_role: &str) -> AXElement {
+    pub fn register(
+        element: AXElement,
+        ax_element: AXUIElement,
+        pid: u32,
+        platform_role: &str,
+    ) -> AXElement {
         Self::with(|registry| {
             let window_id = WindowId::new(element.window_id.clone());
 
@@ -108,7 +113,9 @@ impl ElementRegistry {
             };
 
             window_state.elements.insert(element.id.clone(), stored);
-            registry.element_to_window.insert(element.id.clone(), window_id);
+            registry
+                .element_to_window
+                .insert(element.id.clone(), window_id);
 
             element
         })
@@ -189,7 +196,10 @@ impl ElementRegistry {
     }
 
     /// Update children_ids for an element.
-    pub fn set_children_ids(element_id: &ElementId, children_ids: Vec<ElementId>) -> AxioResult<()> {
+    pub fn set_children_ids(
+        element_id: &ElementId,
+        children_ids: Vec<ElementId>,
+    ) -> AxioResult<()> {
         Self::with(|registry| {
             let window_id = registry
                 .element_to_window
@@ -313,7 +323,11 @@ fn write_value(stored: &StoredElement, text: &str) -> AxioResult<()> {
     use core_foundation::string::CFString;
 
     const WRITABLE_ROLES: &[&str] = &[
-        "AXTextField", "AXTextArea", "AXComboBox", "AXSecureTextField", "AXSearchField"
+        "AXTextField",
+        "AXTextArea",
+        "AXComboBox",
+        "AXSecureTextField",
+        "AXSearchField",
     ];
 
     if !WRITABLE_ROLES.contains(&stored.platform_role.as_str()) {
@@ -392,7 +406,9 @@ fn watch_element(stored: &mut StoredElement, observer: AXObserverRef) -> AxioRes
     }
 
     if registered.is_empty() {
-        unsafe { let _ = Box::from_raw(context_ptr); }
+        unsafe {
+            let _ = Box::from_raw(context_ptr);
+        }
         return Err(AxioError::ObserverError(format!(
             "Failed to register notifications for element {} (role: {})",
             stored.element.id, stored.platform_role
@@ -429,5 +445,7 @@ fn unwatch_element(stored: &mut StoredElement, observer: AXObserverRef) {
         }
     }
 
-    unsafe { let _ = Box::from_raw(watch_state.observer_context); }
+    unsafe {
+        let _ = Box::from_raw(watch_state.observer_context);
+    }
 }

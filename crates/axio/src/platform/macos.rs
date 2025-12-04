@@ -237,7 +237,11 @@ pub fn build_element(
         .ok()
         .and_then(|t| {
             let s = t.to_string();
-            if s.is_empty() { None } else { Some(s) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
         });
 
     let value = ax_element
@@ -250,7 +254,11 @@ pub fn build_element(
         .ok()
         .and_then(|d| {
             let s = d.to_string();
-            if s.is_empty() { None } else { Some(s) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
         });
 
     let placeholder = ax_element
@@ -258,12 +266,22 @@ pub fn build_element(
         .ok()
         .and_then(|p| {
             let s = p.to_string();
-            if s.is_empty() { None } else { Some(s) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
         });
 
     let bounds = get_element_bounds(ax_element);
-    let focused = ax_element.attribute(&AXAttribute::focused()).ok().and_then(|f| f.try_into().ok());
-    let enabled = ax_element.attribute(&AXAttribute::enabled()).ok().and_then(|e| e.try_into().ok());
+    let focused = ax_element
+        .attribute(&AXAttribute::focused())
+        .ok()
+        .and_then(|f| f.try_into().ok());
+    let enabled = ax_element
+        .attribute(&AXAttribute::enabled())
+        .ok()
+        .and_then(|e| e.try_into().ok());
 
     let element = AXElement {
         id: ElementId::new(Uuid::new_v4().to_string()),
@@ -287,10 +305,7 @@ pub fn build_element(
 
 /// Discover and register children of an element. Updates parent's children_ids.
 /// Returns the child elements.
-pub fn discover_children(
-    parent_id: &ElementId,
-    max_children: usize,
-) -> AxioResult<Vec<AXElement>> {
+pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResult<Vec<AXElement>> {
     use crate::element_registry::ElementRegistry;
 
     let (ax_element, window_id, pid) = ElementRegistry::with_stored(parent_id, |stored| {
@@ -329,7 +344,7 @@ pub fn discover_children(
 pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
     use crate::element_registry::ElementRegistry;
 
-    let (ax_element, window_id, _pid, parent_id, children_ids, platform_role) = 
+    let (ax_element, window_id, _pid, parent_id, children_ids, platform_role) =
         ElementRegistry::with_stored(element_id, |stored| {
             (
                 stored.ax_element.clone(),
@@ -358,7 +373,11 @@ pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
         .ok()
         .and_then(|t| {
             let s = t.to_string();
-            if s.is_empty() { None } else { Some(s) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
         });
 
     let value = ax_element
@@ -371,7 +390,11 @@ pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
         .ok()
         .and_then(|d| {
             let s = d.to_string();
-            if s.is_empty() { None } else { Some(s) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
         });
 
     let placeholder = ax_element
@@ -379,12 +402,22 @@ pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
         .ok()
         .and_then(|p| {
             let s = p.to_string();
-            if s.is_empty() { None } else { Some(s) }
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
         });
 
     let bounds = get_element_bounds(&ax_element);
-    let focused = ax_element.attribute(&AXAttribute::focused()).ok().and_then(|f| f.try_into().ok());
-    let enabled = ax_element.attribute(&AXAttribute::enabled()).ok().and_then(|e| e.try_into().ok());
+    let focused = ax_element
+        .attribute(&AXAttribute::focused())
+        .ok()
+        .and_then(|f| f.try_into().ok());
+    let enabled = ax_element
+        .attribute(&AXAttribute::enabled())
+        .ok()
+        .and_then(|e| e.try_into().ok());
 
     let updated = AXElement {
         id: element_id.clone(),
@@ -484,7 +517,6 @@ fn get_element_bounds(element: &AXUIElement) -> Option<Bounds> {
     })
 }
 
-
 /// Get accessibility tree for an application by PID
 ///
 /// This is the main entry point for getting an accessibility tree
@@ -541,7 +573,12 @@ pub fn get_window_root(window_id: &WindowId) -> AxioResult<AXElement> {
         .ax_element
         .ok_or_else(|| AxioError::Internal(format!("Window {} has no AX element", window_id)))?;
 
-    Ok(build_element(&window_element, window_id, managed_window.info.process_id, None))
+    Ok(build_element(
+        &window_element,
+        window_id,
+        managed_window.info.process_id,
+        None,
+    ))
 }
 
 /// Get the accessibility element at a specific screen position.

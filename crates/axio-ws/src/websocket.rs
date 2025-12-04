@@ -175,4 +175,3 @@ fn handle_request(request: &str, ws_state: &WebSocketState) -> String {
     response["id"] = id;
     response.to_string()
 }
-
