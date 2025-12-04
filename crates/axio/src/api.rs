@@ -18,7 +18,7 @@ pub fn get_many(element_ids: &[ElementId]) -> Vec<AXElement> {
     ElementRegistry::get_many(element_ids)
 }
 
-/// Discover children of element (registers them, updates parent's children_ids).
+/// Discover children of element (registers them, updates parent's children).
 pub fn children(element_id: &ElementId, max_children: usize) -> AxioResult<Vec<AXElement>> {
     crate::platform::macos::discover_children(element_id, max_children)
 }

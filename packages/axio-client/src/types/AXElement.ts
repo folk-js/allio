@@ -14,6 +14,6 @@ export type AXElement = { id: ElementId, window_id: string,
  */
 parent_id: ElementId | null, 
 /**
- * null = children not yet discovered, [] = no children
+ * Child element IDs. null = not yet discovered, [] = no children
  */
-children_ids: Array<ElementId> | null, role: AXRole, subrole: string | null, label: string | null, value: AXValue | null, description: string | null, placeholder: string | null, bounds: Bounds | null, focused: boolean | null, enabled: boolean | null, };
+children: Array<ElementId> | null, role: AXRole, subrole: string | null, label: string | null, value: AXValue | null, description: string | null, placeholder: string | null, bounds: Bounds | null, focused: boolean | null, enabled: boolean | null, };

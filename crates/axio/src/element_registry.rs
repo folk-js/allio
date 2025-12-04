@@ -195,11 +195,8 @@ impl ElementRegistry {
         })
     }
 
-    /// Update children_ids for an element.
-    pub fn set_children_ids(
-        element_id: &ElementId,
-        children_ids: Vec<ElementId>,
-    ) -> AxioResult<()> {
+    /// Update children for an element.
+    pub fn set_children(element_id: &ElementId, children: Vec<ElementId>) -> AxioResult<()> {
         Self::with(|registry| {
             let window_id = registry
                 .element_to_window
@@ -213,7 +210,7 @@ impl ElementRegistry {
                 .and_then(|w| w.elements.get_mut(element_id))
                 .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))?;
 
-            stored.element.children_ids = Some(children_ids);
+            stored.element.children = Some(children);
             Ok(())
         })
     }

@@ -2,10 +2,10 @@
 import type { ElementId } from "./ElementId";
 
 /**
- * Window info from x-win.
+ * Window info from x-win + accessibility.
  */
 export type AXWindow = { id: string, title: string, app_name: string, x: number, y: number, w: number, h: number, focused: boolean, process_id: number, 
 /**
- * Root element ID (client looks up from element registry)
+ * Top-level element IDs. null = not yet discovered, [] = empty
  */
-root_element_id: ElementId | null, };
+children: Array<ElementId> | null, };

@@ -75,7 +75,7 @@ class AXTreeOverlay {
         for (const element of elements) {
           this.handleElementUpdate(element);
         }
-        this.checkForRoot();
+        this.checkForChildren();
       });
       this.axio.on("destroyed", (elementId) => {
         this.handleElementDestroyed(elementId);
@@ -89,29 +89,30 @@ class AXTreeOverlay {
   }
 
   private updateWindows(_windows: AXWindow[]) {
-    this.checkForRoot();
+    this.checkForChildren();
     this.updateTreePosition();
   }
 
-  /** Check if we now have a root for the focused window and display tree */
-  private checkForRoot() {
+  /** Check if we now have children for the focused window and display tree */
+  private checkForChildren() {
     const focused = this.axio.focused;
     if (!focused || this.treeContainer) return;
 
-    const root = this.axio.getRoot(focused);
-    if (root) {
-      this.displayAccessibilityTree(root, focused);
+    // window.children: null = not discovered, [] = empty, [...] = has children
+    const children = this.axio.getChildren(focused);
+    if (children.length > 0) {
+      this.displayAccessibilityTree(children, focused);
     }
   }
 
   private handleFocusedWindowChange(focused: AXWindow | null) {
     this.clearAccessibilityTree();
     if (focused) {
-      this.checkForRoot();
+      this.checkForChildren();
     }
   }
 
-  private displayAccessibilityTree(root: AXElement, window: AXWindow) {
+  private displayAccessibilityTree(children: AXElement[], window: AXWindow) {
     this.clearAccessibilityTree();
 
     this.treeContainer = document.createElement("div");
@@ -140,9 +141,10 @@ class AXTreeOverlay {
 
     console.log(`🏗️ Starting tree element creation...`);
     this.renderedNodeCount = 0;
-    const treeContent = this.createTreeElement(root);
+    for (const child of children) {
+      contentWrapper.appendChild(this.createTreeElement(child));
+    }
     console.log(`🎯 Rendered ${this.renderedNodeCount} DOM elements`);
-    contentWrapper.appendChild(treeContent);
 
     this.treeContainer.appendChild(contentWrapper);
     this.windowContainer.appendChild(this.treeContainer);
@@ -158,8 +160,8 @@ class AXTreeOverlay {
       nodeContent.className = "tree-node-content";
 
       // Determine children state
-      // children_ids: null = not discovered, [] = no children, [...] = has children
-      const childrenDiscovered = element.children_ids !== null;
+      // children: null = not discovered, [] = no children, [...] = has children
+      const childrenDiscovered = element.children !== null;
       const children = this.axio.getChildren(element);
       const hasChildren = children.length > 0;
       const isExpanded = this.expandedNodes.has(element.id);
@@ -880,7 +882,7 @@ class AXTreeOverlay {
     try {
       console.log(`📥 Loading children for ${element.role}`);
 
-      const children = await this.axio.children(element.id);
+      const children = await this.axio.discoverChildren(element.id);
       console.log(`✅ Loaded ${children.length} children`);
 
       // Update stored element reference

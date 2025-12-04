@@ -2,7 +2,7 @@
  * AXIO - Accessibility I/O Layer (TypeScript Client)
  *
  * Uses flat element storage - elements stored by ID in a map,
- * relationships tracked via parent_id/children_ids.
+ * relationships tracked via IDs (children, parent_id).
  */
 
 import EventEmitter from "eventemitter3";
@@ -36,6 +36,9 @@ interface AxioEvents {
   elements: [AXElement[]];
   destroyed: [string]; // element_id
 }
+
+/** Something with children IDs (element or window) */
+type HasChildren = { children: ElementId[] | null };
 
 export class AXIO extends EventEmitter<AxioEvents> {
   private rpc: RpcClient<BackendEvents>;
@@ -75,17 +78,10 @@ export class AXIO extends EventEmitter<AxioEvents> {
     return this.elements.get(elementId);
   }
 
-  /** Get root element for a window */
-  getRoot(window: AXWindow): AXElement | undefined {
-    return window.root_element_id
-      ? this.elements.get(window.root_element_id)
-      : undefined;
-  }
-
-  /** Get children of an element (from cache). Returns empty if not discovered. */
-  getChildren(element: AXElement): AXElement[] {
-    if (element.children_ids === null) return []; // Not discovered yet
-    return element.children_ids
+  /** Get children of an element or window (from cache). Returns empty if not discovered. */
+  getChildren(parent: HasChildren): AXElement[] {
+    if (parent.children === null) return []; // Not discovered yet
+    return parent.children
       .map((id) => this.elements.get(id))
       .filter((e): e is AXElement => e !== undefined);
   }
@@ -104,7 +100,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
     return this.register(element);
   }
 
-  /** Get cached element by ID */
+  /** Get cached element by ID from server */
   async getFromServer(elementId: ElementId): Promise<AXElement> {
     const args: RpcArgs<"get"> = { element_id: elementId };
     const element = await this.rpc.call<AXElement>("get", args);
@@ -112,7 +108,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
   }
 
   /** Discover children of an element (fetches from macOS, caches locally) */
-  async children(
+  async discoverChildren(
     elementId: ElementId,
     maxChildren = 2000
   ): Promise<AXElement[]> {

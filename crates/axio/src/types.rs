@@ -132,8 +132,8 @@ pub struct AXElement {
     pub window_id: String,
     /// null = no parent (root element)
     pub parent_id: Option<ElementId>,
-    /// null = children not yet discovered, [] = no children
-    pub children_ids: Option<Vec<ElementId>>,
+    /// Child element IDs. null = not yet discovered, [] = no children
+    pub children: Option<Vec<ElementId>>,
     pub role: AXRole,
     pub subrole: Option<String>,
     pub label: Option<String>,
@@ -145,7 +145,7 @@ pub struct AXElement {
     pub enabled: Option<bool>,
 }
 
-/// Window info from x-win.
+/// Window info from x-win + accessibility.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "packages/axio-client/src/types/")]
 pub struct AXWindow {
@@ -158,8 +158,8 @@ pub struct AXWindow {
     pub h: i32,
     pub focused: bool,
     pub process_id: u32,
-    /// Root element ID (client looks up from element registry)
-    pub root_element_id: Option<ElementId>,
+    /// Top-level element IDs. null = not yet discovered, [] = empty
+    pub children: Option<Vec<ElementId>>,
 }
 
 // Events

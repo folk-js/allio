@@ -106,7 +106,7 @@ fn window_from_x_win(window: &x_win::WindowInfo, focused: bool) -> AXWindow {
         h: window.position.height,
         focused,
         process_id: window.info.process_id,
-        root_element_id: None,
+        children: None,
     }
 }
 
@@ -215,14 +215,23 @@ pub fn start_polling(config: PollingConfig) {
                 let focused_window = current_windows.iter_mut().find(|w| w.focused);
                 let current_focused_id = focused_window.as_ref().map(|w| w.id.clone());
 
-                // Only emit root when focus changes to a new window
+                // Discover children when focus changes to a new window
                 let focus_changed = current_focused_id != last_focused_id;
                 if focus_changed {
                     if let Some(focused) = focused_window {
                         let window_id = WindowId::new(focused.id.clone());
                         if let Ok(root) = crate::platform::macos::get_window_root(&window_id) {
-                            focused.root_element_id = Some(root.id.clone());
-                            crate::events::emit_elements(vec![root]);
+                            // Get root's children as the window's top-level elements
+                            if let Ok(children) =
+                                crate::platform::macos::discover_children(&root.id, 100)
+                            {
+                                let child_ids: Vec<_> =
+                                    children.iter().map(|c| c.id.clone()).collect();
+                                crate::events::emit_elements(children);
+                                focused.children = Some(child_ids);
+                            } else {
+                                focused.children = Some(vec![]);
+                            }
                         }
                     }
                     last_focused_id = current_focused_id;

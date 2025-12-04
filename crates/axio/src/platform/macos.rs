@@ -287,7 +287,7 @@ pub fn build_element(
         id: ElementId::new(Uuid::new_v4().to_string()),
         window_id: window_id.0.clone(),
         parent_id: parent_id.cloned(),
-        children_ids: None, // Discovered separately
+        children: None, // Discovered separately
         role,
         subrole,
         label,
@@ -303,7 +303,7 @@ pub fn build_element(
     ElementRegistry::register(element, ax_element.clone(), pid, &platform_role)
 }
 
-/// Discover and register children of an element. Updates parent's children_ids.
+/// Discover and register children of an element. Updates parent's children.
 /// Returns the child elements.
 pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResult<Vec<AXElement>> {
     use crate::element_registry::ElementRegistry;
@@ -319,24 +319,24 @@ pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResu
     let children_array = match ax_element.attribute(&AXAttribute::children()) {
         Ok(children) => children,
         Err(_) => {
-            ElementRegistry::set_children_ids(parent_id, vec![])?;
+            ElementRegistry::set_children(parent_id, vec![])?;
             return Ok(vec![]);
         }
     };
 
     let child_count = children_array.len();
     let mut children = Vec::new();
-    let mut children_ids = Vec::new();
+    let mut child_ids = Vec::new();
 
     for i in 0..child_count.min(max_children as isize) {
         if let Some(child_ref) = children_array.get(i) {
             let child = build_element(&child_ref, &window_id, pid, Some(parent_id));
-            children_ids.push(child.id.clone());
+            child_ids.push(child.id.clone());
             children.push(child);
         }
     }
 
-    ElementRegistry::set_children_ids(parent_id, children_ids)?;
+    ElementRegistry::set_children(parent_id, child_ids)?;
     Ok(children)
 }
 
@@ -344,14 +344,14 @@ pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResu
 pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
     use crate::element_registry::ElementRegistry;
 
-    let (ax_element, window_id, _pid, parent_id, children_ids, platform_role) =
+    let (ax_element, window_id, _pid, parent_id, children, platform_role) =
         ElementRegistry::with_stored(element_id, |stored| {
             (
                 stored.ax_element.clone(),
                 stored.element.window_id.clone(),
                 stored.pid,
                 stored.element.parent_id.clone(),
-                stored.element.children_ids.clone(),
+                stored.element.children.clone(),
                 stored.platform_role.clone(),
             )
         })?;
@@ -423,7 +423,7 @@ pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
         id: element_id.clone(),
         window_id,
         parent_id,
-        children_ids,
+        children,
         role,
         subrole,
         label,
