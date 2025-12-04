@@ -1,30 +1,15 @@
-//! Event System for AXIO
-//!
-//! Provides a trait-based event system that decouples the core from
-//! any specific notification mechanism (WebSocket, channels, etc.)
+//! Trait-based event system decoupled from transport (WebSocket, channels, etc.)
 
 use crate::types::{AXNode, AXWindow, ElementUpdate};
 
-/// Trait for receiving events from AXIO
-///
-/// Implement this trait to receive notifications about element changes,
-/// window updates, etc. The implementation decides how to deliver these
-/// (WebSocket broadcast, channel, callback, etc.)
+/// Implement to receive AXIO events.
 pub trait EventSink: Send + Sync + 'static {
-    /// Called when an element's value, label, etc. changes
     fn on_element_update(&self, update: ElementUpdate);
-
-    /// Called when the window list changes
     fn on_window_update(&self, windows: &[AXWindow]);
-
-    /// Called when a focused window's accessibility tree root is available
     fn on_window_root(&self, window_id: &str, root: &AXNode);
-
-    /// Called for mouse position updates (if tracking is enabled)
     fn on_mouse_position(&self, x: f64, y: f64);
 }
 
-/// A no-op event sink for when you don't need events
 pub struct NoopEventSink;
 
 impl EventSink for NoopEventSink {
@@ -34,49 +19,33 @@ impl EventSink for NoopEventSink {
     fn on_mouse_position(&self, _x: f64, _y: f64) {}
 }
 
-/// Global event sink - set once at initialization
 static EVENT_SINK: std::sync::OnceLock<Box<dyn EventSink>> = std::sync::OnceLock::new();
 
-/// Initialize the event system with a sink
-///
-/// Must be called once at startup. Panics if called twice.
-pub fn set_event_sink(sink: impl EventSink) {
-    if EVENT_SINK.set(Box::new(sink)).is_err() {
-        panic!("Event sink already initialized");
-    }
+fn sink() -> &'static dyn EventSink {
+    EVENT_SINK.get_or_init(|| Box::new(NoopEventSink)).as_ref()
 }
 
-/// Check if event sink is initialized
+/// Set the event sink. Returns false if already set.
+pub fn set_event_sink(new_sink: impl EventSink) -> bool {
+    EVENT_SINK.set(Box::new(new_sink)).is_ok()
+}
+
 pub fn is_initialized() -> bool {
     EVENT_SINK.get().is_some()
 }
 
-// ============================================================================
-// Convenience functions for emitting events
-// ============================================================================
-
 pub(crate) fn emit_element_update(update: ElementUpdate) {
-    if let Some(sink) = EVENT_SINK.get() {
-        sink.on_element_update(update);
-    }
+    sink().on_element_update(update);
 }
 
 pub(crate) fn emit_window_update(windows: &[AXWindow]) {
-    if let Some(sink) = EVENT_SINK.get() {
-        sink.on_window_update(windows);
-    }
+    sink().on_window_update(windows);
 }
 
 pub(crate) fn emit_window_root(window_id: &str, root: &AXNode) {
-    if let Some(sink) = EVENT_SINK.get() {
-        sink.on_window_root(window_id, root);
-    }
+    sink().on_window_root(window_id, root);
 }
 
-// TODO: src-tauri/src/mouse.rs should use this instead of direct WebSocket broadcast
-#[allow(dead_code)]
 pub(crate) fn emit_mouse_position(x: f64, y: f64) {
-    if let Some(sink) = EVENT_SINK.get() {
-        sink.on_mouse_position(x, y);
-    }
+    sink().on_mouse_position(x, y);
 }

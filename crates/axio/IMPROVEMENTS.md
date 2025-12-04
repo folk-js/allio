@@ -112,3 +112,8 @@ impl Axio {
 | 8   | Consolidate Watch API    | ✅ Done |
 | 9   | Type-safe notifications  | ✅ Done |
 | 10  | Global statics → context | ⬜ TODO |
+
+# Misc open questions
+
+- why does axio-ws need to care about clickthrough?
+- axio-ws is currently more than a thin wrapper, does this need to be the case? what is it doing that axio itself does not?

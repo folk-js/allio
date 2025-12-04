@@ -1,7 +1,4 @@
-//! WebSocket Server for AXIO
-//!
-//! Provides a thin WebSocket layer over AXIO's RPC dispatch.
-//! Events are broadcast to all connected clients via the EventSink trait.
+//! WebSocket server implementation.
 
 use axio::{AXWindow, ElementUpdate, EventSink};
 use axum::{
@@ -18,18 +15,14 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
 
-/// Callback type for setting clickthrough on the overlay window
-/// This is the only non-axio operation (it's Tauri/window-specific)
+/// Callback for setting clickthrough (Tauri/window-specific, not part of axio core)
 pub type ClickthroughCallback = Arc<dyn Fn(bool) -> Result<(), String> + Send + Sync>;
 
-/// WebSocket state for broadcasting to clients
 #[derive(Clone)]
 pub struct WebSocketState {
-    /// Broadcast sender for outgoing messages
     pub sender: Arc<broadcast::Sender<String>>,
-    /// Cached windows for initial client connections
+    /// Cached for initial client connections
     pub current_windows: Arc<RwLock<Vec<AXWindow>>>,
-    /// Optional callback for setting clickthrough (provided by app layer)
     clickthrough_callback: Option<ClickthroughCallback>,
 }
 
@@ -42,36 +35,23 @@ impl WebSocketState {
         }
     }
 
-    /// Set the clickthrough callback (called by app layer)
     pub fn with_clickthrough(mut self, callback: ClickthroughCallback) -> Self {
         self.clickthrough_callback = Some(callback);
         self
     }
 
-    /// Get a clone of the sender for external broadcasting
     pub fn sender(&self) -> Arc<broadcast::Sender<String>> {
         self.sender.clone()
     }
 
-    /// Get a clone of the current_windows cache Arc
-    ///
-    /// Use this when creating WsEventSink to share the cache:
-    /// ```ignore
-    /// let ws_state = WebSocketState::new(sender.clone());
-    /// let event_sink = WsEventSink::new(sender, ws_state.current_windows());
-    /// ```
     pub fn current_windows(&self) -> Arc<RwLock<Vec<AXWindow>>> {
         self.current_windows.clone()
     }
 }
 
-/// EventSink implementation that broadcasts to WebSocket clients
-///
-/// This bridges the axio event system to WebSocket clients.
-/// Also maintains a cache of current windows for new client connections.
+/// EventSink that broadcasts to WebSocket clients.
 pub struct WsEventSink {
     sender: Arc<broadcast::Sender<String>>,
-    /// Shared cache for new client connections (same instance as WebSocketState)
     current_windows: Arc<RwLock<Vec<AXWindow>>>,
 }
 
@@ -89,48 +69,32 @@ impl WsEventSink {
 
 impl EventSink for WsEventSink {
     fn on_element_update(&self, update: ElementUpdate) {
-        let msg = json!({
-            "event": "element_update",
-            "data": update
-        });
+        let msg = json!({ "event": "element_update", "data": update });
         let _ = self.sender.send(msg.to_string());
     }
 
     fn on_window_update(&self, windows: &[AXWindow]) {
-        // Update cache for new client connections
         if let Ok(mut cached) = self.current_windows.write() {
             *cached = windows.to_vec();
         }
-
-        // Broadcast to connected clients
-        let msg = json!({
-            "event": "window_update",
-            "data": windows
-        });
+        let msg = json!({ "event": "window_update", "data": windows });
         let _ = self.sender.send(msg.to_string());
     }
 
     fn on_window_root(&self, window_id: &str, root: &axio::AXNode) {
         let msg = json!({
             "event": "window_root",
-            "data": {
-                "window_id": window_id,
-                "root": root
-            }
+            "data": { "window_id": window_id, "root": root }
         });
         let _ = self.sender.send(msg.to_string());
     }
 
     fn on_mouse_position(&self, x: f64, y: f64) {
-        let msg = json!({
-            "event": "mouse_position",
-            "data": { "x": x, "y": y }
-        });
+        let msg = json!({ "event": "mouse_position", "data": { "x": x, "y": y } });
         let _ = self.sender.send(msg.to_string());
     }
 }
 
-/// Start the WebSocket server
 pub async fn start_ws_server(ws_state: WebSocketState) {
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -174,16 +138,12 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
         .filter(|w| !w.is_empty());
 
     if let Some(windows) = initial_windows {
-        let msg = json!({
-            "event": "window_update",
-            "data": windows
-        });
+        let msg = json!({ "event": "window_update", "data": windows });
         let _ = socket.send(Message::Text(msg.to_string())).await;
     }
 
     loop {
         tokio::select! {
-            // Handle incoming messages from client
             msg = socket.recv() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
@@ -202,11 +162,10 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
                         println!("[client] disconnected");
                         break;
                     }
-                    _ => {} // Ignore ping/pong/binary
+                    _ => {}
                 }
             }
 
-            // Handle outgoing broadcasts
             broadcast = rx.recv() => {
                 match broadcast {
                     Ok(msg) => {
@@ -214,24 +173,15 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
                             break;
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => {
-                        // Client is too slow, continue
-                    }
-                    Err(broadcast::error::RecvError::Closed) => {
-                        break;
-                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
         }
     }
 }
 
-/// Handle an RPC request
-///
-/// Uses axio::rpc::dispatch for most operations.
-/// Handles clickthrough specially since it's window-specific.
 fn handle_request(request: &str, ws_state: &WebSocketState) -> String {
-    // Parse the request
     let parsed: Result<serde_json::Value, _> = serde_json::from_str(request);
 
     let req = match parsed {
@@ -263,7 +213,6 @@ fn handle_request(request: &str, ws_state: &WebSocketState) -> String {
         .to_string();
     }
 
-    // Use axio's RPC dispatch for everything else
     let mut response = axio::rpc::dispatch(method, args);
     response["id"] = id;
     response.to_string()
