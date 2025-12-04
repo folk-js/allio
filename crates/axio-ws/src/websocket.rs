@@ -1,6 +1,6 @@
 //! WebSocket server - thin transport layer over axio.
 
-use axio::{AXWindow, ElementUpdate, EventSink};
+use axio::{AXWindow, ElementUpdate, EventSink, ServerEvent};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -14,6 +14,12 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
+
+fn send_event(sender: &broadcast::Sender<String>, event: ServerEvent) {
+    if let Ok(json) = serde_json::to_string(&event) {
+        let _ = sender.send(json);
+    }
+}
 
 /// Handler for app-specific RPC methods not in axio core.
 /// Return Some(response_json) to handle, None to fall through to axio::rpc.
@@ -43,26 +49,25 @@ impl WebSocketState {
 
 impl EventSink for WebSocketState {
     fn on_element_update(&self, update: ElementUpdate) {
-        let msg = json!({ "event": "element_update", "data": update });
-        let _ = self.sender.send(msg.to_string());
+        send_event(&self.sender, ServerEvent::ElementUpdate(update));
     }
 
     fn on_window_update(&self, windows: &[AXWindow]) {
-        let msg = json!({ "event": "window_update", "data": windows });
-        let _ = self.sender.send(msg.to_string());
+        send_event(&self.sender, ServerEvent::WindowUpdate(windows.to_vec()));
     }
 
     fn on_window_root(&self, window_id: &str, root: &axio::AXNode) {
-        let msg = json!({
-            "event": "window_root",
-            "data": { "window_id": window_id, "root": root }
-        });
-        let _ = self.sender.send(msg.to_string());
+        send_event(
+            &self.sender,
+            ServerEvent::WindowRoot {
+                window_id: window_id.to_string(),
+                root: root.clone(),
+            },
+        );
     }
 
     fn on_mouse_position(&self, x: f64, y: f64) {
-        let msg = json!({ "event": "mouse_position", "data": { "x": x, "y": y } });
-        let _ = self.sender.send(msg.to_string());
+        send_event(&self.sender, ServerEvent::MousePosition { x, y });
     }
 }
 
@@ -103,8 +108,9 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
     // Send current window state from axio's cache
     let windows = axio::get_current_windows();
     if !windows.is_empty() {
-        let msg = json!({ "event": "window_update", "data": windows });
-        let _ = socket.send(Message::Text(msg.to_string())).await;
+        if let Ok(msg) = serde_json::to_string(&ServerEvent::WindowUpdate(windows)) {
+            let _ = socket.send(Message::Text(msg)).await;
+        }
     }
 
     loop {

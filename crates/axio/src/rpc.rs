@@ -67,26 +67,6 @@ fn dispatch_inner(method: &str, args: &Value) -> Result<Value, String> {
     }
 }
 
-pub fn handle_request(request: &str) -> String {
-    let parsed: Result<Value, _> = serde_json::from_str(request);
-
-    let response = match parsed {
-        Ok(req) => {
-            let id = req.get("id").cloned().unwrap_or(Value::Null);
-            let method = req["method"].as_str().unwrap_or("");
-            let args = req.get("args").unwrap_or(&Value::Null);
-
-            let mut response = dispatch(method, args);
-            response["id"] = id;
-            response
-        }
-        Err(e) => json!({ "error": format!("Invalid JSON: {}", e) }),
-    };
-
-    serde_json::to_string(&response)
-        .unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

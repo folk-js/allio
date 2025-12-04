@@ -52,13 +52,6 @@ pub enum AxioError {
     Internal(String),
 }
 
-impl AxioError {
-    #[allow(dead_code)]
-    pub fn ax<E: std::error::Error>(e: E) -> Self {
-        Self::AccessibilityError(e.to_string())
-    }
-}
-
 pub type AxioResult<T> = Result<T, AxioError>;
 
 // Value and geometry types

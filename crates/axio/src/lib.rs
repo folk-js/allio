@@ -3,7 +3,10 @@
 //! Window tracking and accessibility operations for macOS (future: Windows, Linux).
 
 mod types;
-pub use types::*;
+pub use types::{
+    AXNode, AXRole, AXValue, AXWindow, AxioError, AxioResult, Bounds, ElementId, ElementUpdate,
+    Position, ServerEvent, Size, WindowId,
+};
 
 pub mod events;
 pub use events::{set_event_sink, EventSink, NoopEventSink};

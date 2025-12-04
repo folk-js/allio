@@ -5,7 +5,7 @@ use accessibility_sys::AXObserverRef;
 use std::ffi::c_void;
 
 use crate::platform::macos::{AXNotification, ObserverContext};
-use crate::types::{AXValue, AxioError, AxioResult, ElementId, WindowId};
+use crate::types::{AxioError, AxioResult, ElementId, WindowId};
 
 pub struct WatchState {
     pub observer_context: *mut c_void,
@@ -48,68 +48,16 @@ impl UIElement {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn id(&self) -> &ElementId {
-        &self.id
-    }
-
     pub fn window_id(&self) -> &WindowId {
         &self.window_id
-    }
-
-    #[allow(dead_code)]
-    pub fn parent_id(&self) -> Option<&ElementId> {
-        self.parent_id.as_ref()
     }
 
     pub fn pid(&self) -> u32 {
         self.pid
     }
 
-    #[allow(dead_code)]
-    pub fn role(&self) -> &str {
-        &self.role
-    }
-
     pub fn ax_element(&self) -> &AXUIElement {
         &self.ax_element
-    }
-
-    #[allow(dead_code)]
-    pub fn is_watched(&self) -> bool {
-        self.watch_state.is_some()
-    }
-
-    #[allow(dead_code)]
-    pub fn get_value(&self) -> AxioResult<AXValue> {
-        use accessibility::AXAttribute;
-
-        let value_attr = self
-            .ax_element
-            .attribute(&AXAttribute::value())
-            .map_err(|e| AxioError::AccessibilityError(format!("Failed to get value: {:?}", e)))?;
-
-        crate::platform::macos::extract_value(&value_attr, Some(&self.role))
-            .ok_or_else(|| AxioError::AccessibilityError("Failed to extract value".to_string()))
-    }
-
-    #[allow(dead_code)]
-    pub fn to_axnode(
-        &self,
-        load_children: bool,
-        max_depth: usize,
-        max_children: usize,
-    ) -> Option<crate::types::AXNode> {
-        crate::platform::macos::element_to_axnode(
-            &self.ax_element,
-            &self.window_id,
-            self.pid,
-            self.parent_id.as_ref(),
-            0,
-            max_depth,
-            max_children,
-            load_children,
-        )
     }
 
     pub fn set_value(&self, text: &str) -> AxioResult<()> {
@@ -130,14 +78,6 @@ impl UIElement {
             .map_err(|e| AxioError::AccessibilityError(format!("Failed to set value: {:?}", e)))?;
 
         Ok(())
-    }
-
-    // TODO: Implement with low-level accessibility-sys calls
-    #[allow(dead_code)]
-    pub fn call_action(&self, _action: &str) -> AxioResult<()> {
-        Err(AxioError::NotSupported(
-            "Action calls not yet implemented".to_string(),
-        ))
     }
 
     fn is_writable_role(role: &str) -> bool {

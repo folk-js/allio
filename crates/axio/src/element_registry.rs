@@ -97,17 +97,6 @@ impl ElementRegistry {
         })
     }
 
-    #[allow(dead_code)]
-    pub fn get(element_id: &ElementId) -> Option<ElementId> {
-        Self::with(|registry| {
-            if registry.elements.contains_key(element_id) {
-                Some(element_id.clone())
-            } else {
-                None
-            }
-        })
-    }
-
     pub fn with_element<F, R>(element_id: &ElementId, f: F) -> AxioResult<R>
     where
         F: FnOnce(&UIElement) -> R,
@@ -119,36 +108,6 @@ impl ElementRegistry {
                 .map(f)
                 .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))
         })
-    }
-
-    #[allow(dead_code)]
-    pub fn with_element_mut<F, R>(element_id: &ElementId, f: F) -> AxioResult<R>
-    where
-        F: FnOnce(&mut UIElement) -> R,
-    {
-        Self::with(|registry| {
-            registry
-                .elements
-                .get_mut(element_id)
-                .map(f)
-                .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))
-        })
-    }
-
-    #[allow(dead_code)]
-    pub fn find_by_window(window_id: &WindowId) -> Vec<ElementId> {
-        Self::with(|registry| {
-            registry
-                .window_to_elements
-                .get(window_id)
-                .map(|set| set.iter().cloned().collect())
-                .unwrap_or_default()
-        })
-    }
-
-    #[allow(dead_code)]
-    pub fn contains(element_id: &ElementId) -> bool {
-        Self::with(|registry| registry.elements.contains_key(element_id))
     }
 
     pub fn remove_element(element_id: &ElementId) {
@@ -225,15 +184,5 @@ impl ElementRegistry {
             };
             element.unwatch(observer);
         });
-    }
-
-    #[allow(dead_code)]
-    pub fn get_children(
-        element_id: &ElementId,
-        max_depth: usize,
-        max_children: usize,
-    ) -> AxioResult<Vec<crate::types::AXNode>> {
-        Self::with_element(element_id, |_| ())?;
-        crate::platform::macos::get_children_by_element_id(&element_id.0, max_depth, max_children)
     }
 }

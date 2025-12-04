@@ -11,7 +11,6 @@ use crate::types::{AXWindow, WindowId};
 pub struct ManagedWindow {
     pub info: AXWindow,
     pub ax_element: Option<AXUIElement>,
-    pub ax_window_id: Option<u32>,
 }
 
 // SAFETY: AXUIElement is a CFTypeRef (reference-counted). All access is behind Mutex.
@@ -66,22 +65,16 @@ impl WindowManager {
 
                 // Retry fetching AX element if missing (timing issue with macOS AX API)
                 if existing.ax_element.is_none() {
-                    let (ax_element, ax_window_id) =
-                        Self::fetch_ax_element_for_window(&existing.info);
-                    if ax_element.is_some() {
-                        existing.ax_element = ax_element;
-                        existing.ax_window_id = ax_window_id;
-                    }
+                    existing.ax_element = Self::fetch_ax_element_for_window(&existing.info);
                 }
 
                 result.push(existing.clone());
             } else {
                 added_ids.push(window_id.clone());
-                let (ax_element, ax_window_id) = Self::fetch_ax_element_for_window(&window_info);
+                let ax_element = Self::fetch_ax_element_for_window(&window_info);
                 let managed = ManagedWindow {
                     info: window_info,
                     ax_element,
-                    ax_window_id,
                 };
                 cache.windows.insert(window_id, managed.clone());
                 result.push(managed);
@@ -93,7 +86,7 @@ impl WindowManager {
 
     // TODO: Find better matching strategy. Currently uses bounds-based matching because
     // the private _AXUIElementGetWindow API doesn't work on current macOS versions.
-    fn fetch_ax_element_for_window(window: &AXWindow) -> (Option<AXUIElement>, Option<u32>) {
+    fn fetch_ax_element_for_window(window: &AXWindow) -> Option<AXUIElement> {
         use crate::platform::get_window_elements;
         use accessibility::AXAttribute;
         use accessibility_sys::{kAXPositionAttribute, kAXSizeAttribute};
@@ -101,11 +94,11 @@ impl WindowManager {
 
         let window_elements = match get_window_elements(window.process_id) {
             Ok(elements) => elements,
-            Err(_) => return (None, None),
+            Err(_) => return None,
         };
 
         if window_elements.is_empty() {
-            return (None, None);
+            return None;
         }
 
         const MARGIN: i32 = 2;
@@ -132,17 +125,17 @@ impl WindowManager {
                     && (ax_h as i32 - window.h).abs() <= MARGIN;
 
                 if pos_ok && size_ok {
-                    return (Some(element.clone()), None);
+                    return Some(element.clone());
                 }
             }
         }
 
         // Fallback: use only element if there's just one
         if window_elements.len() == 1 {
-            return (Some(window_elements[0].clone()), None);
+            return Some(window_elements[0].clone());
         }
 
-        (None, None)
+        None
     }
 
     pub fn get_window(window_id: &WindowId) -> Option<ManagedWindow> {

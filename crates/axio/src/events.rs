@@ -30,10 +30,6 @@ pub fn set_event_sink(new_sink: impl EventSink) -> bool {
     EVENT_SINK.set(Box::new(new_sink)).is_ok()
 }
 
-pub fn is_initialized() -> bool {
-    EVENT_SINK.get().is_some()
-}
-
 pub(crate) fn emit_element_update(update: ElementUpdate) {
     sink().on_element_update(update);
 }
