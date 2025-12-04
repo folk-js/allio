@@ -50,13 +50,13 @@ impl WindowManager {
         let mut added_ids = Vec::new();
         let mut removed_ids = Vec::new();
 
-        // Build set of current window IDs
-        let new_ids: std::collections::HashSet<_> =
-            new_windows.iter().map(|w| WindowId::new(&w.id)).collect();
+        // Build set of current window IDs (just &str references)
+        let new_ids: std::collections::HashSet<&str> =
+            new_windows.iter().map(|w| w.id.as_str()).collect();
 
-        // Find removed windows
+        // Find removed windows (use Borrow<str> for lookup)
         for existing_id in cache.windows.keys() {
-            if !new_ids.contains(existing_id) {
+            if !new_ids.contains(existing_id.0.as_str()) {
                 removed_ids.push(existing_id.clone());
             }
         }
@@ -69,21 +69,21 @@ impl WindowManager {
             crate::element_registry::ElementRegistry::remove_window_elements(id);
         }
 
-        // Process new/updated windows
+        // Process new/updated windows (consume the vector)
         let mut result = Vec::new();
         for window_info in new_windows {
-            let window_id = WindowId::new(&window_info.id);
+            let window_id = WindowId::new(window_info.id.clone());
 
             if let Some(existing) = cache.windows.get_mut(&window_id) {
-                // Existing window - update info
-                existing.info = window_info.clone();
+                // Existing window - update info (consume window_info)
+                existing.info = window_info;
 
                 // If we don't have an AX element yet, try fetching it again
                 // This handles the case where the AXWindow element wasn't in the children
                 // list when we first detected the window (timing issue with macOS AX API)
                 if existing.ax_element.is_none() {
                     let (ax_element, ax_window_id) =
-                        Self::fetch_ax_element_for_window(&window_info);
+                        Self::fetch_ax_element_for_window(&existing.info);
                     if ax_element.is_some() {
                         existing.ax_element = ax_element;
                         existing.ax_window_id = ax_window_id;
@@ -99,11 +99,11 @@ impl WindowManager {
 
                 let managed = ManagedWindow {
                     info: window_info,
-                    ax_element: ax_element.clone(),
+                    ax_element,
                     ax_window_id,
                 };
 
-                cache.windows.insert(window_id.clone(), managed.clone());
+                cache.windows.insert(window_id, managed.clone());
                 result.push(managed);
             }
         }
@@ -192,6 +192,11 @@ impl WindowManager {
     }
 }
 
-// Manual Send/Sync implementation (AXUIElement is thread-safe behind Mutex)
+// SAFETY: ManagedWindow can be sent between threads and accessed concurrently because:
+// 1. AXUIElement is a CFTypeRef (Core Foundation reference) which is reference-counted
+//    and the underlying accessibility object is managed by the system.
+// 2. ManagedWindow is only stored in WINDOW_CACHE behind a Mutex, so all access
+//    is synchronized.
+// 3. The macOS Accessibility API is thread-safe for the read operations we perform.
 unsafe impl Send for ManagedWindow {}
 unsafe impl Sync for ManagedWindow {}

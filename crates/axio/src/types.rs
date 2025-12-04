@@ -5,85 +5,41 @@
 //!
 //! To regenerate: `npm run typegen` or `cargo test -p axio export_bindings`
 
+use branded::Branded;
 use serde::{Deserialize, Serialize};
-use std::fmt;
+use std::borrow::Borrow;
 use ts_rs::TS;
 
 // ============================================================================
-// Identity Types (Newtypes for type safety)
+// Identity Types (Branded newtypes for type safety)
 // ============================================================================
 
-/// Unique identifier for an accessibility element
+/// Unique identifier for an accessibility element (UUID string)
 ///
-/// Wraps a UUID string. Using a newtype prevents accidentally passing
-/// a WindowId where an ElementId is expected.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
-#[serde(transparent)]
+/// Using the `branded` crate ensures type safety - you can't accidentally
+/// pass a `WindowId` where an `ElementId` is expected.
+#[derive(Branded, TS)]
+#[branded(serde)]
 #[ts(export, export_to = "packages/axio-client/src/types/")]
 pub struct ElementId(pub String);
 
-impl ElementId {
-    pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
-    }
-
-    pub fn as_str(&self) -> &str {
+impl Borrow<str> for ElementId {
+    fn borrow(&self) -> &str {
         &self.0
     }
 }
 
-impl fmt::Display for ElementId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl From<String> for ElementId {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
-}
-
-impl From<&str> for ElementId {
-    fn from(s: &str) -> Self {
-        Self(s.to_string())
-    }
-}
-
-/// Unique identifier for a window
+/// Unique identifier for a window (from x-win)
 ///
-/// Wraps an ID string from x-win. Using a newtype prevents accidentally
-/// passing an ElementId where a WindowId is expected.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+/// Using the `branded` crate ensures type safety - you can't accidentally
+/// pass an `ElementId` where a `WindowId` is expected.
+#[derive(Branded)]
+#[branded(serde)]
 pub struct WindowId(pub String);
 
-#[allow(dead_code)]
-impl WindowId {
-    pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
-    }
-
-    pub fn as_str(&self) -> &str {
+impl Borrow<str> for WindowId {
+    fn borrow(&self) -> &str {
         &self.0
-    }
-}
-
-impl fmt::Display for WindowId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl From<String> for WindowId {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
-}
-
-impl From<&str> for WindowId {
-    fn from(s: &str) -> Self {
-        Self(s.to_string())
     }
 }
 
@@ -92,8 +48,10 @@ impl From<&str> for WindowId {
 // ============================================================================
 
 /// Errors that can occur in AXIO operations
+///
+/// Not all variants are used in every code path, but they form the complete
+/// error surface for AXIO operations.
 #[derive(Debug, thiserror::Error)]
-#[allow(dead_code)] // Not all variants used yet
 pub enum AxioError {
     /// Element with given ID was not found in the registry
     #[error("Element not found: {0}")]
@@ -120,9 +78,9 @@ pub enum AxioError {
     Internal(String),
 }
 
-#[allow(dead_code)]
 impl AxioError {
     /// Create an AccessibilityError from any error type
+    #[allow(dead_code)] // Utility function for error conversion
     pub fn ax<E: std::error::Error>(e: E) -> Self {
         Self::AccessibilityError(e.to_string())
     }
@@ -220,8 +178,7 @@ pub enum AXRole {
     Unknown,
 }
 
-// Platform-specific role conversions are handled in the platform module
-// to keep AXIO types platform-agnostic
+// Platform-specific types (notifications, role mappings) are in platform/<os>.rs
 
 // ============================================================================
 // Node Structure

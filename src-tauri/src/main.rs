@@ -183,8 +183,16 @@ fn main() {
             let (sender, _) = tokio::sync::broadcast::channel(1000);
             let sender = std::sync::Arc::new(sender);
 
+            // Initialize WebSocket state first (so we can share its cache with EventSink)
+            let ws_state = WebSocketState::new(sender.clone());
+
             // Set up event sink to broadcast AXIO events to WebSocket clients
-            axio::set_event_sink(axio_ws::WsEventSink::new(sender.clone()));
+            // The WsEventSink shares the window cache with WebSocketState so new
+            // clients immediately receive the current window list on connect.
+            axio::set_event_sink(axio_ws::WsEventSink::new(
+                sender.clone(),
+                ws_state.current_windows(),
+            ));
 
             // Initialize AXIO (ElementRegistry, etc.)
             axio::api::initialize();
@@ -202,9 +210,8 @@ fn main() {
                     }
                 });
 
-            // Initialize WebSocket state with clickthrough support
-            let ws_state =
-                WebSocketState::new(sender.clone()).with_clickthrough(clickthrough_callback);
+            // Add clickthrough support to WebSocket state
+            let ws_state = ws_state.with_clickthrough(clickthrough_callback);
 
             let (screen_width, screen_height) = get_main_screen_dimensions();
             if let Some(window) = app.get_webview_window("main") {
@@ -253,19 +260,14 @@ fn main() {
             // Start global mouse tracking (for automatic clickthrough)
             mouse::start_mouse_tracking(ws_state.clone());
 
-            // Start window polling (events broadcast via EventSink)
+            // Start window polling (events broadcast via EventSink -> WsEventSink)
             let current_pid = std::process::id();
-            let ws_state_for_polling = ws_state.clone();
             axio::start_polling(PollingConfig {
                 enum_options: WindowEnumOptions {
                     exclude_pid: Some(current_pid),
                     filter_fullscreen: true,
                     filter_offscreen: true,
                 },
-                // Update WebSocketState's cached windows for initial client connections
-                on_windows_changed: Some(Box::new(move |windows, _, _| {
-                    ws_state_for_polling.update_windows(windows);
-                })),
                 ..Default::default()
             });
 

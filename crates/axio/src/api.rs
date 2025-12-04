@@ -8,10 +8,8 @@
 //! - Type-safe (uses ElementId, WindowId, AxioError)
 //! - Suitable for extraction into a standalone crate
 
-#![allow(dead_code)] // API surface - not all functions used internally yet
-
 use crate::element_registry::ElementRegistry;
-use crate::types::{AXNode, AxioError, AxioResult, ElementId};
+use crate::types::{AXNode, AxioResult, ElementId};
 
 // ============================================================================
 // Public API
@@ -28,7 +26,7 @@ use crate::types::{AXNode, AxioError, AxioResult, ElementId};
 /// println!("Element role: {:?}", element.role);
 /// ```
 pub fn element_at(x: f64, y: f64) -> AxioResult<AXNode> {
-    crate::platform::get_element_at_position(x, y).map_err(|e| AxioError::AccessibilityError(e))
+    crate::platform::get_element_at_position(x, y)
 }
 
 /// Get the accessibility tree rooted at an element
@@ -45,8 +43,7 @@ pub fn tree(
     max_depth: usize,
     max_children: usize,
 ) -> AxioResult<Vec<AXNode>> {
-    crate::platform::macos::get_children_by_element_id(element_id.as_str(), max_depth, max_children)
-        .map_err(|e| AxioError::AccessibilityError(e))
+    crate::platform::macos::get_children_by_element_id(&element_id.0, max_depth, max_children)
 }
 
 /// Watch an element for changes
@@ -59,7 +56,7 @@ pub fn tree(
 /// - Windows: title changes
 /// - All elements: destruction
 pub fn watch(element_id: &ElementId) -> AxioResult<()> {
-    ElementRegistry::watch(element_id).map_err(|e| AxioError::ObserverError(e))
+    ElementRegistry::watch(element_id)
 }
 
 /// Stop watching an element for changes
@@ -71,15 +68,14 @@ pub fn unwatch(element_id: &ElementId) {
 ///
 /// Only works on writable elements (text fields, text areas, etc.)
 pub fn write(element_id: &ElementId, text: &str) -> AxioResult<()> {
-    ElementRegistry::write(element_id, text).map_err(|e| AxioError::AccessibilityError(e))
+    ElementRegistry::write(element_id, text)
 }
 
 /// Click an element
 ///
 /// Performs a click action on the element.
 pub fn click(element_id: &ElementId) -> AxioResult<()> {
-    crate::platform::click_element_by_id(element_id.as_str())
-        .map_err(|e| AxioError::AccessibilityError(e))
+    crate::platform::click_element_by_id(&element_id.0)
 }
 
 // ============================================================================

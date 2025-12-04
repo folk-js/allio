@@ -228,24 +228,16 @@ pub fn get_windows(options: &WindowEnumOptions) -> Option<Vec<AXWindow>> {
 // Window Polling
 // ============================================================================
 
-/// Callback type for window updates
-pub type WindowUpdateCallback = Box<dyn Fn(&[AXWindow], &[WindowId], &[WindowId]) + Send + Sync>;
-
-/// Callback type for focused window root updates
-pub type FocusedRootCallback = Box<dyn Fn(&str, &crate::AXNode) + Send + Sync>;
-
 /// Configuration for the window polling loop
+///
+/// Events are emitted via the `EventSink` trait (set with `axio::set_event_sink`).
+/// This keeps the polling loop simple and avoids duplicate notification mechanisms.
+#[derive(Clone)]
 pub struct PollingConfig {
     /// Window enumeration options
     pub enum_options: WindowEnumOptions,
     /// Polling interval in milliseconds
     pub interval_ms: u64,
-    /// Called when window list changes: (windows, added_ids, removed_ids)
-    /// Note: Events are also emitted via the EventSink trait
-    pub on_windows_changed: Option<WindowUpdateCallback>,
-    /// Called with root node of focused window
-    /// Note: Events are also emitted via the EventSink trait
-    pub on_focused_root: Option<FocusedRootCallback>,
 }
 
 impl Default for PollingConfig {
@@ -253,14 +245,17 @@ impl Default for PollingConfig {
         Self {
             enum_options: WindowEnumOptions::default(),
             interval_ms: DEFAULT_POLLING_INTERVAL_MS,
-            on_windows_changed: None,
-            on_focused_root: None,
         }
     }
 }
 
 /// Start the window polling loop
-/// This runs in a background thread and never returns
+///
+/// This runs in a background thread and emits events via the `EventSink`:
+/// - `on_window_update` when the window list changes
+/// - `on_window_root` with the focused window's accessibility tree root
+///
+/// The loop runs until the process exits.
 pub fn start_polling(config: PollingConfig) {
     thread::spawn(move || {
         let mut last_windows: Option<Vec<AXWindow>> = None;
@@ -271,31 +266,19 @@ pub fn start_polling(config: PollingConfig) {
             if let Some(current_windows) = get_windows(&config.enum_options) {
                 // Check if windows changed
                 if last_windows.as_ref() != Some(&current_windows) {
-                    // Update window manager
-                    let (_managed, added_ids, removed_ids) =
-                        WindowManager::update_windows(current_windows.clone());
-
-                    // Call window update callback
-                    if let Some(ref callback) = config.on_windows_changed {
-                        callback(&current_windows, &added_ids, &removed_ids);
-                    }
+                    // Update window manager (handles element cleanup for closed windows)
+                    let _ = WindowManager::update_windows(current_windows.clone());
 
                     // Emit window update via event system
                     crate::events::emit_window_update(&current_windows);
 
                     // Get focused window root and emit
                     if let Some(focused) = current_windows.iter().find(|w| w.focused) {
-                        let window_id = WindowId::new(&focused.id);
+                        let window_id = WindowId::new(focused.id.clone());
                         if let Ok(root) =
                             crate::platform::get_ax_tree_by_window_id(&window_id, 1, 0, false)
                         {
-                            // Emit via event system
                             crate::events::emit_window_root(&focused.id, &root);
-
-                            // Also call callback if provided
-                            if let Some(ref callback) = config.on_focused_root {
-                                callback(&focused.id, &root);
-                            }
                         }
                     }
 

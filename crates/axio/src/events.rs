@@ -46,14 +46,6 @@ pub fn set_event_sink(sink: impl EventSink) {
     }
 }
 
-/// Get the current event sink (or panic if not initialized)
-pub(crate) fn event_sink() -> &'static dyn EventSink {
-    EVENT_SINK
-        .get()
-        .map(|b| b.as_ref())
-        .expect("Event sink not initialized - call axio::events::set_event_sink first")
-}
-
 /// Check if event sink is initialized
 pub fn is_initialized() -> bool {
     EVENT_SINK.get().is_some()
@@ -81,6 +73,8 @@ pub(crate) fn emit_window_root(window_id: &str, root: &AXNode) {
     }
 }
 
+// TODO: src-tauri/src/mouse.rs should use this instead of direct WebSocket broadcast
+#[allow(dead_code)]
 pub(crate) fn emit_mouse_position(x: f64, y: f64) {
     if let Some(sink) = EVENT_SINK.get() {
         sink.on_mouse_position(x, y);

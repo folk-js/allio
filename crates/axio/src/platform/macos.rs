@@ -9,7 +9,82 @@ use accessibility_sys::{kAXPositionAttribute, kAXSizeAttribute};
 use core_foundation::base::TCFType;
 use core_foundation::string::CFString;
 
-use crate::types::{AXNode, AXRole, AXValue, Bounds, ElementId, Position, Size, WindowId};
+use crate::types::{
+    AXNode, AXRole, AXValue, AxioError, AxioResult, Bounds, ElementId, Position, Size, WindowId,
+};
+
+// ============================================================================
+// macOS Accessibility Notifications
+// ============================================================================
+
+/// Type-safe representation of macOS accessibility notifications
+///
+/// These map to `kAX*Notification` constants from the Accessibility API.
+/// Using an enum prevents typos and enables compile-time checking.
+///
+/// Note: This is macOS-specific. Other platforms will have their own
+/// notification types in their respective platform modules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AXNotification {
+    /// Element's value attribute changed (text fields, sliders, etc.)
+    ValueChanged,
+    /// Element's title attribute changed (windows, buttons with labels)
+    TitleChanged,
+    /// Element was destroyed (removed from the UI)
+    UIElementDestroyed,
+    /// Focus moved to this element
+    FocusedUIElementChanged,
+    /// Selected children changed (lists, tables)
+    SelectedChildrenChanged,
+}
+
+impl AXNotification {
+    /// Get the macOS notification name string
+    ///
+    /// These strings match the `kAX*Notification` constants.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ValueChanged => "AXValueChanged",
+            Self::TitleChanged => "AXTitleChanged",
+            Self::UIElementDestroyed => "AXUIElementDestroyed",
+            Self::FocusedUIElementChanged => "AXFocusedUIElementChanged",
+            Self::SelectedChildrenChanged => "AXSelectedChildrenChanged",
+        }
+    }
+
+    /// Get notifications appropriate for a given macOS accessibility role
+    ///
+    /// Conservative approach: only subscribe to essential, reliable notifications.
+    pub fn for_role(role: &str) -> Vec<Self> {
+        match role {
+            // Text input elements - watch value changes
+            "AXTextField" | "AXTextArea" | "AXComboBox" | "AXSearchField" => {
+                vec![Self::ValueChanged, Self::UIElementDestroyed]
+            }
+            // Windows - watch title changes
+            "AXWindow" => vec![Self::TitleChanged, Self::UIElementDestroyed],
+            // Everything else - no subscriptions
+            // Note: AXStaticText does NOT reliably emit value changed notifications
+            _ => vec![],
+        }
+    }
+
+    /// Parse from notification name string
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "AXValueChanged" => Some(Self::ValueChanged),
+            "AXTitleChanged" => Some(Self::TitleChanged),
+            "AXUIElementDestroyed" => Some(Self::UIElementDestroyed),
+            "AXFocusedUIElementChanged" => Some(Self::FocusedUIElementChanged),
+            "AXSelectedChildrenChanged" => Some(Self::SelectedChildrenChanged),
+            _ => None,
+        }
+    }
+}
+
+// ============================================================================
+// AXUIElement to AXNode Conversion
+// ============================================================================
 
 /// Convert macOS AXUIElement to AXIO AXNode
 ///
@@ -21,9 +96,9 @@ use crate::types::{AXNode, AXRole, AXValue, Bounds, ElementId, Position, Size, W
 /// If `load_children` is false, children_count is populated but children array is empty.
 pub fn element_to_axnode(
     element: &AXUIElement,
-    window_id: WindowId,
+    window_id: &WindowId,
     pid: u32,
-    parent_id: Option<ElementId>,
+    parent_id: Option<&ElementId>,
     depth: usize,
     max_depth: usize,
     max_children_per_level: usize,
@@ -45,13 +120,8 @@ pub fn element_to_axnode(
         .unwrap_or_else(|| "Unknown".to_string());
 
     // Register this element and get its UUID
-    let element_id = ElementRegistry::register(
-        element.clone(),
-        window_id.clone(),
-        pid,
-        parent_id.clone(),
-        platform_role.clone(),
-    );
+    let element_id =
+        ElementRegistry::register(element.clone(), window_id, pid, parent_id, &platform_role);
 
     // Convert role to AXIO format
     let role = map_platform_role(&platform_role);
@@ -140,7 +210,7 @@ pub fn element_to_axnode(
             element,
             window_id,
             pid,
-            Some(element_id.clone()), // Pass element_id as parent_id
+            Some(&element_id), // Pass element_id as parent_id
             depth,
             max_depth,
             max_children_per_level,
@@ -152,7 +222,7 @@ pub fn element_to_axnode(
 
     Some(AXNode {
         id: element_id,
-        parent_id,
+        parent_id: parent_id.cloned(),
         role,
         subrole,
         label,
@@ -249,9 +319,9 @@ fn get_element_bounds(element: &AXUIElement) -> Option<Bounds> {
 /// Get children of an element, recursively converting to AXNode
 fn get_element_children(
     element: &AXUIElement,
-    window_id: WindowId,
+    window_id: &WindowId,
     pid: u32,
-    parent_id: Option<ElementId>,
+    parent_id: Option<&ElementId>,
     depth: usize,
     max_depth: usize,
     max_children_per_level: usize,
@@ -269,9 +339,9 @@ fn get_element_children(
         if let Some(child_ref) = children_array.get(i) {
             if let Some(child_node) = element_to_axnode(
                 &(*child_ref),
-                window_id.clone(),
+                window_id,
                 pid,
-                parent_id.clone(),
+                parent_id,
                 depth + 1,
                 max_depth,
                 max_children_per_level,
@@ -295,7 +365,7 @@ fn get_element_children(
 ///
 /// Returns a vector of AXUIElements for each window (no CGWindowID).
 /// We match windows by bounds instead of using private APIs.
-pub fn get_window_elements(pid: u32) -> Result<Vec<AXUIElement>, String> {
+pub fn get_window_elements(pid: u32) -> AxioResult<Vec<AXUIElement>> {
     use core_foundation::string::CFString;
 
     let app_element = AXUIElement::application(pid as i32);
@@ -336,12 +406,12 @@ pub fn get_window_elements(pid: u32) -> Result<Vec<AXUIElement>, String> {
 /// The window element is the correct root for a window's accessibility tree.
 pub fn get_ax_tree_from_element(
     window_element: &AXUIElement,
-    window_id: WindowId,
+    window_id: &WindowId,
     pid: u32,
     max_depth: usize,
     max_children_per_level: usize,
     load_children: bool,
-) -> Result<AXNode, String> {
+) -> AxioResult<AXNode> {
     element_to_axnode(
         window_element,
         window_id,
@@ -352,7 +422,7 @@ pub fn get_ax_tree_from_element(
         max_children_per_level,
         load_children,
     )
-    .ok_or_else(|| "Failed to get accessibility tree from window element".to_string())
+    .ok_or_else(|| AxioError::Internal("Failed to convert window element to AXNode".to_string()))
 }
 
 /// Get accessibility tree by window ID (uses cached window element)
@@ -363,22 +433,22 @@ pub fn get_ax_tree_by_window_id(
     max_depth: usize,
     max_children_per_level: usize,
     load_children: bool,
-) -> Result<AXNode, String> {
+) -> AxioResult<AXNode> {
     use crate::window_manager::WindowManager;
 
     // Get the cached window (includes the AX element)
     let managed_window = WindowManager::get_window(window_id)
-        .ok_or_else(|| format!("Window {} not found in cache", window_id))?;
+        .ok_or_else(|| AxioError::WindowNotFound(window_id.clone()))?;
 
     // Get the window element
     let window_element = managed_window
         .ax_element
-        .ok_or_else(|| format!("Window {} has no AX element", window_id))?;
+        .ok_or_else(|| AxioError::Internal(format!("Window {} has no AX element", window_id)))?;
 
     // Build tree from the window element (not app element!)
     get_ax_tree_from_element(
         &window_element,
-        window_id.clone(),
+        window_id,
         managed_window.info.process_id,
         max_depth,
         max_children_per_level,
@@ -394,10 +464,10 @@ pub fn get_children_by_element_id(
     element_id: &str,
     max_depth: usize,
     max_children_per_level: usize,
-) -> Result<Vec<AXNode>, String> {
+) -> AxioResult<Vec<AXNode>> {
     use crate::element_registry::ElementRegistry;
 
-    let element_id = ElementId::new(element_id);
+    let element_id = ElementId::new(element_id.to_string());
 
     // Get the window_id and pid from the element
     let (ax_element, window_id, pid) = ElementRegistry::with_element(&element_id, |element| {
@@ -412,10 +482,10 @@ pub fn get_children_by_element_id(
     // Depth = 0 means we're getting immediate children with their counts, but not grandchildren
     let children = get_element_children(
         &ax_element,
-        window_id,
+        &window_id,
         pid,
-        Some(element_id), // Pass element_id as parent_id
-        0,                // Start depth at 0 for children
+        Some(&element_id), // Pass element_id as parent_id
+        0,                 // Start depth at 0 for children
         max_depth,
         max_children_per_level,
         max_depth > 1, // Only load grandchildren if max_depth > 1
@@ -426,13 +496,13 @@ pub fn get_children_by_element_id(
 
 /// Click/press a specific element (identified by element ID)
 /// Performs the AXPress action on the element
-pub fn click_element_by_id(element_id: &str) -> Result<(), String> {
+pub fn click_element_by_id(element_id: &str) -> AxioResult<()> {
     use crate::element_registry::ElementRegistry;
     use accessibility_sys::{kAXPressAction, AXUIElementPerformAction};
     use core_foundation::base::TCFType;
     use core_foundation::string::CFString;
 
-    let element_id = ElementId::new(element_id);
+    let element_id = ElementId::new(element_id.to_string());
 
     // Get the element from registry and perform press action
     ElementRegistry::with_element(&element_id, |element| {
@@ -447,10 +517,10 @@ pub fn click_element_by_id(element_id: &str) -> Result<(), String> {
             if result == 0 {
                 Ok(())
             } else {
-                Err(format!(
-                    "Failed to perform press action, error code: {}",
+                Err(AxioError::AccessibilityError(format!(
+                    "AXUIElementPerformAction failed with code {}",
                     result
-                ))
+                )))
             }
         }
     })?
@@ -462,7 +532,7 @@ pub fn click_element_by_id(element_id: &str) -> Result<(), String> {
 /// Returns the element as an AXNode with orphan tracking (element not part of any window tree).
 ///
 /// The element is registered in the ElementRegistry with a unique orphan window_id.
-pub fn get_element_at_position(x: f64, y: f64) -> Result<AXNode, String> {
+pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXNode> {
     use accessibility_sys::{AXUIElementGetPid, AXUIElementRef};
     use core_foundation::base::TCFType;
     use std::ptr;
@@ -480,14 +550,17 @@ pub fn get_element_at_position(x: f64, y: f64) -> Result<AXNode, String> {
         );
 
         if result != 0 {
-            return Err(format!(
-                "Failed to get element at position ({}, {}), error code: {}",
+            return Err(AxioError::AccessibilityError(format!(
+                "AXUIElementCopyElementAtPosition failed at ({}, {}) with code {}",
                 x, y, result
-            ));
+            )));
         }
 
         if element_ref.is_null() {
-            return Err(format!("No element found at position ({}, {})", x, y));
+            return Err(AxioError::AccessibilityError(format!(
+                "No element found at position ({}, {})",
+                x, y
+            )));
         }
 
         // Wrap the element
@@ -497,7 +570,10 @@ pub fn get_element_at_position(x: f64, y: f64) -> Result<AXNode, String> {
         let mut pid: i32 = 0;
         let pid_result = AXUIElementGetPid(element_ref, &mut pid);
         if pid_result != 0 {
-            return Err(format!("Failed to get PID for element at ({}, {})", x, y));
+            return Err(AxioError::AccessibilityError(format!(
+                "Failed to get PID for element at ({}, {})",
+                x, y
+            )));
         }
 
         // Traverse down to find the leafmost (deepest) element at this position
@@ -510,13 +586,18 @@ pub fn get_element_at_position(x: f64, y: f64) -> Result<AXNode, String> {
 
         // Convert to AXNode with the actual or unique window_id
         element_to_axnode(
-            &element, window_id, pid as u32, None,  // No parent
+            &element, &window_id, pid as u32, None,  // No parent
             0,     // Depth 0
             0,     // Don't load children (max_depth = 0)
             100,   // Max children (not used since max_depth = 0)
             false, // Don't load children
         )
-        .ok_or_else(|| format!("Failed to convert element at ({}, {}) to AXNode", x, y))
+        .ok_or_else(|| {
+            AxioError::Internal(format!(
+                "Failed to convert element at ({}, {}) to AXNode",
+                x, y
+            ))
+        })
     }
 }
 

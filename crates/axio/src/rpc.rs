@@ -44,37 +44,37 @@ fn dispatch_inner(method: &str, args: &Value) -> Result<Value, String> {
             serde_json::to_value(node).map_err(|e| e.to_string())
         }
 
-        "tree" | "get_children" => {
+        "tree" => {
             let element_id = args["element_id"].as_str().ok_or("element_id required")?;
             let max_depth = args["max_depth"].as_u64().unwrap_or(50) as usize;
             let max_children = args["max_children_per_level"].as_u64().unwrap_or(2000) as usize;
-            let children = crate::api::tree(&ElementId::new(element_id), max_depth, max_children)
+            let children = crate::api::tree(&ElementId::new(element_id.to_string()), max_depth, max_children)
                 .map_err(|e| e.to_string())?;
             serde_json::to_value(children).map_err(|e| e.to_string())
         }
 
-        "write" | "write_to_element" => {
+        "write" => {
             let element_id = args["element_id"].as_str().ok_or("element_id required")?;
             let text = args["text"].as_str().ok_or("text required")?;
-            crate::api::write(&ElementId::new(element_id), text).map_err(|e| e.to_string())?;
+            crate::api::write(&ElementId::new(element_id.to_string()), text).map_err(|e| e.to_string())?;
             Ok(json!(null))
         }
 
-        "watch" | "watch_node" => {
+        "watch" => {
             let element_id = args["element_id"].as_str().ok_or("element_id required")?;
-            crate::api::watch(&ElementId::new(element_id)).map_err(|e| e.to_string())?;
+            crate::api::watch(&ElementId::new(element_id.to_string())).map_err(|e| e.to_string())?;
             Ok(json!(null))
         }
 
-        "unwatch" | "unwatch_node" => {
+        "unwatch" => {
             let element_id = args["element_id"].as_str().ok_or("element_id required")?;
-            crate::api::unwatch(&ElementId::new(element_id));
+            crate::api::unwatch(&ElementId::new(element_id.to_string()));
             Ok(json!(null))
         }
 
-        "click" | "click_element" => {
+        "click" => {
             let element_id = args["element_id"].as_str().ok_or("element_id required")?;
-            crate::api::click(&ElementId::new(element_id)).map_err(|e| e.to_string())?;
+            crate::api::click(&ElementId::new(element_id.to_string())).map_err(|e| e.to_string())?;
             Ok(json!(null))
         }
 
@@ -114,7 +114,8 @@ pub fn handle_request(request: &str) -> String {
         Err(e) => json!({ "error": format!("Invalid JSON: {}", e) }),
     };
 
-    serde_json::to_string(&response).unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string())
+    serde_json::to_string(&response)
+        .unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string())
 }
 
 #[cfg(test)]
@@ -124,7 +125,10 @@ mod tests {
     #[test]
     fn test_unknown_method() {
         let response = dispatch("unknown_method", &json!({}));
-        assert!(response["error"].as_str().unwrap().contains("unknown method"));
+        assert!(response["error"]
+            .as_str()
+            .unwrap()
+            .contains("unknown method"));
     }
 
     #[test]
@@ -133,4 +137,3 @@ mod tests {
         assert!(response["error"].as_str().unwrap().contains("required"));
     }
 }
-

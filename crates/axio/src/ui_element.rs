@@ -8,7 +8,8 @@ use accessibility::AXUIElement;
 use accessibility_sys::AXObserverRef;
 use std::ffi::c_void;
 
-use crate::types::{AXValue, ElementId, WindowId};
+use crate::platform::macos::AXNotification;
+use crate::types::{AXValue, AxioError, AxioResult, ElementId, WindowId};
 
 /// Context passed to AX observer callbacks
 /// Must match the definition used in element_registry.rs observer_callback
@@ -23,7 +24,7 @@ pub struct WatchState {
     /// Context pointer for AX observer callbacks
     pub observer_context: *mut c_void,
     /// Which notifications are registered for this element
-    pub notifications: Vec<String>,
+    pub notifications: Vec<AXNotification>,
 }
 
 /// A UI element with all operations bundled together
@@ -63,7 +64,13 @@ pub struct UIElement {
     watch_state: Option<WatchState>,
 }
 
-// Manual Send/Sync implementation - AXUIElement operations are thread-safe behind Mutex
+// SAFETY: UIElement can be sent between threads and accessed concurrently because:
+// 1. AXUIElement is a CFTypeRef (Core Foundation reference) which is reference-counted
+//    and immutable. The underlying accessibility object is managed by the system.
+// 2. All mutable state (watch_state) is only modified through ElementRegistry which
+//    holds the UIElement behind a Mutex, ensuring exclusive access.
+// 3. The macOS Accessibility API is thread-safe for read operations, and we only
+//    perform write operations (set_value, watch) through the synchronized registry.
 unsafe impl Send for UIElement {}
 unsafe impl Sync for UIElement {}
 
@@ -141,17 +148,17 @@ impl UIElement {
 
     /// Get the current value of this element
     #[allow(dead_code)]
-    pub fn get_value(&self) -> Result<AXValue, String> {
+    pub fn get_value(&self) -> AxioResult<AXValue> {
         use accessibility::AXAttribute;
 
         let value_attr = self
             .ax_element
             .attribute(&AXAttribute::value())
-            .map_err(|e| format!("Failed to get value attribute: {:?}", e))?;
+            .map_err(|e| AxioError::AccessibilityError(format!("Failed to get value: {:?}", e)))?;
 
         // Use the platform-specific value extraction
         crate::platform::macos::extract_value(&value_attr, Some(&self.role))
-            .ok_or_else(|| "Failed to extract value".to_string())
+            .ok_or_else(|| AxioError::AccessibilityError("Failed to extract value".to_string()))
     }
 
     /// Convert this element to an AXNode
@@ -169,9 +176,9 @@ impl UIElement {
         // This will call back into ElementRegistry to register child elements
         crate::platform::macos::element_to_axnode(
             &self.ax_element,
-            self.window_id.clone(),
+            &self.window_id,
             self.pid,
-            self.parent_id.clone(),
+            self.parent_id.as_ref(),
             0, // Current depth (this is the starting point)
             max_depth,
             max_children,
@@ -184,32 +191,37 @@ impl UIElement {
     // ============================================================================
 
     /// Set the value of this element (write text)
-    pub fn set_value(&self, text: &str) -> Result<(), String> {
+    pub fn set_value(&self, text: &str) -> AxioResult<()> {
         use accessibility::AXAttribute;
         use core_foundation::base::TCFType;
         use core_foundation::string::CFString;
 
         // Check if element is writable
         if !Self::is_writable_role(&self.role) {
-            return Err(format!("Element with role '{}' is not writable", self.role));
+            return Err(AxioError::NotSupported(format!(
+                "Element with role '{}' is not writable",
+                self.role
+            )));
         }
 
         // Set the value using the AXValue attribute
         let cf_string = CFString::new(text);
         self.ax_element
             .set_attribute(&AXAttribute::value(), cf_string.as_CFType())
-            .map_err(|e| format!("Failed to set value: {:?}", e))?;
+            .map_err(|e| AxioError::AccessibilityError(format!("Failed to set value: {:?}", e)))?;
 
         Ok(())
     }
 
     /// Call an accessibility action on this element
     #[allow(dead_code)]
-    pub fn call_action(&self, _action: &str) -> Result<(), String> {
+    pub fn call_action(&self, _action: &str) -> AxioResult<()> {
         // TODO: Implement action calls
         // The accessibility crate doesn't have a direct perform_action method
         // This needs to be implemented with low-level accessibility-sys calls
-        Err("Action calls not yet implemented".to_string())
+        Err(AxioError::NotSupported(
+            "Action calls not yet implemented".to_string(),
+        ))
     }
 
     /// Check if a role represents a writable element
@@ -221,14 +233,14 @@ impl UIElement {
     }
 
     // ============================================================================
-    // Watch Operations
+    // Watch Operations (internal - use ElementRegistry::watch for public API)
     // ============================================================================
 
-    /// Start watching this element for changes
+    /// Register accessibility notifications for this element
     ///
+    /// This is an internal method - use `ElementRegistry::watch()` for the public API.
     /// Registers for accessibility notifications appropriate for this element's role.
-    /// Requires mutable access since it modifies watch_state.
-    pub fn watch(&mut self, observer: AXObserverRef) -> Result<(), String> {
+    pub(crate) fn watch(&mut self, observer: AXObserverRef) -> AxioResult<()> {
         use accessibility_sys::{AXObserverAddNotification, AXUIElementRef};
         use core_foundation::base::TCFType;
         use core_foundation::string::CFString;
@@ -239,7 +251,7 @@ impl UIElement {
         }
 
         // Get notifications appropriate for this element type
-        let notifications = Self::get_notifications_for_role(&self.role);
+        let notifications = AXNotification::for_role(&self.role);
 
         // Skip watching if element doesn't support any notifications
         if notifications.is_empty() {
@@ -258,7 +270,7 @@ impl UIElement {
         let mut registered_count = 0;
 
         for notification in &notifications {
-            let notif_cfstring = CFString::new(notification);
+            let notif_cfstring = CFString::new(notification.as_str());
             let result = unsafe {
                 AXObserverAddNotification(
                     observer,
@@ -269,7 +281,7 @@ impl UIElement {
             };
 
             if result == 0 {
-                registered_notifications.push(notification.to_string());
+                registered_notifications.push(*notification);
                 registered_count += 1;
             }
         }
@@ -279,10 +291,10 @@ impl UIElement {
             unsafe {
                 let _ = Box::from_raw(context_ptr);
             }
-            return Err(format!(
+            return Err(AxioError::ObserverError(format!(
                 "Failed to register notifications for element {} (role: {})",
                 self.id, self.role
-            ));
+            )));
         }
 
         // Store watch state
@@ -294,8 +306,10 @@ impl UIElement {
         Ok(())
     }
 
-    /// Stop watching this element for changes
-    pub fn unwatch(&mut self, observer: AXObserverRef) {
+    /// Remove registered accessibility notifications for this element
+    ///
+    /// This is an internal method - use `ElementRegistry::unwatch()` for the public API.
+    pub(crate) fn unwatch(&mut self, observer: AXObserverRef) {
         use accessibility_sys::{AXObserverRemoveNotification, AXUIElementRef};
         use core_foundation::base::TCFType;
         use core_foundation::string::CFString;
@@ -305,7 +319,7 @@ impl UIElement {
 
             // Remove all registered notifications
             for notification in &watch_state.notifications {
-                let notif_cfstring = CFString::new(notification);
+                let notif_cfstring = CFString::new(notification.as_str());
                 unsafe {
                     let _ = AXObserverRemoveNotification(
                         observer,
@@ -318,36 +332,6 @@ impl UIElement {
             // Free context
             unsafe {
                 let _ = Box::from_raw(watch_state.observer_context);
-            }
-        }
-    }
-
-    /// Determines which notifications to register for a given element role
-    /// Conservative approach: only subscribe to essential notifications
-    fn get_notifications_for_role(role: &str) -> Vec<&'static str> {
-        // Note: Using string literals since not all constants are in accessibility_sys
-        // kAXValueChangedNotification is available, others we use strings
-        use accessibility_sys::kAXValueChangedNotification;
-
-        match role {
-            // TEXT INPUT ELEMENTS - watch value changes
-            "AXTextField" | "AXTextArea" | "AXComboBox" | "AXSearchField" => {
-                vec![
-                    kAXValueChangedNotification,
-                    "AXUIElementDestroyed", // Know when element is destroyed
-                ]
-            }
-
-            // WINDOWS - watch label (title attribute) changes
-            "AXWindow" => {
-                vec!["AXTitleChanged", "AXUIElementDestroyed"]
-            }
-
-            // Everything else - no subscriptions
-            // Note: AXStaticText does NOT reliably emit value changed notifications
-            // (apps must manually post them, which most don't do)
-            _ => {
-                vec![] // Conservative: only reliable elements
             }
         }
     }

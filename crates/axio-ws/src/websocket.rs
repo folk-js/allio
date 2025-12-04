@@ -53,24 +53,37 @@ impl WebSocketState {
         self.sender.clone()
     }
 
-    /// Update cached windows (called from polling callback)
-    pub fn update_windows(&self, windows: &[AXWindow]) {
-        if let Ok(mut current) = self.current_windows.write() {
-            *current = windows.to_vec();
-        }
+    /// Get a clone of the current_windows cache Arc
+    ///
+    /// Use this when creating WsEventSink to share the cache:
+    /// ```ignore
+    /// let ws_state = WebSocketState::new(sender.clone());
+    /// let event_sink = WsEventSink::new(sender, ws_state.current_windows());
+    /// ```
+    pub fn current_windows(&self) -> Arc<RwLock<Vec<AXWindow>>> {
+        self.current_windows.clone()
     }
 }
 
 /// EventSink implementation that broadcasts to WebSocket clients
 ///
 /// This bridges the axio event system to WebSocket clients.
+/// Also maintains a cache of current windows for new client connections.
 pub struct WsEventSink {
     sender: Arc<broadcast::Sender<String>>,
+    /// Shared cache for new client connections (same instance as WebSocketState)
+    current_windows: Arc<RwLock<Vec<AXWindow>>>,
 }
 
 impl WsEventSink {
-    pub fn new(sender: Arc<broadcast::Sender<String>>) -> Self {
-        Self { sender }
+    pub fn new(
+        sender: Arc<broadcast::Sender<String>>,
+        current_windows: Arc<RwLock<Vec<AXWindow>>>,
+    ) -> Self {
+        Self {
+            sender,
+            current_windows,
+        }
     }
 }
 
@@ -84,6 +97,12 @@ impl EventSink for WsEventSink {
     }
 
     fn on_window_update(&self, windows: &[AXWindow]) {
+        // Update cache for new client connections
+        if let Ok(mut cached) = self.current_windows.write() {
+            *cached = windows.to_vec();
+        }
+
+        // Broadcast to connected clients
         let msg = json!({
             "event": "window_update",
             "data": windows

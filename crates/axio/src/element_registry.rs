@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use uuid::Uuid;
 
-use crate::types::{ElementId, ElementUpdate, WindowId};
+use crate::types::{AxioError, AxioResult, ElementId, ElementUpdate, WindowId};
 use crate::ui_element::{ObserverContext, UIElement};
 
 /// Check if two AXUIElements refer to the same UI element using CFEqual
@@ -97,14 +97,14 @@ impl ElementRegistry {
     /// Called by platform/macos.rs during tree building.
     pub fn register(
         ax_element: accessibility::AXUIElement,
-        window_id: WindowId,
+        window_id: &WindowId,
         pid: u32,
-        parent_id: Option<ElementId>,
-        role: String,
+        parent_id: Option<&ElementId>,
+        role: &str,
     ) -> ElementId {
         Self::with(|registry| {
             // Check if an equivalent element already exists for this window
-            if let Some(window_elements) = registry.window_to_elements.get(&window_id) {
+            if let Some(window_elements) = registry.window_to_elements.get(window_id) {
                 for element_id in window_elements {
                     if let Some(existing) = registry.elements.get(element_id) {
                         if ax_elements_equal(existing.ax_element(), &ax_element) {
@@ -120,10 +120,10 @@ impl ElementRegistry {
             let ui_element = UIElement::new(
                 id.clone(),
                 window_id.clone(),
-                parent_id,
+                parent_id.cloned(),
                 ax_element,
                 pid,
-                role,
+                role.to_string(),
             );
 
             // Store element
@@ -132,7 +132,7 @@ impl ElementRegistry {
             // Update window-to-elements index
             registry
                 .window_to_elements
-                .entry(window_id)
+                .entry(window_id.clone())
                 .or_default()
                 .insert(id.clone());
 
@@ -158,7 +158,7 @@ impl ElementRegistry {
     }
 
     /// Execute an operation with an element (immutable access)
-    pub fn with_element<F, R>(element_id: &ElementId, f: F) -> Result<R, String>
+    pub fn with_element<F, R>(element_id: &ElementId, f: F) -> AxioResult<R>
     where
         F: FnOnce(&UIElement) -> R,
     {
@@ -167,13 +167,13 @@ impl ElementRegistry {
                 .elements
                 .get(element_id)
                 .map(f)
-                .ok_or_else(|| format!("Element {} not found", element_id))
+                .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))
         })
     }
 
     /// Execute an operation with an element (mutable access)
     #[allow(dead_code)]
-    pub fn with_element_mut<F, R>(element_id: &ElementId, f: F) -> Result<R, String>
+    pub fn with_element_mut<F, R>(element_id: &ElementId, f: F) -> AxioResult<R>
     where
         F: FnOnce(&mut UIElement) -> R,
     {
@@ -182,7 +182,7 @@ impl ElementRegistry {
                 .elements
                 .get_mut(element_id)
                 .map(f)
-                .ok_or_else(|| format!("Element {} not found", element_id))
+                .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))
         })
     }
 
@@ -262,17 +262,25 @@ impl ElementRegistry {
     // ============================================================================
 
     /// Write text to an element
-    pub fn write(element_id: &ElementId, text: &str) -> Result<(), String> {
+    pub fn write(element_id: &ElementId, text: &str) -> AxioResult<()> {
         Self::with_element(element_id, |element| element.set_value(text))?
     }
 
-    /// Watch an element for changes
-    pub fn watch(element_id: &ElementId) -> Result<(), String> {
+    /// Watch an element for accessibility changes
+    ///
+    /// Subscribes to notifications appropriate for the element's role:
+    /// - Text fields: value changes
+    /// - Windows: title changes  
+    /// - All watched elements: destruction
+    ///
+    /// Changes are broadcast via the `EventSink` trait.
+    /// One AXObserver is created per window and shared by all watched elements.
+    pub fn watch(element_id: &ElementId) -> AxioResult<()> {
         Self::with(|registry| {
             let element = registry
                 .elements
                 .get(element_id)
-                .ok_or_else(|| format!("Element {} not found", element_id))?;
+                .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))?;
 
             let window_id = element.window_id().clone();
             let pid = element.pid();
@@ -293,14 +301,19 @@ impl ElementRegistry {
                 };
 
                 if result != 0 {
-                    return Err(format!("Failed to create observer: error code {}", result));
+                    return Err(AxioError::ObserverError(format!(
+                        "AXObserverCreate failed with code {}",
+                        result
+                    )));
                 }
 
                 // Add observer to the MAIN run loop
                 unsafe {
                     let run_loop_source_ref = AXObserverGetRunLoopSource(observer_ref);
                     if run_loop_source_ref.is_null() {
-                        return Err("Failed to get run loop source from observer".to_string());
+                        return Err(AxioError::ObserverError(
+                            "Failed to get run loop source".to_string(),
+                        ));
                     }
 
                     let run_loop_source =
@@ -318,13 +331,16 @@ impl ElementRegistry {
             let element = registry
                 .elements
                 .get_mut(element_id)
-                .ok_or_else(|| format!("Element {} not found", element_id))?;
+                .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))?;
 
             element.watch(observer)
         })
     }
 
-    /// Unwatch an element
+    /// Stop watching an element for accessibility changes
+    ///
+    /// Removes all notification subscriptions for this element.
+    /// The AXObserver for the window is kept alive for other watched elements.
     pub fn unwatch(element_id: &ElementId) {
         Self::with(|registry| {
             if let Some(element) = registry.elements.get(element_id) {
@@ -344,14 +360,12 @@ impl ElementRegistry {
         element_id: &ElementId,
         max_depth: usize,
         max_children: usize,
-    ) -> Result<Vec<crate::types::AXNode>, String> {
-        Self::with_element(element_id, |_element| {
-            crate::platform::macos::get_children_by_element_id(
-                element_id.as_str(),
-                max_depth,
-                max_children,
-            )
-        })?
+    ) -> AxioResult<Vec<crate::types::AXNode>> {
+        // First check element exists
+        Self::with_element(element_id, |_| ())?;
+
+        // Then get children (which also looks up the element internally)
+        crate::platform::macos::get_children_by_element_id(&element_id.0, max_depth, max_children)
     }
 }
 
@@ -391,13 +405,20 @@ fn handle_notification(
     notification: &str,
     element: &accessibility::AXUIElement,
 ) {
+    use crate::platform::macos::AXNotification;
     use accessibility::AXAttribute;
     use core_foundation::base::TCFType;
     use core_foundation::string::CFString;
 
+    // Parse the notification string into typed enum
+    let Some(notification_type) = AXNotification::from_str(notification) else {
+        // Unknown notification type - ignore silently
+        return;
+    };
+
     // Convert notification to typed update
-    let update = match notification {
-        "AXValueChanged" => {
+    let update = match notification_type {
+        AXNotification::ValueChanged => {
             // Extract value
             if let Ok(value_attr) = element.attribute(&AXAttribute::value()) {
                 let role = element
@@ -423,7 +444,7 @@ fn handle_notification(
             }
         }
 
-        "AXTitleChanged" => {
+        AXNotification::TitleChanged => {
             // Extract label (ARIA term for title/label)
             if let Ok(label_attr) = element.attribute(&AXAttribute::title()) {
                 let label = label_attr.to_string();
@@ -440,7 +461,7 @@ fn handle_notification(
             }
         }
 
-        "AXUIElementDestroyed" => {
+        AXNotification::UIElementDestroyed => {
             // Element destroyed - remove from registry
             ElementRegistry::remove_element(element_id);
 
@@ -449,10 +470,8 @@ fn handle_notification(
             })
         }
 
-        _ => {
-            // Unhandled notification type - ignore silently
-            None
-        }
+        // Other notification types we don't handle yet
+        _ => None,
     };
 
     // Emit the update via the event system
