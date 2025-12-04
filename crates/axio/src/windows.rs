@@ -221,6 +221,14 @@ pub fn start_polling(config: PollingConfig) {
                     if let Some(focused) = focused_window {
                         let window_id = WindowId::new(focused.id.clone());
                         if let Ok(root) = crate::platform::macos::get_window_root(&window_id) {
+                            // Hydrate window info from accessibility (persisted, higher precedence)
+                            if let Some(title) = &root.label {
+                                if !title.is_empty() {
+                                    WindowManager::set_ax_title(&window_id, title.clone());
+                                    focused.title = title.clone();
+                                }
+                            }
+
                             // Get root's children as the window's top-level elements
                             if let Ok(children) =
                                 crate::platform::macos::discover_children(&root.id, 100)
@@ -228,8 +236,10 @@ pub fn start_polling(config: PollingConfig) {
                                 let child_ids: Vec<_> =
                                     children.iter().map(|c| c.id.clone()).collect();
                                 crate::events::emit_elements(children);
+                                WindowManager::set_children(&window_id, child_ids.clone());
                                 focused.children = Some(child_ids);
                             } else {
+                                WindowManager::set_children(&window_id, vec![]);
                                 focused.children = Some(vec![]);
                             }
                         }

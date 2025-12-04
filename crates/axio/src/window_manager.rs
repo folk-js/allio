@@ -11,6 +11,8 @@ use crate::types::{AXWindow, WindowId};
 pub struct ManagedWindow {
     pub info: AXWindow,
     pub ax_element: Option<AXUIElement>,
+    /// Title from accessibility API (higher precedence than x-win)
+    pub ax_title: Option<String>,
 }
 
 // SAFETY: AXUIElement is a CFTypeRef (reference-counted). All access is behind Mutex.
@@ -61,7 +63,18 @@ impl WindowManager {
             let window_id = WindowId::new(window_info.id.clone());
 
             if let Some(existing) = cache.windows.get_mut(&window_id) {
+                // Preserve ax_title and children across polls
+                let preserved_ax_title = existing.ax_title.clone();
+                let preserved_children = existing.info.children.clone();
+
                 existing.info = window_info;
+                existing.ax_title = preserved_ax_title;
+                existing.info.children = preserved_children;
+
+                // Apply ax_title if we have it (higher precedence)
+                if let Some(ref ax_title) = existing.ax_title {
+                    existing.info.title = ax_title.clone();
+                }
 
                 // Retry fetching AX element if missing (timing issue with macOS AX API)
                 if existing.ax_element.is_none() {
@@ -75,6 +88,7 @@ impl WindowManager {
                 let managed = ManagedWindow {
                     info: window_info,
                     ax_element,
+                    ax_title: None,
                 };
                 cache.windows.insert(window_id, managed.clone());
                 result.push(managed);
@@ -82,6 +96,23 @@ impl WindowManager {
         }
 
         (result, added_ids, removed_ids)
+    }
+
+    /// Set the accessibility-derived title for a window (higher precedence than x-win)
+    pub fn set_ax_title(window_id: &WindowId, title: String) {
+        let mut cache = WINDOW_CACHE.lock().unwrap();
+        if let Some(managed) = cache.windows.get_mut(window_id) {
+            managed.ax_title = Some(title.clone());
+            managed.info.title = title;
+        }
+    }
+
+    /// Set the children IDs for a window
+    pub fn set_children(window_id: &WindowId, children: Vec<crate::types::ElementId>) {
+        let mut cache = WINDOW_CACHE.lock().unwrap();
+        if let Some(managed) = cache.windows.get_mut(window_id) {
+            managed.info.children = Some(children);
+        }
     }
 
     // TODO: Find better matching strategy. Currently uses bounds-based matching because
