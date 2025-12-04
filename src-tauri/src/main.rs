@@ -183,35 +183,34 @@ fn main() {
             let (sender, _) = tokio::sync::broadcast::channel(1000);
             let sender = std::sync::Arc::new(sender);
 
-            // Initialize WebSocket state first (so we can share its cache with EventSink)
-            let ws_state = WebSocketState::new(sender.clone());
-
             // Set up event sink to broadcast AXIO events to WebSocket clients
-            // The WsEventSink shares the window cache with WebSocketState so new
-            // clients immediately receive the current window list on connect.
-            axio::set_event_sink(axio_ws::WsEventSink::new(
-                sender.clone(),
-                ws_state.current_windows(),
-            ));
+            axio::set_event_sink(axio_ws::WsEventSink::new(sender.clone()));
 
             // Initialize AXIO (ElementRegistry, etc.)
             axio::api::initialize();
 
-            // Create clickthrough callback that captures the app handle
+            // Create custom RPC handler for app-specific methods (clickthrough)
             let app_handle = app.handle().clone();
-            let clickthrough_callback: axio_ws::ClickthroughCallback =
-                std::sync::Arc::new(move |enabled| {
-                    use tauri::Manager;
-                    match app_handle.get_webview_window("main") {
-                        Some(window) => window
-                            .set_ignore_cursor_events(enabled)
-                            .map_err(|e| e.to_string()),
-                        None => Err("Main window not found".to_string()),
+            let custom_handler: axio_ws::CustomRpcHandler =
+                std::sync::Arc::new(move |method, args| {
+                    if method == "set_clickthrough" {
+                        let enabled = args["enabled"].as_bool().unwrap_or(false);
+                        let result = match app_handle.get_webview_window("main") {
+                            Some(window) => window
+                                .set_ignore_cursor_events(enabled)
+                                .map_err(|e| e.to_string()),
+                            None => Err("Main window not found".to_string()),
+                        };
+                        return Some(match result {
+                            Ok(_) => serde_json::json!({ "result": { "enabled": enabled } }),
+                            Err(e) => serde_json::json!({ "error": e }),
+                        });
                     }
+                    None // Not handled, fall through to axio::rpc
                 });
 
-            // Add clickthrough support to WebSocket state
-            let ws_state = ws_state.with_clickthrough(clickthrough_callback);
+            // Create WebSocket state with custom handler
+            let ws_state = WebSocketState::new(sender.clone()).with_custom_handler(custom_handler);
 
             let (screen_width, screen_height) = get_main_screen_dimensions();
             if let Some(window) = app.get_webview_window("main") {

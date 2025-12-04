@@ -1,4 +1,4 @@
-//! WebSocket server implementation.
+//! WebSocket server - thin transport layer over axio.
 
 use axio::{AXWindow, ElementUpdate, EventSink};
 use axum::{
@@ -10,60 +10,48 @@ use axum::{
     routing::get,
     Router,
 };
-use serde_json::json;
-use std::sync::{Arc, RwLock};
+use serde_json::{json, Value};
+use std::sync::Arc;
 use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
 
-/// Callback for setting clickthrough (Tauri/window-specific, not part of axio core)
-pub type ClickthroughCallback = Arc<dyn Fn(bool) -> Result<(), String> + Send + Sync>;
+/// Handler for app-specific RPC methods not in axio core.
+/// Return Some(response_json) to handle, None to fall through to axio::rpc.
+pub type CustomRpcHandler = Arc<dyn Fn(&str, &Value) -> Option<Value> + Send + Sync>;
 
 #[derive(Clone)]
 pub struct WebSocketState {
     pub sender: Arc<broadcast::Sender<String>>,
-    /// Cached for initial client connections
-    pub current_windows: Arc<RwLock<Vec<AXWindow>>>,
-    clickthrough_callback: Option<ClickthroughCallback>,
+    custom_handler: Option<CustomRpcHandler>,
 }
 
 impl WebSocketState {
     pub fn new(sender: Arc<broadcast::Sender<String>>) -> Self {
         Self {
             sender,
-            current_windows: Arc::new(RwLock::new(Vec::new())),
-            clickthrough_callback: None,
+            custom_handler: None,
         }
     }
 
-    pub fn with_clickthrough(mut self, callback: ClickthroughCallback) -> Self {
-        self.clickthrough_callback = Some(callback);
+    /// Add a custom RPC handler for app-specific methods.
+    pub fn with_custom_handler(mut self, handler: CustomRpcHandler) -> Self {
+        self.custom_handler = Some(handler);
         self
     }
 
     pub fn sender(&self) -> Arc<broadcast::Sender<String>> {
         self.sender.clone()
     }
-
-    pub fn current_windows(&self) -> Arc<RwLock<Vec<AXWindow>>> {
-        self.current_windows.clone()
-    }
 }
 
 /// EventSink that broadcasts to WebSocket clients.
 pub struct WsEventSink {
     sender: Arc<broadcast::Sender<String>>,
-    current_windows: Arc<RwLock<Vec<AXWindow>>>,
 }
 
 impl WsEventSink {
-    pub fn new(
-        sender: Arc<broadcast::Sender<String>>,
-        current_windows: Arc<RwLock<Vec<AXWindow>>>,
-    ) -> Self {
-        Self {
-            sender,
-            current_windows,
-        }
+    pub fn new(sender: Arc<broadcast::Sender<String>>) -> Self {
+        Self { sender }
     }
 }
 
@@ -74,9 +62,6 @@ impl EventSink for WsEventSink {
     }
 
     fn on_window_update(&self, windows: &[AXWindow]) {
-        if let Ok(mut cached) = self.current_windows.write() {
-            *cached = windows.to_vec();
-        }
         let msg = json!({ "event": "window_update", "data": windows });
         let _ = self.sender.send(msg.to_string());
     }
@@ -129,15 +114,9 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
 
     println!("[client] connected");
 
-    // Send cached window state immediately
-    let initial_windows = ws_state
-        .current_windows
-        .read()
-        .ok()
-        .map(|w| w.clone())
-        .filter(|w| !w.is_empty());
-
-    if let Some(windows) = initial_windows {
+    // Send current window state from axio's cache
+    let windows = axio::get_current_windows();
+    if !windows.is_empty() {
         let msg = json!({ "event": "window_update", "data": windows });
         let _ = socket.send(Message::Text(msg.to_string())).await;
     }
@@ -182,37 +161,27 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
 }
 
 fn handle_request(request: &str, ws_state: &WebSocketState) -> String {
-    let parsed: Result<serde_json::Value, _> = serde_json::from_str(request);
+    let parsed: Result<Value, _> = serde_json::from_str(request);
 
     let req = match parsed {
         Ok(v) => v,
         Err(e) => return json!({ "error": format!("Invalid JSON: {}", e) }).to_string(),
     };
 
-    let id = req.get("id").cloned().unwrap_or(serde_json::Value::Null);
+    let id = req.get("id").cloned().unwrap_or(Value::Null);
     let method = req["method"].as_str().unwrap_or("");
-    let args = req.get("args").unwrap_or(&serde_json::Value::Null);
+    let args = req.get("args").unwrap_or(&Value::Null);
 
-    // Handle clickthrough specially (not part of axio core)
-    if method == "set_clickthrough" {
-        let enabled = args["enabled"].as_bool().unwrap_or(false);
-        let (success, error) = if let Some(ref callback) = ws_state.clickthrough_callback {
-            match callback(enabled) {
-                Ok(_) => (true, None),
-                Err(e) => (false, Some(e)),
-            }
-        } else {
-            (false, Some("Clickthrough not supported".to_string()))
-        };
-
-        return json!({
-            "id": id,
-            "result": if success { json!({ "enabled": enabled }) } else { serde_json::Value::Null },
-            "error": error
-        })
-        .to_string();
+    // Try custom handler first (for app-specific methods like set_clickthrough)
+    if let Some(ref handler) = ws_state.custom_handler {
+        if let Some(result) = handler(method, args) {
+            let mut response = result;
+            response["id"] = id;
+            return response.to_string();
+        }
     }
 
+    // Fall through to axio core RPC
     let mut response = axio::rpc::dispatch(method, args);
     response["id"] = id;
     response.to_string()

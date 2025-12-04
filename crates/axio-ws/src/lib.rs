@@ -7,4 +7,4 @@
 mod websocket;
 
 pub use axio::{AXNode, AXWindow, ElementUpdate};
-pub use websocket::{start_ws_server, ClickthroughCallback, WebSocketState, WsEventSink};
+pub use websocket::{start_ws_server, CustomRpcHandler, WebSocketState, WsEventSink};

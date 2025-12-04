@@ -17,4 +17,4 @@ pub mod window_manager;
 pub mod windows;
 
 pub use api::{click, element_at, tree, unwatch, watch, write};
-pub use windows::{get_main_screen_dimensions, get_windows, start_polling};
+pub use windows::{get_current_windows, get_main_screen_dimensions, get_windows, start_polling};

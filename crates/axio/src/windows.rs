@@ -5,7 +5,7 @@ use crate::window_manager::WindowManager;
 use crate::WindowId;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -24,6 +24,14 @@ const FILTERED_BUNDLE_IDS: &[&str] = &[
 
 static BUNDLE_ID_CACHE: Lazy<Mutex<HashMap<u32, Option<String>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Last known window list from polling. Always available immediately.
+static CURRENT_WINDOWS: Lazy<RwLock<Vec<AXWindow>>> = Lazy::new(|| RwLock::new(Vec::new()));
+
+/// Get the last known window list. Returns immediately without polling.
+pub fn get_current_windows() -> Vec<AXWindow> {
+    CURRENT_WINDOWS.read().unwrap().clone()
+}
 
 #[cfg(target_os = "macos")]
 fn parse_bundle_id(info: &str) -> Option<String> {
@@ -200,6 +208,9 @@ pub fn start_polling(config: PollingConfig) {
 
             if let Some(current_windows) = get_windows(&config.enum_options) {
                 if last_windows.as_ref() != Some(&current_windows) {
+                    // Update cache
+                    *CURRENT_WINDOWS.write().unwrap() = current_windows.clone();
+
                     let _ = WindowManager::update_windows(current_windows.clone());
                     crate::events::emit_window_update(&current_windows);
 
