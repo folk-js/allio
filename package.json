@@ -11,7 +11,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "typegen": "TS_RS_EXPORT_DIR=$PWD cargo test -p axio export_bindings",
+    "typegen": "TS_RS_EXPORT_DIR=$PWD cargo test -p axio -p axio-ws export_bindings",
     "client:dev": "vite --config vite.client.config.ts",
     "client:build": "vite build --config vite.client.config.ts",
     "client:preview": "vite preview --config vite.client.config.ts"

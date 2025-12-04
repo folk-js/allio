@@ -7,6 +7,8 @@
  * - Event:    { event, data }
  */
 
+import EventEmitter from "eventemitter3";
+
 export interface RpcClientOptions {
   url: string;
   timeout?: number;
@@ -19,11 +21,15 @@ type Pending = {
   timer: number;
 };
 
-export class RpcClient<TEvents = Record<string, unknown>> {
+// Convert { event: data } map to EventEmitter3's tuple format
+type ToEmitterEvents<T> = { [K in keyof T]: [T[K]] };
+
+export class RpcClient<
+  TEvents extends Record<string, unknown> = Record<string, unknown>
+> extends EventEmitter<ToEmitterEvents<TEvents>> {
   private ws: WebSocket | null = null;
   private requestId = 0;
   private pending = new Map<string, Pending>();
-  private handlers = new Map<string, Set<(data: unknown) => void>>();
   private reconnectTimer: number | null = null;
 
   readonly url: string;
@@ -31,6 +37,7 @@ export class RpcClient<TEvents = Record<string, unknown>> {
   private readonly reconnectDelay: number;
 
   constructor(options: RpcClientOptions) {
+    super();
     this.url = options.url;
     this.timeout = options.timeout ?? 5000;
     this.reconnectDelay = options.reconnectDelay ?? 1000;
@@ -77,18 +84,6 @@ export class RpcClient<TEvents = Record<string, unknown>> {
     });
   }
 
-  on<K extends keyof TEvents & string>(
-    event: K,
-    handler: (data: TEvents[K]) => void
-  ): () => void {
-    if (!this.handlers.has(event)) {
-      this.handlers.set(event, new Set());
-    }
-    const h = handler as (data: unknown) => void;
-    this.handlers.get(event)!.add(h);
-    return () => this.handlers.get(event)?.delete(h);
-  }
-
   private handleMessage(raw: string): void {
     let msg: {
       id?: string;
@@ -103,6 +98,7 @@ export class RpcClient<TEvents = Record<string, unknown>> {
       return;
     }
 
+    // RPC response
     if (msg.id && this.pending.has(msg.id)) {
       const { resolve, reject, timer } = this.pending.get(msg.id)!;
       this.pending.delete(msg.id);
@@ -111,8 +107,9 @@ export class RpcClient<TEvents = Record<string, unknown>> {
       return;
     }
 
-    if (msg.event && this.handlers.has(msg.event)) {
-      this.handlers.get(msg.event)!.forEach((h) => h(msg.data));
+    // Server event - cast needed since event name comes from wire
+    if (msg.event) {
+      (this.emit as Function)(msg.event, msg.data);
     }
   }
 

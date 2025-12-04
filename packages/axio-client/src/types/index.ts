@@ -8,5 +8,7 @@ export type { AXWindow } from "./AXWindow";
 export type { Bounds } from "./Bounds";
 export type { ElementId } from "./ElementId";
 export type { Position } from "./Position";
+export type { RpcRequest } from "./RpcRequest";
+export type { RpcResponse } from "./RpcResponse";
 export type { ServerEvent } from "./ServerEvent";
 export type { Size } from "./Size";

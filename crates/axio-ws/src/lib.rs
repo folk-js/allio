@@ -4,7 +4,9 @@
 //! Response: `{ "id": "123", "result": {...} }` or `{ "id": "123", "error": "..." }`
 //! Event:    `{ "event": "elements", "data": [...] }`
 
+mod rpc;
 mod websocket;
 
 pub use axio::{AXElement, AXWindow};
+pub use rpc::{RpcRequest, RpcResponse};
 pub use websocket::{start_ws_server, CustomRpcHandler, WebSocketState};

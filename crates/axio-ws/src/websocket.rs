@@ -170,8 +170,8 @@ fn handle_request(request: &str, ws_state: &WebSocketState) -> String {
         }
     }
 
-    // Fall through to axio core RPC
-    let mut response = axio::rpc::dispatch(method, args);
+    // Fall through to axio RPC
+    let mut response = crate::rpc::dispatch_json(method, args);
     response["id"] = id;
     response.to_string()
 }

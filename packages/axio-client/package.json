@@ -9,6 +9,8 @@
   },
   "files": [
     "src"
-  ]
+  ],
+  "dependencies": {
+    "eventemitter3": "^5.0.1"
+  }
 }
-

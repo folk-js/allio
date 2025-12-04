@@ -5,8 +5,21 @@
  * relationships tracked via parent_id/children_ids.
  */
 
+import EventEmitter from "eventemitter3";
 import { RpcClient } from "./rpc";
-import type { AXElement, ServerEvent, AXWindow } from "./types";
+import type {
+  AXElement,
+  ServerEvent,
+  AXWindow,
+  RpcRequest,
+  ElementId,
+} from "./types";
+
+// Extract args type for a specific RPC method (type-safe against Rust)
+type RpcArgs<M extends RpcRequest["method"]> = Extract<
+  RpcRequest,
+  { method: M }
+>["args"];
 
 // Derive backend event types from generated ServerEvent
 type EventData<E extends ServerEvent["event"]> = Extract<
@@ -17,18 +30,15 @@ type BackendEvents = { [E in ServerEvent["event"]]: EventData<E> };
 
 // Client-facing events
 interface AxioEvents {
-  windows: AXWindow[];
-  focus: AXWindow | null;
-  mouse: { x: number; y: number };
-  elements: AXElement[];
-  destroyed: string; // element_id
+  windows: [AXWindow[]];
+  focus: [AXWindow | null];
+  mouse: [{ x: number; y: number }];
+  elements: [AXElement[]];
+  destroyed: [string]; // element_id
 }
 
-type Handler<T> = (data: T) => void;
-
-export class AXIO {
+export class AXIO extends EventEmitter<AxioEvents> {
   private rpc: RpcClient<BackendEvents>;
-  private handlers = new Map<string, Set<Handler<unknown>>>();
 
   /** Flat element registry - all elements by ID */
   readonly elements = new Map<string, AXElement>();
@@ -40,6 +50,7 @@ export class AXIO {
   focused: AXWindow | null = null;
 
   constructor(url = "ws://localhost:3030/ws") {
+    super();
     this.rpc = new RpcClient<BackendEvents>({ url });
     this.setup();
   }
@@ -84,68 +95,69 @@ export class AXIO {
     return element.parent_id ? this.elements.get(element.parent_id) : undefined;
   }
 
-  // === RPC Methods ===
+  // === RPC Methods (typed against Rust RpcRequest) ===
 
   /** Get the deepest element at screen coordinates */
   async elementAt(x: number, y: number): Promise<AXElement> {
-    const element = await this.rpc.call<AXElement>("element_at", { x, y });
+    const args: RpcArgs<"element_at"> = { x, y };
+    const element = await this.rpc.call<AXElement>("element_at", args);
+    return this.register(element);
+  }
+
+  /** Get cached element by ID */
+  async getFromServer(elementId: ElementId): Promise<AXElement> {
+    const args: RpcArgs<"get"> = { element_id: elementId };
+    const element = await this.rpc.call<AXElement>("get", args);
     return this.register(element);
   }
 
   /** Discover children of an element (fetches from macOS, caches locally) */
-  async children(elementId: string, maxChildren = 2000): Promise<AXElement[]> {
-    const elements = await this.rpc.call<AXElement[]>("children", {
+  async children(
+    elementId: ElementId,
+    maxChildren = 2000
+  ): Promise<AXElement[]> {
+    const args: RpcArgs<"children"> = {
       element_id: elementId,
       max_children: maxChildren,
-    });
+    };
+    const elements = await this.rpc.call<AXElement[]>("children", args);
     return elements.map((e) => this.register(e));
   }
 
   /** Refresh an element's attributes from macOS */
-  async refresh(elementId: string): Promise<AXElement> {
-    const element = await this.rpc.call<AXElement>("refresh", {
-      element_id: elementId,
-    });
+  async refresh(elementId: ElementId): Promise<AXElement> {
+    const args: RpcArgs<"refresh"> = { element_id: elementId };
+    const element = await this.rpc.call<AXElement>("refresh", args);
     return this.register(element);
   }
 
-  async write(elementId: string, text: string): Promise<void> {
-    await this.rpc.call("write", { element_id: elementId, text });
+  /** Write text to element */
+  async write(elementId: ElementId, text: string): Promise<void> {
+    const args: RpcArgs<"write"> = { element_id: elementId, text };
+    await this.rpc.call("write", args);
   }
 
-  async click(elementId: string): Promise<void> {
-    await this.rpc.call("click", { element_id: elementId });
+  /** Click element */
+  async click(elementId: ElementId): Promise<void> {
+    const args: RpcArgs<"click"> = { element_id: elementId };
+    await this.rpc.call("click", args);
   }
 
-  async watch(elementId: string): Promise<void> {
-    await this.rpc.call("watch", { element_id: elementId });
+  /** Watch element for changes */
+  async watch(elementId: ElementId): Promise<void> {
+    const args: RpcArgs<"watch"> = { element_id: elementId };
+    await this.rpc.call("watch", args);
   }
 
-  async unwatch(elementId: string): Promise<void> {
-    await this.rpc.call("unwatch", { element_id: elementId });
+  /** Stop watching element */
+  async unwatch(elementId: ElementId): Promise<void> {
+    const args: RpcArgs<"unwatch"> = { element_id: elementId };
+    await this.rpc.call("unwatch", args);
   }
 
+  /** Set clickthrough (app-specific, not in core RPC) */
   async setClickthrough(enabled: boolean): Promise<void> {
     await this.rpc.call("set_clickthrough", { enabled });
-  }
-
-  // === Events ===
-
-  on<K extends keyof AxioEvents>(
-    event: K,
-    handler: Handler<AxioEvents[K]>
-  ): () => void {
-    if (!this.handlers.has(event)) this.handlers.set(event, new Set());
-    const set = this.handlers.get(event)!;
-    set.add(handler as Handler<unknown>);
-    return () => set.delete(handler as Handler<unknown>);
-  }
-
-  private emit<K extends keyof AxioEvents>(
-    event: K,
-    data: AxioEvents[K]
-  ): void {
-    this.handlers.get(event)?.forEach((h) => h(data));
   }
 
   // === Internal ===

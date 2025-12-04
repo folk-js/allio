@@ -14,7 +14,6 @@ pub use events::{set_event_sink, EventSink, NoopEventSink};
 pub mod api;
 pub mod element_registry;
 pub mod platform;
-pub mod rpc;
 pub mod window_manager;
 pub mod windows;
 
