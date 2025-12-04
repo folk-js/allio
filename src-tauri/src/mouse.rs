@@ -1,9 +1,7 @@
-/**
- * Global Mouse Position Tracking
- *
- * Tracks mouse position system-wide, even when the window is not focused.
- * Broadcasts position updates via AXIO's event system.
- */
+//! Global mouse position tracking.
+
+use axio::EventSink;
+use axio_ws::WebSocketState;
 use std::thread;
 use std::time::Duration;
 
@@ -12,60 +10,37 @@ use core_graphics::event::CGEvent;
 #[cfg(target_os = "macos")]
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
-use axio_ws::WebSocketState;
-use serde_json::json;
-
-/// Get current mouse position (macOS)
 #[cfg(target_os = "macos")]
 pub fn get_mouse_position() -> Option<(f64, f64)> {
-    // Create an event source
     let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState).ok()?;
-
-    // Get mouse moved event to read current position
     let event = CGEvent::new(source).ok()?;
     let location = event.location();
-
     Some((location.x, location.y))
 }
 
-/// Get current mouse position (fallback for non-macOS)
 #[cfg(not(target_os = "macos"))]
 pub fn get_mouse_position() -> Option<(f64, f64)> {
     None
 }
 
-/// Start global mouse position tracking
-/// Polls mouse position and broadcasts to WebSocket clients
+/// Polls mouse position and broadcasts via EventSink.
 pub fn start_mouse_tracking(ws_state: WebSocketState) {
     thread::spawn(move || {
         let mut last_position: Option<(f64, f64)> = None;
 
         loop {
-            // Poll mouse position
             if let Some((x, y)) = get_mouse_position() {
-                // Only broadcast if position changed (reduce noise)
-                let position_changed = match last_position {
-                    Some((last_x, last_y)) => {
-                        // Broadcast if moved by at least 1 pixel
-                        (x - last_x).abs() >= 1.0 || (y - last_y).abs() >= 1.0
-                    }
+                let changed = match last_position {
+                    Some((lx, ly)) => (x - lx).abs() >= 1.0 || (y - ly).abs() >= 1.0,
                     None => true,
                 };
 
-                if position_changed {
+                if changed {
                     last_position = Some((x, y));
-
-                    // Broadcast to all connected clients via JSON-RPC event format
-                    let message = json!({
-                        "event": "mouse_position",
-                        "data": { "x": x, "y": y }
-                    });
-
-                    let _ = ws_state.sender.send(message.to_string());
+                    ws_state.on_mouse_position(x, y);
                 }
             }
 
-            // Poll at ~120 Hz for smooth tracking
             thread::sleep(Duration::from_millis(8));
         }
     });

@@ -19,9 +19,11 @@ use tower_http::cors::{Any, CorsLayer};
 /// Return Some(response_json) to handle, None to fall through to axio::rpc.
 pub type CustomRpcHandler = Arc<dyn Fn(&str, &Value) -> Option<Value> + Send + Sync>;
 
+/// WebSocket state: broadcasts events to clients, handles RPC requests.
+/// Implements EventSink to receive axio events.
 #[derive(Clone)]
 pub struct WebSocketState {
-    pub sender: Arc<broadcast::Sender<String>>,
+    sender: Arc<broadcast::Sender<String>>,
     custom_handler: Option<CustomRpcHandler>,
 }
 
@@ -33,29 +35,13 @@ impl WebSocketState {
         }
     }
 
-    /// Add a custom RPC handler for app-specific methods.
     pub fn with_custom_handler(mut self, handler: CustomRpcHandler) -> Self {
         self.custom_handler = Some(handler);
         self
     }
-
-    pub fn sender(&self) -> Arc<broadcast::Sender<String>> {
-        self.sender.clone()
-    }
 }
 
-/// EventSink that broadcasts to WebSocket clients.
-pub struct WsEventSink {
-    sender: Arc<broadcast::Sender<String>>,
-}
-
-impl WsEventSink {
-    pub fn new(sender: Arc<broadcast::Sender<String>>) -> Self {
-        Self { sender }
-    }
-}
-
-impl EventSink for WsEventSink {
+impl EventSink for WebSocketState {
     fn on_element_update(&self, update: ElementUpdate) {
         let msg = json!({ "event": "element_update", "data": update });
         let _ = self.sender.send(msg.to_string());

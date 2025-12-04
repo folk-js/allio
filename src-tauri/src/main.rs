@@ -183,12 +183,6 @@ fn main() {
             let (sender, _) = tokio::sync::broadcast::channel(1000);
             let sender = std::sync::Arc::new(sender);
 
-            // Set up event sink to broadcast AXIO events to WebSocket clients
-            axio::set_event_sink(axio_ws::WsEventSink::new(sender.clone()));
-
-            // Initialize AXIO (ElementRegistry, etc.)
-            axio::api::initialize();
-
             // Create custom RPC handler for app-specific methods (clickthrough)
             let app_handle = app.handle().clone();
             let custom_handler: axio_ws::CustomRpcHandler =
@@ -209,8 +203,12 @@ fn main() {
                     None // Not handled, fall through to axio::rpc
                 });
 
-            // Create WebSocket state with custom handler
-            let ws_state = WebSocketState::new(sender.clone()).with_custom_handler(custom_handler);
+            // Create WebSocket state (also serves as EventSink for axio)
+            let ws_state = WebSocketState::new(sender).with_custom_handler(custom_handler);
+            axio::set_event_sink(ws_state.clone());
+
+            // Initialize AXIO (ElementRegistry, etc.)
+            axio::api::initialize();
 
             let (screen_width, screen_height) = get_main_screen_dimensions();
             if let Some(window) = app.get_webview_window("main") {

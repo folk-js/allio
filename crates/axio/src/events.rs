@@ -45,7 +45,3 @@ pub(crate) fn emit_window_update(windows: &[AXWindow]) {
 pub(crate) fn emit_window_root(window_id: &str, root: &AXNode) {
     sink().on_window_root(window_id, root);
 }
-
-pub(crate) fn emit_mouse_position(x: f64, y: f64) {
-    sink().on_mouse_position(x, y);
-}
