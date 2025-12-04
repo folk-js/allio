@@ -23,12 +23,9 @@ pub fn children(element_id: &ElementId, max_children: usize) -> AxioResult<Vec<A
     crate::platform::macos::discover_children(element_id, max_children)
 }
 
-/// Refresh elements from macOS (re-fetch attributes).
-pub fn refresh(element_ids: &[ElementId]) -> AxioResult<Vec<AXElement>> {
-    element_ids
-        .iter()
-        .map(|id| crate::platform::macos::refresh_element(id))
-        .collect()
+/// Refresh element from macOS (re-fetch attributes).
+pub fn refresh(element_id: &ElementId) -> AxioResult<AXElement> {
+    crate::platform::macos::refresh_element(element_id)
 }
 
 /// Write text to an element.

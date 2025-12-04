@@ -128,38 +128,24 @@ pub enum AXRole {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "packages/axio-client/src/types/")]
 pub struct AXElement {
-    // Identity
     pub id: ElementId,
     pub window_id: String,
-
-    // Relationships (flat, not nested)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// null = no parent (root element)
     pub parent_id: Option<ElementId>,
-    /// None = children not yet discovered, Some([]) = no children
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// null = children not yet discovered, [] = no children
     pub children_ids: Option<Vec<ElementId>>,
-
-    // Attributes
     pub role: AXRole,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub subrole: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<AXValue>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub placeholder: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub bounds: Option<Bounds>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub focused: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
 }
 
-/// Window info from x-win. Root element ID populated from WindowRoot event.
+/// Window info from x-win.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "packages/axio-client/src/types/")]
 pub struct AXWindow {
@@ -173,7 +159,6 @@ pub struct AXWindow {
     pub focused: bool,
     pub process_id: u32,
     /// Root element ID (client looks up from element registry)
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub root_element_id: Option<ElementId>,
 }
 

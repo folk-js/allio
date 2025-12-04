@@ -71,9 +71,9 @@ export class AXIO {
       : undefined;
   }
 
-  /** Get children of an element (from cache) */
+  /** Get children of an element (from cache). Returns empty if not discovered. */
   getChildren(element: AXElement): AXElement[] {
-    if (!element.children_ids) return [];
+    if (element.children_ids === null) return []; // Not discovered yet
     return element.children_ids
       .map((id) => this.elements.get(id))
       .filter((e): e is AXElement => e !== undefined);
@@ -82,12 +82,6 @@ export class AXIO {
   /** Get parent of an element (from cache) */
   getParent(element: AXElement): AXElement | undefined {
     return element.parent_id ? this.elements.get(element.parent_id) : undefined;
-  }
-
-  /** Check if children have been discovered for an element */
-  hasDiscoveredChildren(element: AXElement): boolean {
-    // children_ids is undefined when not in JSON (skip_serializing_if), null won't happen
-    return element.children_ids !== undefined && element.children_ids !== null;
   }
 
   // === RPC Methods ===
@@ -103,20 +97,6 @@ export class AXIO {
     const elements = await this.rpc.call<AXElement[]>("children", {
       element_id: elementId,
       max_children: maxChildren,
-    });
-    return elements.map((e) => this.register(e));
-  }
-
-  /** Get tree (recursive children discovery) */
-  async tree(
-    elementId: string,
-    maxDepth = 50,
-    maxChildren = 2000
-  ): Promise<AXElement[]> {
-    const elements = await this.rpc.call<AXElement[]>("tree", {
-      element_id: elementId,
-      max_depth: maxDepth,
-      max_children_per_level: maxChildren,
     });
     return elements.map((e) => this.register(e));
   }
@@ -172,6 +152,14 @@ export class AXIO {
 
   private setup(): void {
     this.rpc.on("window_update", (windows) => {
+      // Find closed windows and clear their elements from cache
+      const newWindowIds = new Set(windows.map((w) => w.id));
+      for (const [elementId, element] of this.elements) {
+        if (!newWindowIds.has(element.window_id)) {
+          this.elements.delete(elementId);
+        }
+      }
+
       this.windows = windows;
 
       // Update focused: prefer currently focused, fall back to last focused if still exists
@@ -184,9 +172,9 @@ export class AXIO {
         // When no window is focused (desktop/overlay), preserve last focused if it still exists
         const stillExists = this.windows.find((w) => w.id === this.focused!.id);
         if (stillExists) {
-          this.focused = stillExists; // Keep reference fresh with new data
+          this.focused = stillExists;
         } else {
-          this.focused = null; // Window was closed
+          this.focused = null;
         }
       }
 

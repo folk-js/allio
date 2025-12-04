@@ -2,7 +2,7 @@
 import type { ElementId } from "./ElementId";
 
 /**
- * Window info from x-win. Root element ID populated from WindowRoot event.
+ * Window info from x-win.
  */
 export type AXWindow = { id: string, title: string, app_name: string, x: number, y: number, w: number, h: number, focused: boolean, process_id: number, 
 /**

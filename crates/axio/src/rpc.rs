@@ -32,22 +32,17 @@ fn dispatch_inner(method: &str, args: &Value) -> Result<Value, String> {
         "children" => {
             let element_id = args["element_id"].as_str().ok_or("element_id required")?;
             let max_children = args["max_children"].as_u64().unwrap_or(1000) as usize;
-            let children = crate::api::children(
-                &ElementId::new(element_id.to_string()),
-                max_children,
-            ).map_err(|e| e.to_string())?;
+            let children =
+                crate::api::children(&ElementId::new(element_id.to_string()), max_children)
+                    .map_err(|e| e.to_string())?;
             serde_json::to_value(children).map_err(|e| e.to_string())
         }
 
         "refresh" => {
-            let element_ids: Vec<ElementId> = args["element_ids"]
-                .as_array()
-                .ok_or("element_ids (array) required")?
-                .iter()
-                .filter_map(|v| v.as_str().map(|s| ElementId::new(s.to_string())))
-                .collect();
-            let elements = crate::api::refresh(&element_ids).map_err(|e| e.to_string())?;
-            serde_json::to_value(elements).map_err(|e| e.to_string())
+            let element_id = args["element_id"].as_str().ok_or("element_id required")?;
+            let element = crate::api::refresh(&ElementId::new(element_id.to_string()))
+                .map_err(|e| e.to_string())?;
+            serde_json::to_value(element).map_err(|e| e.to_string())
         }
 
         "write" => {
@@ -89,7 +84,10 @@ mod tests {
     #[test]
     fn test_unknown_method() {
         let response = dispatch("unknown_method", &json!({}));
-        assert!(response["error"].as_str().unwrap().contains("unknown method"));
+        assert!(response["error"]
+            .as_str()
+            .unwrap()
+            .contains("unknown method"));
     }
 
     #[test]

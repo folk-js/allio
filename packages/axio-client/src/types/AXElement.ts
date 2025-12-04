@@ -8,8 +8,12 @@ import type { ElementId } from "./ElementId";
  * The unified element type - stored in registry and returned from API.
  * Flat structure: children are IDs, not nested. Trees derived client-side.
  */
-export type AXElement = { id: ElementId, window_id: string, parent_id: ElementId | null, 
+export type AXElement = { id: ElementId, window_id: string, 
 /**
- * None = children not yet discovered, Some([]) = no children
+ * null = no parent (root element)
+ */
+parent_id: ElementId | null, 
+/**
+ * null = children not yet discovered, [] = no children
  */
 children_ids: Array<ElementId> | null, role: AXRole, subrole: string | null, label: string | null, value: AXValue | null, description: string | null, placeholder: string | null, bounds: Bounds | null, focused: boolean | null, enabled: boolean | null, };

@@ -158,10 +158,10 @@ class AXTreeOverlay {
       nodeContent.className = "tree-node-content";
 
       // Determine children state
+      // children_ids: null = not discovered, [] = no children, [...] = has children
+      const childrenDiscovered = element.children_ids !== null;
       const children = this.axio.getChildren(element);
-      const hasDiscoveredChildren = this.axio.hasDiscoveredChildren(element);
-      const hasLoadedChildren = children.length > 0;
-      const hasUndiscoveredChildren = !hasDiscoveredChildren;
+      const hasChildren = children.length > 0;
       const isExpanded = this.expandedNodes.has(element.id);
       const isLoading = this.loadingNodes.has(element.id);
 
@@ -171,11 +171,11 @@ class AXTreeOverlay {
       if (isLoading) {
         indicator.textContent = "⋯";
         indicator.style.cursor = "default";
-      } else if (hasUndiscoveredChildren) {
+      } else if (!childrenDiscovered) {
         indicator.textContent = "+";
         indicator.style.cursor = "pointer";
         indicator.title = "Load children";
-      } else if (hasLoadedChildren) {
+      } else if (hasChildren) {
         indicator.textContent = isExpanded ? "▾" : "▸";
         indicator.style.cursor = "pointer";
         indicator.title = isExpanded ? "Collapse" : "Expand";
@@ -184,13 +184,13 @@ class AXTreeOverlay {
         indicator.style.cursor = "default";
       }
 
-      if (hasUndiscoveredChildren || hasLoadedChildren) {
+      if (!childrenDiscovered || hasChildren) {
         indicator.addEventListener("click", async (e) => {
           e.stopPropagation();
 
-          if (hasUndiscoveredChildren && !isLoading) {
+          if (!childrenDiscovered && !isLoading) {
             await this.loadNodeChildren(element, nodeElement);
-          } else if (hasLoadedChildren) {
+          } else if (hasChildren) {
             this.toggleNodeExpansion(element.id, nodeElement);
           }
         });
@@ -267,10 +267,10 @@ class AXTreeOverlay {
         nodeInfo.appendChild(stateSpan);
       }
 
-      if (hasLoadedChildren || hasUndiscoveredChildren) {
+      if (!childrenDiscovered || hasChildren) {
         const childCountSpan = document.createElement("span");
         childCountSpan.className = "tree-count";
-        const count = hasLoadedChildren ? children.length : "?";
+        const count = childrenDiscovered ? children.length : "?";
         childCountSpan.textContent = ` (${count})`;
         nodeInfo.appendChild(childCountSpan);
       }
@@ -340,7 +340,7 @@ class AXTreeOverlay {
 
       nodeElement.appendChild(nodeContent);
 
-      if (hasLoadedChildren) {
+      if (hasChildren) {
         const childrenContainer = document.createElement("div");
         childrenContainer.className = "tree-children";
 
@@ -356,16 +356,6 @@ class AXTreeOverlay {
       }
 
       this.nodeElements.set(element.id, { domElement: nodeElement, element });
-
-      // Auto-watch leaf nodes
-      const isLeafNode = !hasLoadedChildren && hasDiscoveredChildren;
-      if (isLeafNode && element.id) {
-        console.log(`👁️ Auto-watching leaf node: ${element.role}`);
-        this.axio.watch(element.id).catch((err) => {
-          console.error(`Failed to auto-watch leaf node:`, err);
-        });
-      }
-
       this.renderedNodeCount++;
       return nodeElement;
     } catch (error) {
