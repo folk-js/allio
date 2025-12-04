@@ -1,15 +1,12 @@
 //! Element registry - manages UIElement lifecycle, lookup, and AXObserver watching.
 
-use accessibility_sys::{AXObserverCreate, AXObserverGetRunLoopSource, AXObserverRef};
-use core_foundation::base::TCFType;
-use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopSource};
+use crate::types::{AxioError, AxioResult, ElementId, WindowId};
+use crate::ui_element::UIElement;
+use accessibility_sys::AXObserverRef;
 use once_cell::sync::Lazy;
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use uuid::Uuid;
-
-use crate::types::{AxioError, AxioResult, ElementId, ElementUpdate, WindowId};
-use crate::ui_element::{ObserverContext, UIElement};
 
 fn ax_elements_equal(
     elem1: &accessibility::AXUIElement,
@@ -204,35 +201,7 @@ impl ElementRegistry {
             let observer = if let Some(&obs) = registry.observers.get(&window_id) {
                 obs
             } else {
-                let mut observer_ref: AXObserverRef = std::ptr::null_mut();
-                let result = unsafe {
-                    AXObserverCreate(
-                        pid as i32,
-                        observer_callback as _,
-                        &mut observer_ref as *mut _,
-                    )
-                };
-                if result != 0 {
-                    return Err(AxioError::ObserverError(format!(
-                        "AXObserverCreate failed with code {}",
-                        result
-                    )));
-                }
-
-                // Must add to MAIN run loop for callbacks to fire
-                unsafe {
-                    let run_loop_source_ref = AXObserverGetRunLoopSource(observer_ref);
-                    if run_loop_source_ref.is_null() {
-                        return Err(AxioError::ObserverError(
-                            "Failed to get run loop source".to_string(),
-                        ));
-                    }
-                    let run_loop_source =
-                        CFRunLoopSource::wrap_under_get_rule(run_loop_source_ref as *mut _);
-                    let main_run_loop = CFRunLoop::get_main();
-                    main_run_loop.add_source(&run_loop_source, kCFRunLoopDefaultMode);
-                }
-
+                let observer_ref = crate::platform::macos::create_observer_for_pid(pid)?;
                 registry.observers.insert(window_id.clone(), observer_ref);
                 observer_ref
             };
@@ -266,89 +235,5 @@ impl ElementRegistry {
     ) -> AxioResult<Vec<crate::types::AXNode>> {
         Self::with_element(element_id, |_| ())?;
         crate::platform::macos::get_children_by_element_id(&element_id.0, max_depth, max_children)
-    }
-}
-
-unsafe extern "C" fn observer_callback(
-    _observer: AXObserverRef,
-    _element: accessibility_sys::AXUIElementRef,
-    notification: core_foundation::string::CFStringRef,
-    refcon: *mut std::ffi::c_void,
-) {
-    use accessibility::AXUIElement;
-    use core_foundation::base::TCFType;
-    use core_foundation::string::CFString;
-
-    assert!(
-        !refcon.is_null(),
-        "AXObserver callback received null refcon"
-    );
-
-    let context = &*(refcon as *const ObserverContext);
-    let notif_cfstring = CFString::wrap_under_get_rule(notification);
-    let notification_name = notif_cfstring.to_string();
-    let changed_element = AXUIElement::wrap_under_get_rule(_element);
-
-    handle_notification(&context.element_id, &notification_name, &changed_element);
-}
-
-fn handle_notification(
-    element_id: &ElementId,
-    notification: &str,
-    element: &accessibility::AXUIElement,
-) {
-    use crate::platform::macos::AXNotification;
-    use accessibility::AXAttribute;
-    use core_foundation::base::TCFType;
-    use core_foundation::string::CFString;
-
-    let Some(notification_type) = AXNotification::from_str(notification) else {
-        return;
-    };
-
-    let update = match notification_type {
-        AXNotification::ValueChanged => {
-            if let Ok(value_attr) = element.attribute(&AXAttribute::value()) {
-                let role = element
-                    .attribute(&AXAttribute::role())
-                    .ok()
-                    .and_then(|r| unsafe {
-                        let cf_string = CFString::wrap_under_get_rule(r.as_CFTypeRef() as *const _);
-                        Some(cf_string.to_string())
-                    });
-
-                crate::platform::macos::extract_value(&value_attr, role.as_deref()).map(|value| {
-                    ElementUpdate::ValueChanged {
-                        element_id: element_id.to_string(),
-                        value,
-                    }
-                })
-            } else {
-                None
-            }
-        }
-
-        AXNotification::TitleChanged => element
-            .attribute(&AXAttribute::title())
-            .ok()
-            .map(|t| t.to_string())
-            .filter(|s| !s.is_empty())
-            .map(|label| ElementUpdate::LabelChanged {
-                element_id: element_id.to_string(),
-                label,
-            }),
-
-        AXNotification::UIElementDestroyed => {
-            ElementRegistry::remove_element(element_id);
-            Some(ElementUpdate::ElementDestroyed {
-                element_id: element_id.to_string(),
-            })
-        }
-
-        _ => None,
-    };
-
-    if let Some(update) = update {
-        crate::events::emit_element_update(update);
     }
 }

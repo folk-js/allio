@@ -4,15 +4,8 @@ use accessibility::AXUIElement;
 use accessibility_sys::AXObserverRef;
 use std::ffi::c_void;
 
-use crate::platform::macos::AXNotification;
+use crate::platform::macos::{AXNotification, ObserverContext};
 use crate::types::{AXValue, AxioError, AxioResult, ElementId, WindowId};
-
-/// Context passed to AX observer callbacks (must match element_registry.rs)
-#[derive(Clone)]
-#[repr(C)]
-pub struct ObserverContext {
-    pub element_id: ElementId,
-}
 
 pub struct WatchState {
     pub observer_context: *mut c_void,
