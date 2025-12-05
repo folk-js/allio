@@ -7,7 +7,7 @@ This document outlines planned improvements to our macOS accessibility implement
 | Improvement                      | Effort | Value  | Status             |
 | -------------------------------- | ------ | ------ | ------------------ |
 | Batch attribute fetching         | Low    | High   | Planned            |
-| Action discovery                 | Low    | Medium | Planned            |
+| Actions on elements              | Low    | Medium | Planned            |
 | Live tracking (tiered observers) | Medium | High   | Planned            |
 | Selected text tracking           | Medium | Medium | Planned            |
 | AccessKit read+write spec        | High   | High   | Future exploration |
@@ -42,6 +42,7 @@ let attrs = [
     kAXChildrenAttribute,
     kAXEnabledAttribute,
     kAXFocusedAttribute,
+    kAXActionsAttribute,  // Include actions in batch!
 ];
 let values = element.copy_multiple_attribute_values(&attrs, CopyMultipleAttributeOptions::StopOnError)?;
 // 1 IPC call for all attributes
@@ -61,7 +62,7 @@ let values = element.copy_multiple_attribute_values(&attrs, CopyMultipleAttribut
 
 ---
 
-## 2. Action Discovery
+## 2. Actions on Elements
 
 ### Problem
 
@@ -69,55 +70,94 @@ When an action fails, we give a generic error. Users don't know what actions ARE
 
 ### Solution
 
-Expose available actions per element and improve error messages.
+Always include available actions in element data. The list is typically short (1-3 actions), so fetching is cheap and we get it "for free" with batch fetching.
 
-#### API Addition
+### Type Design
 
-```typescript
-// New RPC method
-axio.actions(elementId: string): Promise<string[]>
-// Returns: ["AXPress", "AXShowMenu", "AXRaise", ...]
+Map macOS actions to our own platform-agnostic enum (like we do with `AXRole`):
+
+```rust
+// Rust: Platform-agnostic action enum
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub enum AXAction {
+    Press,       // macOS: kAXPressAction, Windows: Invoke
+    ShowMenu,    // macOS: kAXShowMenuAction
+    Increment,   // macOS: kAXIncrementAction, Windows: RangeValue.Increment
+    Decrement,   // macOS: kAXDecrementAction, Windows: RangeValue.Decrement
+    Confirm,     // macOS: kAXConfirmAction
+    Cancel,      // macOS: kAXCancelAction
+    Raise,       // macOS: kAXRaiseAction, Windows: SetFocus
+    Pick,        // macOS: kAXPickAction
+}
+
+impl AXAction {
+    /// Map from macOS action string to our enum
+    pub fn from_macos(s: &str) -> Option<Self> {
+        match s {
+            "AXPress" => Some(Self::Press),
+            "AXShowMenu" => Some(Self::ShowMenu),
+            "AXIncrement" => Some(Self::Increment),
+            "AXDecrement" => Some(Self::Decrement),
+            "AXConfirm" => Some(Self::Confirm),
+            "AXCancel" => Some(Self::Cancel),
+            "AXRaise" => Some(Self::Raise),
+            "AXPick" => Some(Self::Pick),
+            _ => None,  // Unknown actions ignored
+        }
+    }
+
+    /// Map to macOS action string for performing
+    pub fn to_macos(&self) -> &'static str {
+        match self {
+            Self::Press => "AXPress",
+            Self::ShowMenu => "AXShowMenu",
+            Self::Increment => "AXIncrement",
+            Self::Decrement => "AXDecrement",
+            Self::Confirm => "AXConfirm",
+            Self::Cancel => "AXCancel",
+            Self::Raise => "AXRaise",
+            Self::Pick => "AXPick",
+        }
+    }
+}
 ```
 
-#### Improved Errors
+### Element Data
+
+```typescript
+interface AXElement {
+  // ... existing fields
+  actions: AXAction[]; // Always present, may be empty
+}
+
+type AXAction =
+  | "Press"
+  | "ShowMenu"
+  | "Increment"
+  | "Decrement"
+  | "Confirm"
+  | "Cancel"
+  | "Raise"
+  | "Pick";
+```
+
+### Improved Errors
 
 ```typescript
 // Before
 Error: Action failed
 
 // After
-Error: Action "AXIncrement" not supported for element "search-field-123"
-       Available actions: ["AXPress", "AXConfirm", "AXCancel"]
-```
-
-#### Optional: Include in Element Data
-
-```typescript
-interface AXElement {
-  // ... existing fields
-  actions?: string[]; // Populated on demand or during discovery
-}
+Error: Action "Increment" not supported for element "search-field-123"
+       Available actions: ["Press", "Confirm", "Cancel"]
 ```
 
 ### Implementation
 
-1. Add `get_actions(element_id)` RPC handler
-2. Use `AXUIElementCopyActionNames` to fetch available actions
-3. Update error types to include available actions on failure
-4. Optionally batch-fetch actions during discovery
-
-### Available macOS Actions
-
-```
-kAXPressAction           - Click/activate
-kAXIncrementAction       - Increase value (sliders, steppers)
-kAXDecrementAction       - Decrease value
-kAXConfirmAction         - Confirm/submit
-kAXCancelAction          - Cancel operation
-kAXShowMenuAction        - Open context menu
-kAXRaiseAction           - Bring window to front
-kAXPickAction            - Pick from list/menu
-```
+1. Add `AXAction` enum to `types.rs` with macOS mapping in `platform/macos.rs`
+2. Batch-fetch actions with other attributes during discovery
+3. Add `actions: Vec<AXAction>` to `AXElement`
+4. Update `perform_action()` to include available actions in errors
 
 ---
 
@@ -141,8 +181,8 @@ macOS supports **app-level notifications** that fire when ANY element in that ap
 │   • AXFocusedUIElementChanged → know what element is focused    │
 │   • AXSelectedTextChanged → know when text selection changes    │
 │                                                                 │
-│ System-wide observer for:                                       │
-│   • AXFocusedWindowChanged → know which window is active        │
+│ Note: Focused WINDOW comes from existing polling loop.          │
+│ (Future: could replace polling with events for initial state)   │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -155,6 +195,9 @@ macOS supports **app-level notifications** that fire when ANY element in that ap
 │                                                                 │
 │ Roles: TextField, TextArea, ComboBox, SearchField               │
 │ Result: "Active" text field is always watched                   │
+│                                                                 │
+│ Why this matters: The focused element is often the one being    │
+│ edited, so auto-watching it gives you "live" updates for free!  │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -162,31 +205,59 @@ macOS supports **app-level notifications** that fire when ANY element in that ap
 │ TIER 3: Explicit Watch (user-requested, current behavior)       │
 ├─────────────────────────────────────────────────────────────────┤
 │ axio.watch(elementId) → persistent subscription                 │
-│ Used for: ports demo, tracking specific elements                │
+│ Used for: ports demo, tracking specific non-focused elements    │
 │ User manages lifecycle via unwatch()                            │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### New Events
+### Events
+
+We add two new events for Tier 1 awareness. These follow our existing `type:action` naming pattern:
 
 ```typescript
-// Tier 1 events (always available)
+// Focus changed to a new element
 "focus:element" → {
-  windowId: string,
-  elementId: string,
-  element: AXElement,
-  previousElementId?: string
+  windowId: string;
+  elementId: string;
+  element: AXElement;        // Full element data
+  previous?: {               // Previous focus (if known)
+    elementId: string;
+    element?: AXElement;
+  };
 }
 
-"selection:text" → {
-  windowId: string,
-  text: string,
-  elementId?: string,
-  range?: { start: number, length: number }
+// Text selection changed
+"selection:changed" → {
+  windowId: string;
+  elementId: string;         // Element containing the selection
+  text: string;              // The actual selected text
+  range: {                   // Position within the element's text
+    start: number;
+    length: number;
+  };
 }
+```
 
-// Existing events (unchanged)
-"element:changed" → { element: AXElement }  // From Tier 2 auto-watch or Tier 3 explicit
+Note: `element:changed` continues to fire for watched elements (Tier 2 auto-watched or Tier 3 explicit).
+
+### Client State
+
+```typescript
+class AXIO {
+  // New state for Tier 1
+  focusedElement: AXElement | null = null;
+  selection: {
+    text: string;
+    elementId: string;
+    range: { start: number; length: number };
+  } | null = null;
+
+  // Existing (unchanged)
+  windows: Map<string, AXWindow>;
+  elements: Map<string, AXElement>;
+  activeWindow: string | null;
+  focusedWindow: string | null; // From polling, not new observer
+}
 ```
 
 ### Cost Analysis
@@ -199,60 +270,49 @@ macOS supports **app-level notifications** that fire when ANY element in that ap
 
 **Total overhead**: ~2 extra notifications per tracked app. Essentially free.
 
-### Client State Updates
-
-```typescript
-class AXIO {
-  // New state
-  focusedElement: AXElement | null = null;
-  selectedText: string = "";
-
-  // Existing (unchanged)
-  windows: Map<string, AXWindow>;
-  elements: Map<string, AXElement>;
-  activeWindow: string | null;
-  focusedWindow: string | null;
-}
-```
-
 ### Implementation Steps
 
 1. **Add app-level observer setup**
+
    - When first window of an app is tracked, create app-level observer
-   - Subscribe to `AXFocusedUIElementChanged` and `AXSelectedTextChanged`
+   - Subscribe to `AXFocusedUIElementChanged` and `AXSelectedTextChanged` on the app element
+
 2. **Handle focus change notifications**
-   - On focus change: emit `focus:element`, update `focusedElement`
-   - If new focus is text element: auto-watch for `ValueChanged`
-   - If old focus was text element: auto-unwatch
+
+   - On focus change callback: build element, emit `focus:element`
+   - If new focus is text element: auto-subscribe to `ValueChanged`
+   - If previous focus was text element: auto-unsubscribe
+
 3. **Handle selection change notifications**
-   - Read `AXSelectedText` and `AXSelectedTextRange`
-   - Emit `selection:text` event
+
+   - Read `AXSelectedText` attribute (the actual string)
+   - Read `AXSelectedTextRange` attribute (start + length)
+   - Emit `selection:changed` event
+
 4. **Update client to track new state**
+   - Add `focusedElement` and `selection` properties
+   - Update on corresponding events
+
+### Future: Event-Driven Window Tracking
+
+Currently we poll for window changes via `x-win`. In the future, we could:
+
+- Poll once on startup for initial state
+- Use `AXWindowCreated`, `AXUIElementDestroyed`, etc. for updates
+
+This would make window tracking fully event-driven. Deferred for now since polling works well enough.
 
 ---
 
 ## 4. Selected Text Tracking
 
-### Behavior
+(Covered in Tier 1 of Live Tracking above)
 
-- Track the currently selected text across all applications
-- Only ONE selection exists system-wide at a time
-- Fires when user selects text in any tracked app
+### Summary
 
-### API
-
-```typescript
-// State
-axio.selectedText: string  // Current selection (empty if none)
-
-// Event
-"selection:text" → {
-  windowId: string,
-  text: string,
-  elementId?: string,  // Element containing selection, if known
-  range?: { start: number, length: number }
-}
-```
+- **State**: `axio.selection: { text, elementId, range } | null`
+- **Event**: `selection:changed` with full text and range
+- **Scope**: System-wide (only ONE selection exists at a time)
 
 ### Use Cases
 
@@ -260,10 +320,6 @@ axio.selectedText: string  // Current selection (empty if none)
 - "Define", "Search", "Translate" actions on selection
 - Copy-paste assistance
 - Context-aware AI features
-
-### Implementation
-
-Part of Tier 1 observers - subscribe to `AXSelectedTextChanged` at app level.
 
 ---
 
@@ -293,18 +349,6 @@ interface WritableNode extends Node {
   setValue?(value: string): Promise<void>;
   performAction?(action: Action): Promise<void>;
 }
-
-// Cross-platform action enum
-enum Action {
-  Click, // macOS: AXPress, Windows: Invoke
-  Focus, // macOS: AXRaise, Windows: SetFocus
-  Expand, // macOS: AXPress, Windows: Expand
-  Collapse,
-  ScrollIntoView,
-  ShowMenu, // macOS: AXShowMenu
-  Increment, // macOS: AXIncrement, Windows: RangeValue
-  Decrement,
-}
 ```
 
 ### Challenges
@@ -322,10 +366,10 @@ Deferred for future exploration. Would benefit the broader ecosystem.
 ## Implementation Order
 
 1. **Batch attribute fetching** - Pure optimization, no API changes
-2. **Action discovery** - Small API addition, better DX
+2. **Actions on elements** - Add `AXAction` enum, include in element data
 3. **Tier 1: App-level observers** - Foundation for live tracking
-4. **Selection tracking** - Builds on Tier 1
-5. **Tier 2: Auto-watch** - Smart defaults for text fields
+4. **Selection tracking** - Builds on Tier 1, add `selection:changed` event
+5. **Tier 2: Auto-watch** - Smart defaults for focused text fields
 
 ---
 
@@ -337,25 +381,25 @@ Deferred for future exploration. Would benefit the broader ecosystem.
 - `AXTitleChanged` - Element title changed (windows)
 - `AXUIElementDestroyed` - Element removed from UI
 
-### Notifications for Live Tracking
+### Notifications for Live Tracking (Tier 1)
 
-- `AXFocusedUIElementChanged` - Focus moved to new element
-- `AXSelectedTextChanged` - Text selection changed
+- `AXFocusedUIElementChanged` - Focus moved to new element (on app element)
+- `AXSelectedTextChanged` - Text selection changed (on app element)
 
 ### Other Available Notifications
 
 ```
-AXFocusedWindowChangedNotification   - Window focus changed
+AXFocusedWindowChangedNotification    - Window focus changed (we use polling instead)
 AXSelectedChildrenChangedNotification - Selection in list/table
-AXSelectedCellsChangedNotification   - Table cell selection
-AXSelectedRowsChangedNotification    - Table row selection
-AXResizedNotification                - Element resized
-AXMovedNotification                  - Element moved
-AXLayoutChangedNotification          - Layout reflow
-AXMenuOpenedNotification             - Menu appeared
-AXMenuClosedNotification             - Menu closed
-AXCreatedNotification                - New element (unreliable)
-AXAnnouncementRequestedNotification  - Screen reader announcement
+AXSelectedCellsChangedNotification    - Table cell selection
+AXSelectedRowsChangedNotification     - Table row selection
+AXResizedNotification                 - Element resized
+AXMovedNotification                   - Element moved
+AXLayoutChangedNotification           - Layout reflow
+AXMenuOpenedNotification              - Menu appeared
+AXMenuClosedNotification              - Menu closed
+AXCreatedNotification                 - New element (unreliable)
+AXAnnouncementRequestedNotification   - Screen reader announcement
 ```
 
 ### System-Wide Element Limitations
@@ -365,4 +409,4 @@ AXAnnouncementRequestedNotification  - Screen reader announcement
 - `AXFocusedUIElementChanged`
 - `AXFocusedWindowChanged`
 
-All other notifications require subscribing to specific elements.
+We don't use system-wide element - focused window comes from polling, focused element comes from per-app observers.
