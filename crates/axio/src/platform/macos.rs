@@ -315,17 +315,12 @@ fn handle_app_focus_changed(pid: u32, element_ref: accessibility_sys::AXUIElemen
     // Unwatch previous element (if different from new one)
     if previous_was_watchable && !same_element {
         if let Some(ref prev_id) = previous_element_id {
-            println!("[axio] Tier 2: auto-unwatch {:?}", prev_id);
             crate::element_registry::ElementRegistry::unwatch(prev_id);
         }
     }
 
     // Watch new element (if watchable and different from previous)
     if new_is_watchable && !same_element {
-        println!(
-            "[axio] Tier 2: auto-watch {:?} ({:?})",
-            element.id, element.role
-        );
         let _ = crate::element_registry::ElementRegistry::watch(&element.id);
     }
 

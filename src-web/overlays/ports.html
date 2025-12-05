@@ -72,6 +72,7 @@
       .window-container {
         position: absolute;
         pointer-events: none;
+        overflow: visible;
       }
 
       /* Edge groups */
@@ -83,6 +84,7 @@
         gap: 10px;
         top: 50%;
         transform: translateY(-50%);
+        z-index: 1; /* Ports should be above the blocker */
       }
       .edge-group.left {
         left: 0;

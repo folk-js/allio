@@ -41,6 +41,13 @@ class PortsDemo {
     { left: HTMLElement; right: HTMLElement }
   >();
 
+  // SVG defs for masks
+  private maskDefs: SVGDefsElement;
+
+  // Debug mode - visualize masks
+  private debugMasks = false; // Set to false to disable
+  private debugOverlays = new Map<string, HTMLElement>();
+
   // Mode state
   private creationMode = false;
 
@@ -53,6 +60,14 @@ class PortsDemo {
     this.svg = document.getElementById("connections") as unknown as SVGElement;
     this.menuBar = document.getElementById("menuBar")!;
     this.axio = new AXIO();
+
+    // Create SVG defs for masks
+    this.maskDefs = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "defs"
+    );
+    this.svg.appendChild(this.maskDefs);
+
     this.init();
   }
 
@@ -174,6 +189,181 @@ class PortsDemo {
       .filter((w): w is AXWindow => !!w);
   }
 
+  /** Get z-index for a window (higher = more in front) */
+  private getWindowZIndex(windowId: string): number {
+    const index = this.axio.depthOrder.indexOf(windowId);
+    if (index === -1) return 0;
+    // Front windows get higher z-index
+    // Reserve 0-999 for windows, 1000+ for menu bar
+    return 1000 - index;
+  }
+
+  /** Generate a clip-path that hides regions occluded by windows in front */
+  private generateWindowMask(window: AXWindow): string {
+    const windows = this.windows;
+    const targetIndex = windows.findIndex((w) => w.id === window.id);
+    if (targetIndex === -1) return "";
+
+    // Get ALL windows in front (earlier in depthOrder = in front)
+    const windowsInFront = windows.slice(0, targetIndex);
+
+    if (windowsInFront.length === 0) {
+      return ""; // No clip needed - this is the frontmost window
+    }
+
+    // Convert to window-relative rectangles
+    const rects = windowsInFront.map((fw) => ({
+      x: fw.bounds.x - window.bounds.x,
+      y: fw.bounds.y - window.bounds.y,
+      w: fw.bounds.w,
+      h: fw.bounds.h,
+    }));
+
+    // Compute union of rectangles to avoid overlap issues with fill rules
+    const unionRects = this.computeRectUnion(rects);
+
+    // Build path: outer boundary + union holes
+    const paths: string[] = [];
+
+    // Outer boundary (clockwise)
+    paths.push("M -5000 -5000 L 5000 -5000 L 5000 5000 L -5000 5000 Z");
+
+    // Each union rect as counter-clockwise hole
+    for (const rect of unionRects) {
+      const { x, y, w, h } = rect;
+      paths.push(
+        `M ${x} ${y} L ${x} ${y + h} L ${x + w} ${y + h} L ${x + w} ${y} Z`
+      );
+    }
+
+    // Debug: visualize the mask
+    if (this.debugMasks) {
+      this.createDebugOverlay(window, windowsInFront);
+    }
+
+    return `path(evenodd, "${paths.join(" ")}")`;
+  }
+
+  /** Compute union of axis-aligned rectangles, returning non-overlapping rects */
+  private computeRectUnion(
+    rects: Array<{ x: number; y: number; w: number; h: number }>
+  ): Array<{ x: number; y: number; w: number; h: number }> {
+    if (rects.length <= 1) return rects;
+
+    // Simple approach: sweep line algorithm
+    // Collect all unique x and y coordinates
+    const xs = new Set<number>();
+    const ys = new Set<number>();
+
+    for (const r of rects) {
+      xs.add(r.x);
+      xs.add(r.x + r.w);
+      ys.add(r.y);
+      ys.add(r.y + r.h);
+    }
+
+    const sortedXs = Array.from(xs).sort((a, b) => a - b);
+    const sortedYs = Array.from(ys).sort((a, b) => a - b);
+
+    // Create grid cells and mark which are covered
+    const grid: boolean[][] = [];
+    for (let i = 0; i < sortedYs.length - 1; i++) {
+      grid[i] = [];
+      for (let j = 0; j < sortedXs.length - 1; j++) {
+        grid[i][j] = false;
+      }
+    }
+
+    // Mark cells covered by any rect
+    for (const r of rects) {
+      const x1Idx = sortedXs.indexOf(r.x);
+      const x2Idx = sortedXs.indexOf(r.x + r.w);
+      const y1Idx = sortedYs.indexOf(r.y);
+      const y2Idx = sortedYs.indexOf(r.y + r.h);
+
+      for (let i = y1Idx; i < y2Idx; i++) {
+        for (let j = x1Idx; j < x2Idx; j++) {
+          grid[i][j] = true;
+        }
+      }
+    }
+
+    // Extract non-overlapping rectangles from marked cells
+    // Simple greedy: for each marked cell, extend as far right and down as possible
+    const result: Array<{ x: number; y: number; w: number; h: number }> = [];
+
+    for (let i = 0; i < grid.length; i++) {
+      for (let j = 0; j < grid[i].length; j++) {
+        if (grid[i][j]) {
+          // Find max width
+          let maxJ = j;
+          while (maxJ < grid[i].length && grid[i][maxJ]) maxJ++;
+
+          // Find max height with this width
+          let maxI = i;
+          outer: while (maxI < grid.length) {
+            for (let k = j; k < maxJ; k++) {
+              if (!grid[maxI][k]) break outer;
+            }
+            maxI++;
+          }
+
+          // Mark cells as used
+          for (let ii = i; ii < maxI; ii++) {
+            for (let jj = j; jj < maxJ; jj++) {
+              grid[ii][jj] = false;
+            }
+          }
+
+          // Add rectangle
+          result.push({
+            x: sortedXs[j],
+            y: sortedYs[i],
+            w: sortedXs[maxJ] - sortedXs[j],
+            h: sortedYs[maxI] - sortedYs[i],
+          });
+        }
+      }
+    }
+
+    return result;
+  }
+
+  /** Debug helper: create visual overlay showing what's being masked */
+  private createDebugOverlay(window: AXWindow, windowsInFront: AXWindow[]) {
+    const debugId = `debug-${window.id}`;
+
+    // Remove old overlay
+    const old = this.debugOverlays.get(debugId);
+    if (old) old.remove();
+
+    const overlay = document.createElement("div");
+    overlay.style.position = "absolute";
+    overlay.style.pointerEvents = "none";
+    overlay.style.border = "2px solid cyan";
+    overlay.style.left = `${window.bounds.x}px`;
+    overlay.style.top = `${window.bounds.y}px`;
+    overlay.style.width = `${window.bounds.w}px`;
+    overlay.style.height = `${window.bounds.h}px`;
+    overlay.style.zIndex = "10000";
+
+    // Add red rectangles for occluding windows
+    for (const frontWindow of windowsInFront) {
+      const occluder = document.createElement("div");
+      occluder.style.position = "absolute";
+      occluder.style.left = `${frontWindow.bounds.x - window.bounds.x}px`;
+      occluder.style.top = `${frontWindow.bounds.y - window.bounds.y}px`;
+      occluder.style.width = `${frontWindow.bounds.w}px`;
+      occluder.style.height = `${frontWindow.bounds.h}px`;
+      occluder.style.background = "rgba(255, 0, 0, 0.3)";
+      occluder.style.border = "1px solid red";
+      overlay.appendChild(occluder);
+    }
+
+    this.container.appendChild(overlay);
+    this.debugOverlays.set(debugId, overlay);
+  }
+
   private getWindowAt(x: number, y: number): AXWindow | null {
     // Iterate frontmost-first due to z-order sorting
     for (const w of this.windows) {
@@ -187,6 +377,14 @@ class PortsDemo {
 
   private render() {
     const windows = this.windows;
+
+    // Clean up debug overlays
+    if (this.debugMasks) {
+      for (const overlay of this.debugOverlays.values()) {
+        overlay.remove();
+      }
+      this.debugOverlays.clear();
+    }
 
     // Clean up closed windows
     const currentIds = new Set(windows.map((w) => w.id));
@@ -233,12 +431,23 @@ class PortsDemo {
     }
 
     const { x, y, w, h } = window.bounds;
+    const zIndex = this.getWindowZIndex(window.id);
+    const clipPath = this.generateWindowMask(window);
+
     Object.assign(container.style, {
       left: `${x}px`,
       top: `${y}px`,
       width: `${w}px`,
       height: `${h}px`,
+      zIndex: zIndex.toString(),
     });
+
+    // Apply clip-path if needed
+    if (clipPath) {
+      container.style.clipPath = clipPath;
+    } else {
+      container.style.clipPath = "";
+    }
   }
 
   private createPort(windowId: string, element: AXElement, type: PortType) {
