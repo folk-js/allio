@@ -1,4 +1,4 @@
-import { AXIO, AXElement, AXWindow } from "@axio/client";
+import { AXIO, AXElement, AXWindow, OcclusionManager } from "@axio/client";
 
 type PortType = "input" | "output";
 
@@ -31,6 +31,7 @@ class PortsDemo {
   private svg: SVGElement;
   private menuBar: HTMLElement;
   private axio: AXIO;
+  private occlusion: OcclusionManager;
 
   private ports = new Map<string, Port>();
   private connections: Connection[] = [];
@@ -40,10 +41,6 @@ class PortsDemo {
     string,
     { left: HTMLElement; right: HTMLElement }
   >();
-
-  // Cache for clip-paths (keyed by window id)
-  private clipPathCache = new Map<string, string>();
-  private lastDepthOrder: string[] = [];
 
   // Mode state
   private creationMode = false;
@@ -57,6 +54,7 @@ class PortsDemo {
     this.svg = document.getElementById("connections") as unknown as SVGElement;
     this.menuBar = document.getElementById("menuBar")!;
     this.axio = new AXIO();
+    this.occlusion = new OcclusionManager(this.axio);
     this.init();
   }
 
@@ -178,143 +176,6 @@ class PortsDemo {
       .filter((w): w is AXWindow => !!w);
   }
 
-  /** Get z-index for a window (higher = more in front) */
-  private getWindowZIndex(windowId: string): number {
-    const index = this.axio.depthOrder.indexOf(windowId);
-    if (index === -1) return 0;
-    // Front windows get higher z-index
-    // Reserve 0-999 for windows, 1000+ for menu bar
-    return 1000 - index;
-  }
-
-  /** Generate a clip-path that hides regions occluded by windows in front */
-  private generateWindowMask(window: AXWindow): string {
-    const windows = this.windows;
-    const targetIndex = windows.findIndex((w) => w.id === window.id);
-    if (targetIndex === -1) return "";
-
-    // Get ALL windows in front (earlier in depthOrder = in front)
-    const windowsInFront = windows.slice(0, targetIndex);
-
-    if (windowsInFront.length === 0) {
-      return ""; // No clip needed - this is the frontmost window
-    }
-
-    // Convert to window-relative rectangles
-    const rects = windowsInFront.map((fw) => ({
-      x: fw.bounds.x - window.bounds.x,
-      y: fw.bounds.y - window.bounds.y,
-      w: fw.bounds.w,
-      h: fw.bounds.h,
-    }));
-
-    // Compute union of rectangles to avoid overlap issues with fill rules
-    // Skip union if only 1 rect (optimization)
-    const unionRects =
-      rects.length === 1 ? rects : this.computeRectUnion(rects);
-
-    // Build path: outer boundary + union holes
-    const paths: string[] = [];
-
-    // Outer boundary (clockwise)
-    paths.push("M -5000 -5000 L 5000 -5000 L 5000 5000 L -5000 5000 Z");
-
-    // Each union rect as counter-clockwise hole
-    for (const rect of unionRects) {
-      const { x, y, w, h } = rect;
-      paths.push(
-        `M ${x} ${y} L ${x} ${y + h} L ${x + w} ${y + h} L ${x + w} ${y} Z`
-      );
-    }
-
-    return `path(evenodd, "${paths.join(" ")}")`;
-  }
-
-  /** Compute union of axis-aligned rectangles, returning non-overlapping rects */
-  private computeRectUnion(
-    rects: Array<{ x: number; y: number; w: number; h: number }>
-  ): Array<{ x: number; y: number; w: number; h: number }> {
-    if (rects.length <= 1) return rects;
-
-    // Simple approach: sweep line algorithm
-    // Collect all unique x and y coordinates
-    const xs = new Set<number>();
-    const ys = new Set<number>();
-
-    for (const r of rects) {
-      xs.add(r.x);
-      xs.add(r.x + r.w);
-      ys.add(r.y);
-      ys.add(r.y + r.h);
-    }
-
-    const sortedXs = Array.from(xs).sort((a, b) => a - b);
-    const sortedYs = Array.from(ys).sort((a, b) => a - b);
-
-    // Create grid cells and mark which are covered
-    const grid: boolean[][] = [];
-    for (let i = 0; i < sortedYs.length - 1; i++) {
-      grid[i] = [];
-      for (let j = 0; j < sortedXs.length - 1; j++) {
-        grid[i][j] = false;
-      }
-    }
-
-    // Mark cells covered by any rect
-    for (const r of rects) {
-      const x1Idx = sortedXs.indexOf(r.x);
-      const x2Idx = sortedXs.indexOf(r.x + r.w);
-      const y1Idx = sortedYs.indexOf(r.y);
-      const y2Idx = sortedYs.indexOf(r.y + r.h);
-
-      for (let i = y1Idx; i < y2Idx; i++) {
-        for (let j = x1Idx; j < x2Idx; j++) {
-          grid[i][j] = true;
-        }
-      }
-    }
-
-    // Extract non-overlapping rectangles from marked cells
-    // Simple greedy: for each marked cell, extend as far right and down as possible
-    const result: Array<{ x: number; y: number; w: number; h: number }> = [];
-
-    for (let i = 0; i < grid.length; i++) {
-      for (let j = 0; j < grid[i].length; j++) {
-        if (grid[i][j]) {
-          // Find max width
-          let maxJ = j;
-          while (maxJ < grid[i].length && grid[i][maxJ]) maxJ++;
-
-          // Find max height with this width
-          let maxI = i;
-          outer: while (maxI < grid.length) {
-            for (let k = j; k < maxJ; k++) {
-              if (!grid[maxI][k]) break outer;
-            }
-            maxI++;
-          }
-
-          // Mark cells as used
-          for (let ii = i; ii < maxI; ii++) {
-            for (let jj = j; jj < maxJ; jj++) {
-              grid[ii][jj] = false;
-            }
-          }
-
-          // Add rectangle
-          result.push({
-            x: sortedXs[j],
-            y: sortedYs[i],
-            w: sortedXs[maxJ] - sortedXs[j],
-            h: sortedYs[maxI] - sortedYs[i],
-          });
-        }
-      }
-    }
-
-    return result;
-  }
-
   private getWindowAt(x: number, y: number): AXWindow | null {
     // Iterate frontmost-first due to z-order sorting
     for (const w of this.windows) {
@@ -329,15 +190,6 @@ class PortsDemo {
   private render() {
     const windows = this.windows;
 
-    // Invalidate clip-path cache if depth order changed
-    const depthOrderChanged =
-      this.lastDepthOrder.length !== this.axio.depthOrder.length ||
-      this.lastDepthOrder.some((id, i) => id !== this.axio.depthOrder[i]);
-    if (depthOrderChanged) {
-      this.clipPathCache.clear();
-      this.lastDepthOrder = [...this.axio.depthOrder];
-    }
-
     // Clean up closed windows
     const currentIds = new Set(windows.map((w) => w.id));
     for (const [id, container] of this.windowContainers) {
@@ -345,7 +197,6 @@ class PortsDemo {
         container.remove();
         this.windowContainers.delete(id);
         this.edgeGroups.delete(id);
-        this.clipPathCache.delete(id);
         // Remove ports for this window
         for (const [portId, port] of this.ports) {
           if (port.windowId === id) this.deletePort(portId);
@@ -384,8 +235,8 @@ class PortsDemo {
     }
 
     const { x, y, w, h } = window.bounds;
-    const zIndex = this.getWindowZIndex(window.id);
-    const clipPath = this.generateWindowMask(window);
+    const zIndex = this.occlusion.getZIndex(window.id);
+    const clipPath = this.occlusion.getClipPath(window.id);
 
     Object.assign(container.style, {
       left: `${x}px`,
@@ -393,14 +244,8 @@ class PortsDemo {
       width: `${w}px`,
       height: `${h}px`,
       zIndex: zIndex.toString(),
+      clipPath: clipPath,
     });
-
-    // Apply clip-path if needed
-    if (clipPath) {
-      container.style.clipPath = clipPath;
-    } else {
-      container.style.clipPath = "";
-    }
   }
 
   private createPort(windowId: string, element: AXElement, type: PortType) {
@@ -596,14 +441,6 @@ class PortsDemo {
         )
       );
       this.svg.appendChild(path);
-
-      // Arrowhead
-      this.drawArrow(
-        conn.targetPort.x,
-        conn.targetPort.y,
-        conn.sourcePort.x,
-        conn.sourcePort.y
-      );
     }
   }
 
@@ -613,28 +450,6 @@ class PortsDemo {
     return `M ${x1},${y1} C ${x1 + curve},${y1} ${
       x2 - curve
     },${y2} ${x2},${y2}`;
-  }
-
-  private drawArrow(x: number, y: number, fromX: number, fromY: number) {
-    const angle = Math.atan2(y - fromY, x - fromX);
-    const size = 8;
-    const points = [
-      `${x},${y}`,
-      `${x - size * Math.cos(angle - Math.PI / 6)},${
-        y - size * Math.sin(angle - Math.PI / 6)
-      }`,
-      `${x - size * Math.cos(angle + Math.PI / 6)},${
-        y - size * Math.sin(angle + Math.PI / 6)
-      }`,
-    ].join(" ");
-
-    const polygon = document.createElementNS(
-      "http://www.w3.org/2000/svg",
-      "polygon"
-    );
-    polygon.classList.add("connection-arrow");
-    polygon.setAttribute("points", points);
-    this.svg.appendChild(polygon);
   }
 
   private handleElementUpdate(element: AXElement) {
