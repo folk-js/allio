@@ -338,6 +338,11 @@ pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResu
 
     ElementRegistry::set_children(parent_id, child_ids.clone())?;
 
+    // Emit element:discovered for each new child
+    for child in &children {
+        crate::events::emit_element_discovered(child);
+    }
+
     // Emit element:updated for the parent so client knows it now has children
     if let Ok(updated_parent) = ElementRegistry::get(parent_id) {
         crate::events::emit_element_updated(&updated_parent, &["children".to_string()]);

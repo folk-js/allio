@@ -18,34 +18,29 @@ class AXTreeOverlay {
 
   private async init() {
     // Simple event handlers - just re-render when things change
-    this.axio.on("window:active", (d) => {
-      console.log("🎯 window:active", d);
-      this.render();
-    });
+    this.axio.on("window:active", () => this.render());
     this.axio.on("element:discovered", (el) => {
-      console.log("📦 element:discovered", el.role, el.label);
+      // Auto-watch textboxes for value changes
+      if (el.role === "textbox" || el.role === "searchbox") {
+        console.log("👁️ Auto-watching textbox:", el.label ?? el.id);
+        this.axio
+          .watch(el.id)
+          .catch((err) => console.error("Watch failed:", err));
+      }
       this.render();
     });
-    this.axio.on("element:updated", (d) => {
-      console.log("📝 element:updated", d.element.role);
-      this.render();
-    });
-    this.axio.on("sync:snapshot", (snapshot) => {
-      console.log("📸 sync:snapshot", {
-        windows: snapshot.windows.length,
-        active: snapshot.active_window,
-      });
-      this.render();
-    });
-    this.axio.on("window:updated", (win) => {
+    this.axio.on("element:updated", ({ element, changed }) => {
       console.log(
-        "🪟 window:updated",
-        win.id,
-        "children:",
-        win.children?.length ?? "null"
+        "📝 element:updated",
+        element.role,
+        element.label,
+        "changed:",
+        changed
       );
       this.render();
     });
+    this.axio.on("sync:snapshot", () => this.render());
+    this.axio.on("window:updated", () => this.render());
 
     // Mouse tracking for clickthrough
     this.axio.on("mouse:position", ({ x, y }) => {
@@ -65,12 +60,6 @@ class AXTreeOverlay {
 
   private render() {
     const win = this.axio.active;
-    console.log("🎨 render()", {
-      activeWindow: win?.title ?? null,
-      activeId: this.axio.activeWindow,
-      windowsCount: this.axio.windows.size,
-      elementsCount: this.axio.elements.size,
-    });
 
     // No active window - remove tree
     if (!win) {
@@ -81,12 +70,6 @@ class AXTreeOverlay {
 
     // Get window's children
     const children = this.axio.getChildren(win);
-    console.log(
-      "  children:",
-      children.length,
-      "discovered:",
-      win.children !== null
-    );
 
     // Create tree container if needed
     if (!this.treeEl) {
@@ -126,16 +109,20 @@ class AXTreeOverlay {
 
   private renderNode(el: AXElement, depth: number): string {
     const children = this.axio.getChildren(el);
-    const hasChildren = children.length > 0;
     const notDiscovered = el.children === null;
+    // Has children if IDs exist (even if not yet loaded into elements Map)
+    const hasChildIds = (el.children?.length ?? 0) > 0;
+    const hasLoadedChildren = children.length > 0;
     const isExpanded = this.expanded.has(el.id);
-    const isLoading = el.children === null && this.expanded.has(el.id);
+    const isLoading =
+      this.expanded.has(el.id) && hasChildIds && !hasLoadedChildren;
+    const isWatched = this.axio.watched.has(el.id);
 
-    // Indicator: + (load), ▸/▾ (expand/collapse), • (leaf), ⋯ (loading)
-    let indicator = "•";
-    if (isLoading) indicator = "⋯";
-    else if (notDiscovered) indicator = "+";
-    else if (hasChildren) indicator = isExpanded ? "▾" : "▸";
+    // Indicator: + (not discovered), ⋯ (loading), ▸/▾ (expand/collapse), •/◉ (leaf)
+    let indicator = isWatched ? "◉" : "•";
+    if (notDiscovered) indicator = "+";
+    else if (isLoading) indicator = "⋯";
+    else if (hasChildIds) indicator = isExpanded ? "▾" : "▸";
 
     // Format value
     let valueStr = "";
@@ -145,22 +132,17 @@ class AXTreeOverlay {
     }
 
     // Count
-    const count = notDiscovered ? "?" : hasChildren ? children.length : 0;
+    const count = notDiscovered ? "?" : hasChildIds ? el.children!.length : 0;
     const isTextInput = el.role === "textbox" || el.role === "searchbox";
 
-    // Bounds for hover outline
-    const boundsAttr = el.bounds
-      ? `data-bounds="${el.bounds.position.x},${el.bounds.position.y},${el.bounds.size.width},${el.bounds.size.height}"`
-      : "";
-
     return `
-      <div class="tree-node" data-id="${el.id}" ${boundsAttr}>
+      <div class="tree-node" data-id="${el.id}">
         <div class="tree-node-content" style="padding-left: ${
           depth * 12 + 4
         }px">
           <span class="tree-indicator ${
-            notDiscovered || hasChildren ? "clickable" : ""
-          }" 
+            notDiscovered || hasChildIds ? "clickable" : ""
+          } ${isWatched ? "watched" : ""}" 
                 data-action="toggle">${indicator}</span>
           <span class="tree-role">${el.role}</span>
           ${
@@ -183,7 +165,7 @@ class AXTreeOverlay {
           ${
             isTextInput
               ? `
-            <input class="tree-input" 
+            <input class="tree-text-input" 
                    data-action="write" 
                    value="${this.escapeHtml(String(el.value?.value ?? ""))}"
                    placeholder="Enter text..." />
@@ -192,7 +174,11 @@ class AXTreeOverlay {
           }
         </div>
       </div>
-      ${hasChildren && isExpanded ? this.renderNodes(children, depth + 1) : ""}
+      ${
+        hasLoadedChildren && isExpanded
+          ? this.renderNodes(children, depth + 1)
+          : ""
+      }
     `;
   }
 
@@ -227,28 +213,29 @@ class AXTreeOverlay {
         const el = this.axio.get(id);
         if (!el) return;
 
-        if (el.children === null) {
-          // Load children
-          this.expanded.add(id); // Mark as loading
-          this.render();
-          try {
-            await this.axio.children(id);
-            await this.axio.watch(id);
-          } catch (err) {
-            console.error("Failed to load children:", err);
-            this.expanded.delete(id);
-          }
-          this.render();
-        } else if (this.expanded.has(id)) {
-          // Collapse
+        const loadedChildren = this.axio.getChildren(el);
+        const hasChildIds = (el.children?.length ?? 0) > 0;
+        const needsLoad =
+          el.children === null || (hasChildIds && loadedChildren.length === 0);
+
+        if (this.expanded.has(id) && !needsLoad) {
+          // Collapse (only if children are loaded)
           this.expanded.delete(id);
-          this.axio.unwatch(id).catch(() => {});
           this.render();
         } else {
-          // Expand
+          // Expand (and load if needed)
           this.expanded.add(id);
-          this.axio.watch(id).catch(() => {});
           this.render();
+
+          if (needsLoad) {
+            try {
+              await this.axio.children(id);
+            } catch (err) {
+              console.error("Failed to load children:", err);
+              this.expanded.delete(id);
+            }
+            this.render();
+          }
         }
       }
     });
@@ -277,14 +264,22 @@ class AXTreeOverlay {
       }
     });
 
-    // Hover outline
-    this.treeEl.addEventListener("mouseover", (e) => {
+    // Hover outline - refresh to get current bounds
+    this.treeEl.addEventListener("mouseover", async (e) => {
       const node = (e.target as HTMLElement).closest(
         ".tree-node"
       ) as HTMLElement;
-      if (node?.dataset.bounds) {
-        const [x, y, w, h] = node.dataset.bounds.split(",").map(Number);
-        this.showOutline(x, y, w, h);
+      if (node?.dataset.id) {
+        try {
+          const el = await this.axio.refresh(node.dataset.id);
+          if (el.bounds) {
+            const { x, y } = el.bounds.position;
+            const { width: w, height: h } = el.bounds.size;
+            this.showOutline(x, y, w, h);
+          }
+        } catch {
+          // Element may no longer exist, ignore
+        }
       }
     });
 
@@ -292,7 +287,7 @@ class AXTreeOverlay {
       const node = (e.target as HTMLElement).closest(
         ".tree-node"
       ) as HTMLElement;
-      if (node?.dataset.bounds) {
+      if (node?.dataset.id) {
         this.hideOutline();
       }
     });

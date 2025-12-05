@@ -52,6 +52,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
   // === State (mirrors Rust) ===
   readonly windows = new Map<string, AXWindow>();
   readonly elements = new Map<string, AXElement>();
+  readonly watched = new Set<string>(); // Elements we're watching
   activeWindow: string | null = null;
 
   constructor(private url = "ws://localhost:3030/ws", private timeout = 5000) {
@@ -107,10 +108,14 @@ export class AXIO extends EventEmitter<AxioEvents> {
     this.call("write", { element_id: elementId, text });
   click = (elementId: ElementId) =>
     this.call("click", { element_id: elementId });
-  watch = (elementId: ElementId) =>
-    this.call("watch", { element_id: elementId });
-  unwatch = (elementId: ElementId) =>
-    this.call("unwatch", { element_id: elementId });
+  watch = async (elementId: ElementId) => {
+    await this.call("watch", { element_id: elementId });
+    this.watched.add(elementId);
+  };
+  unwatch = async (elementId: ElementId) => {
+    await this.call("unwatch", { element_id: elementId });
+    this.watched.delete(elementId);
+  };
 
   /** Custom RPC for app-specific clickthrough (not in core RpcRequest) */
   async setClickthrough(enabled: boolean): Promise<void> {
