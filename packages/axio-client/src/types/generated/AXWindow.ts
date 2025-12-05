@@ -5,4 +5,8 @@ import type { Bounds } from "./Bounds";
  * Window info from x-win + accessibility.
  * Note: Windows don't have children - elements reference windows via window_id.
  */
-export type AXWindow = { id: string, title: string, app_name: string, bounds: Bounds, focused: boolean, process_id: number, };
+export type AXWindow = { id: string, title: string, app_name: string, bounds: Bounds, focused: boolean, process_id: number, 
+/**
+ * Z-order index: 0 = frontmost, higher = further back
+ */
+z_index: number, };

@@ -185,4 +185,26 @@ impl WindowManager {
         }
         None
     }
+
+    /// Find a tracked window that contains the given screen point.
+    /// Returns the frontmost window (lowest z_index) that contains the point.
+    /// Since tracked windows exclude our own PID, this naturally skips our overlay.
+    pub fn find_window_at_point(x: f64, y: f64) -> Option<ManagedWindow> {
+        let cache = WINDOW_CACHE.lock().unwrap();
+
+        // Collect windows containing the point
+        let mut candidates: Vec<_> = cache
+            .windows
+            .values()
+            .filter(|managed| {
+                let b = &managed.info.bounds;
+                x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h
+            })
+            .collect();
+
+        // Sort by z_index (lowest = frontmost)
+        candidates.sort_by_key(|m| m.info.z_index);
+
+        candidates.first().map(|m| (*m).clone())
+    }
 }

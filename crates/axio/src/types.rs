@@ -125,6 +125,8 @@ pub struct AXWindow {
     pub bounds: Bounds,
     pub focused: bool,
     pub process_id: u32,
+    /// Z-order index: 0 = frontmost, higher = further back
+    pub z_index: u32,
 }
 
 /// The unified element type - stored in registry and returned from API.

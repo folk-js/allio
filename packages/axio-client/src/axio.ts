@@ -222,7 +222,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
 
   /** Set clickthrough mode (for overlay apps) */
   async setClickthrough(enabled: boolean): Promise<void> {
-    if (enabled === this.clickthrough) return; // No change
+    // Always tell server - state may have changed via global shortcut
     this.clickthrough = enabled;
     this.log("clickthrough", enabled ? "enabled" : "disabled");
     await this.rawCall("set_clickthrough", { enabled });

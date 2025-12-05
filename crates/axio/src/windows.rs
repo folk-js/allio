@@ -103,7 +103,7 @@ pub fn get_main_screen_dimensions() -> (f64, f64) {
     (1920.0, 1080.0)
 }
 
-fn window_from_x_win(window: &x_win::WindowInfo, focused: bool) -> AXWindow {
+fn window_from_x_win(window: &x_win::WindowInfo, focused: bool, z_index: u32) -> AXWindow {
     use crate::types::Bounds;
     AXWindow {
         id: window.id.to_string(),
@@ -117,6 +117,7 @@ fn window_from_x_win(window: &x_win::WindowInfo, focused: bool) -> AXWindow {
         },
         focused,
         process_id: window.info.process_id,
+        z_index,
     }
 }
 
@@ -155,7 +156,8 @@ pub fn get_windows(options: &WindowEnumOptions) -> Option<Vec<AXWindow>> {
 
     let (screen_width, screen_height) = get_main_screen_dimensions();
 
-    let windows = all_windows
+    // Filter windows first, preserving x-win's z-order (front to back)
+    let filtered: Vec<_> = all_windows
         .iter()
         .filter(|w| {
             if options.exclude_pid == Some(w.info.process_id) {
@@ -166,9 +168,15 @@ pub fn get_windows(options: &WindowEnumOptions) -> Option<Vec<AXWindow>> {
             }
             true
         })
-        .map(|w| {
+        .collect();
+
+    // Map to AXWindow with z_index (0 = frontmost)
+    let windows = filtered
+        .iter()
+        .enumerate()
+        .map(|(z_index, w)| {
             let focused = active_window_id.map_or(false, |id| id == w.id);
-            let mut info = window_from_x_win(w, focused);
+            let mut info = window_from_x_win(w, focused, z_index as u32);
             info.bounds.x -= offset_x as f64;
             info.bounds.y -= offset_y as f64;
             info

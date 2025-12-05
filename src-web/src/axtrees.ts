@@ -91,8 +91,8 @@ class AXTreeOverlay {
     // Render content
     this.treeEl.innerHTML = `
       <div class="tree-legend">
-        <span class="legend-item"><span class="tree-role">role</span></span>
-        <span class="legend-item"><span class="tree-label">label</span></span>
+      <span class="legend-item"><span class="tree-role">role</span></span>
+      <span class="legend-item"><span class="tree-label">label</span></span>
         <span class="legend-item"><span class="tree-value">value</span></span>
       </div>
       <div class="tree-content">${this.renderNodes(rootElements)}</div>
