@@ -41,12 +41,9 @@ class PortsDemo {
     { left: HTMLElement; right: HTMLElement }
   >();
 
-  // SVG defs for masks
-  private maskDefs: SVGDefsElement;
-
-  // Debug mode - visualize masks
-  private debugMasks = false; // Set to false to disable
-  private debugOverlays = new Map<string, HTMLElement>();
+  // Cache for clip-paths (keyed by window id)
+  private clipPathCache = new Map<string, string>();
+  private lastDepthOrder: string[] = [];
 
   // Mode state
   private creationMode = false;
@@ -60,14 +57,6 @@ class PortsDemo {
     this.svg = document.getElementById("connections") as unknown as SVGElement;
     this.menuBar = document.getElementById("menuBar")!;
     this.axio = new AXIO();
-
-    // Create SVG defs for masks
-    this.maskDefs = document.createElementNS(
-      "http://www.w3.org/2000/svg",
-      "defs"
-    );
-    this.svg.appendChild(this.maskDefs);
-
     this.init();
   }
 
@@ -220,7 +209,9 @@ class PortsDemo {
     }));
 
     // Compute union of rectangles to avoid overlap issues with fill rules
-    const unionRects = this.computeRectUnion(rects);
+    // Skip union if only 1 rect (optimization)
+    const unionRects =
+      rects.length === 1 ? rects : this.computeRectUnion(rects);
 
     // Build path: outer boundary + union holes
     const paths: string[] = [];
@@ -234,11 +225,6 @@ class PortsDemo {
       paths.push(
         `M ${x} ${y} L ${x} ${y + h} L ${x + w} ${y + h} L ${x + w} ${y} Z`
       );
-    }
-
-    // Debug: visualize the mask
-    if (this.debugMasks) {
-      this.createDebugOverlay(window, windowsInFront);
     }
 
     return `path(evenodd, "${paths.join(" ")}")`;
@@ -329,41 +315,6 @@ class PortsDemo {
     return result;
   }
 
-  /** Debug helper: create visual overlay showing what's being masked */
-  private createDebugOverlay(window: AXWindow, windowsInFront: AXWindow[]) {
-    const debugId = `debug-${window.id}`;
-
-    // Remove old overlay
-    const old = this.debugOverlays.get(debugId);
-    if (old) old.remove();
-
-    const overlay = document.createElement("div");
-    overlay.style.position = "absolute";
-    overlay.style.pointerEvents = "none";
-    overlay.style.border = "2px solid cyan";
-    overlay.style.left = `${window.bounds.x}px`;
-    overlay.style.top = `${window.bounds.y}px`;
-    overlay.style.width = `${window.bounds.w}px`;
-    overlay.style.height = `${window.bounds.h}px`;
-    overlay.style.zIndex = "10000";
-
-    // Add red rectangles for occluding windows
-    for (const frontWindow of windowsInFront) {
-      const occluder = document.createElement("div");
-      occluder.style.position = "absolute";
-      occluder.style.left = `${frontWindow.bounds.x - window.bounds.x}px`;
-      occluder.style.top = `${frontWindow.bounds.y - window.bounds.y}px`;
-      occluder.style.width = `${frontWindow.bounds.w}px`;
-      occluder.style.height = `${frontWindow.bounds.h}px`;
-      occluder.style.background = "rgba(255, 0, 0, 0.3)";
-      occluder.style.border = "1px solid red";
-      overlay.appendChild(occluder);
-    }
-
-    this.container.appendChild(overlay);
-    this.debugOverlays.set(debugId, overlay);
-  }
-
   private getWindowAt(x: number, y: number): AXWindow | null {
     // Iterate frontmost-first due to z-order sorting
     for (const w of this.windows) {
@@ -378,12 +329,13 @@ class PortsDemo {
   private render() {
     const windows = this.windows;
 
-    // Clean up debug overlays
-    if (this.debugMasks) {
-      for (const overlay of this.debugOverlays.values()) {
-        overlay.remove();
-      }
-      this.debugOverlays.clear();
+    // Invalidate clip-path cache if depth order changed
+    const depthOrderChanged =
+      this.lastDepthOrder.length !== this.axio.depthOrder.length ||
+      this.lastDepthOrder.some((id, i) => id !== this.axio.depthOrder[i]);
+    if (depthOrderChanged) {
+      this.clipPathCache.clear();
+      this.lastDepthOrder = [...this.axio.depthOrder];
     }
 
     // Clean up closed windows
@@ -393,6 +345,7 @@ class PortsDemo {
         container.remove();
         this.windowContainers.delete(id);
         this.edgeGroups.delete(id);
+        this.clipPathCache.delete(id);
         // Remove ports for this window
         for (const [portId, port] of this.ports) {
           if (port.windowId === id) this.deletePort(portId);
