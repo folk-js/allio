@@ -1,6 +1,7 @@
 // Re-export generated types from Rust via ts-rs
 // Regenerate with: npm run typegen
 
+export type { AXAction } from "./generated/AXAction";
 export type { AXElement } from "./generated/AXElement";
 export type { AXRole } from "./generated/AXRole";
 export type { AXValue } from "./generated/AXValue";

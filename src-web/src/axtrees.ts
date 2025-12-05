@@ -91,9 +91,10 @@ class AXTreeOverlay {
     // Render content
     this.treeEl.innerHTML = `
       <div class="tree-legend">
-      <span class="legend-item"><span class="tree-role">role</span></span>
-      <span class="legend-item"><span class="tree-label">label</span></span>
+        <span class="legend-item"><span class="tree-role">role</span></span>
+        <span class="legend-item"><span class="tree-label">label</span></span>
         <span class="legend-item"><span class="tree-value">value</span></span>
+        <span class="legend-item"><span class="tree-actions">[actions]</span></span>
       </div>
       <div class="tree-content">${this.renderNodes(rootElements)}</div>
     `;
@@ -157,6 +158,11 @@ class AXTreeOverlay {
               : ""
           }
           ${el.focused ? `<span class="tree-state">[focused]</span>` : ""}
+          ${
+            el.actions.length > 0
+              ? `<span class="tree-actions">[${el.actions.join(", ")}]</span>`
+              : ""
+          }
           ${count ? `<span class="tree-count">(${count})</span>` : ""}
           ${
             isTextInput

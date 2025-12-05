@@ -11,7 +11,7 @@ use core_foundation::string::CFString;
 use uuid::Uuid;
 
 use crate::types::{
-    AXElement, AXRole, AXValue, AxioError, AxioResult, Bounds, ElementId, WindowId,
+    AXAction, AXElement, AXRole, AXValue, AxioError, AxioResult, Bounds, ElementId, WindowId,
 };
 
 // ============================================================================
@@ -209,8 +209,42 @@ fn handle_notification(element_id: &ElementId, notification: &str, ax_element: &
 // AXUIElement to AXElement Conversion
 // ============================================================================
 
+/// Extract a string from a CFType value
+fn cftype_to_string(value: &core_foundation::base::CFType) -> Option<String> {
+    unsafe {
+        let type_id = core_foundation::base::CFGetTypeID(value.as_CFTypeRef());
+        if type_id == CFString::type_id() {
+            let cf_string = CFString::wrap_under_get_rule(value.as_CFTypeRef() as *const _);
+            let s = cf_string.to_string();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s)
+            }
+        } else {
+            None
+        }
+    }
+}
+
+/// Extract a boolean from a CFType value
+fn cftype_to_bool(value: &core_foundation::base::CFType) -> Option<bool> {
+    unsafe {
+        use core_foundation::boolean::CFBoolean;
+        let type_id = core_foundation::base::CFGetTypeID(value.as_CFTypeRef());
+        if type_id == CFBoolean::type_id() {
+            let cf_bool = CFBoolean::wrap_under_get_rule(value.as_CFTypeRef() as *const _);
+            Some(cf_bool.into())
+        } else {
+            None
+        }
+    }
+}
+
 /// Build an AXElement from a macOS AXUIElement and register it.
 /// Returns the registered element (may be existing if duplicate).
+///
+/// Uses batch attribute fetching for ~10x fewer IPC calls.
 pub fn build_element(
     ax_element: &AXUIElement,
     window_id: &WindowId,
@@ -219,74 +253,58 @@ pub fn build_element(
 ) -> AXElement {
     use crate::element_registry::ElementRegistry;
 
-    let platform_role = ax_element
-        .attribute(&AXAttribute::role())
-        .ok()
-        .map(|r| r.to_string())
-        .unwrap_or_else(|| "Unknown".to_string());
+    // Batch fetch all attributes in one IPC call
+    let attrs = batch_fetch_attributes(ax_element);
 
+    // Extract role
+    let platform_role = attrs
+        .get(&ATTR_ROLE)
+        .and_then(cftype_to_string)
+        .unwrap_or_else(|| "Unknown".to_string());
     let role = map_platform_role(&platform_role);
 
+    // Extract subrole (only for unknown roles, or if present)
     let subrole = if matches!(role, AXRole::Unknown) {
         Some(platform_role.clone())
     } else {
-        ax_element
-            .attribute(&AXAttribute::subrole())
-            .ok()
-            .map(|sr| sr.to_string())
-            .filter(|s| !s.is_empty())
+        attrs.get(&ATTR_SUBROLE).and_then(cftype_to_string)
     };
 
-    let label = ax_element
-        .attribute(&AXAttribute::title())
-        .ok()
-        .and_then(|t| {
-            let s = t.to_string();
-            if s.is_empty() {
-                None
-            } else {
-                Some(s)
+    // Extract label (title)
+    let label = attrs.get(&ATTR_TITLE).and_then(cftype_to_string);
+
+    // Extract value
+    let value = attrs
+        .get(&ATTR_VALUE)
+        .and_then(|v| extract_value(v, Some(&platform_role)));
+
+    // Extract description
+    let description = attrs.get(&ATTR_DESCRIPTION).and_then(cftype_to_string);
+
+    // Extract placeholder
+    let placeholder = attrs.get(&ATTR_PLACEHOLDER).and_then(cftype_to_string);
+
+    // Extract bounds from position + size
+    let bounds = match (attrs.get(&ATTR_POSITION), attrs.get(&ATTR_SIZE)) {
+        (Some(pos), Some(size)) => {
+            let position = extract_position(pos);
+            let size_val = extract_size(size);
+            match (position, size_val) {
+                (Some((x, y)), Some((w, h))) => Some(Bounds { x, y, w, h }),
+                _ => None,
             }
-        });
+        }
+        _ => None,
+    };
 
-    let value = ax_element
-        .attribute(&AXAttribute::value())
-        .ok()
-        .and_then(|v| extract_value(&v, Some(&platform_role)));
+    // Extract focused
+    let focused = attrs.get(&ATTR_FOCUSED).and_then(cftype_to_bool);
 
-    let description = ax_element
-        .attribute(&AXAttribute::description())
-        .ok()
-        .and_then(|d| {
-            let s = d.to_string();
-            if s.is_empty() {
-                None
-            } else {
-                Some(s)
-            }
-        });
+    // Extract enabled
+    let enabled = attrs.get(&ATTR_ENABLED).and_then(cftype_to_bool);
 
-    let placeholder = ax_element
-        .attribute(&AXAttribute::placeholder_value())
-        .ok()
-        .and_then(|p| {
-            let s = p.to_string();
-            if s.is_empty() {
-                None
-            } else {
-                Some(s)
-            }
-        });
-
-    let bounds = get_element_bounds(ax_element);
-    let focused = ax_element
-        .attribute(&AXAttribute::focused())
-        .ok()
-        .and_then(|f| f.try_into().ok());
-    let enabled = ax_element
-        .attribute(&AXAttribute::enabled())
-        .ok()
-        .and_then(|e| e.try_into().ok());
+    // Fetch actions (separate call, but typically returns quickly)
+    let actions = get_element_actions(ax_element);
 
     let element = AXElement {
         id: ElementId::new(Uuid::new_v4().to_string()),
@@ -302,6 +320,7 @@ pub fn build_element(
         bounds,
         focused,
         enabled,
+        actions,
     };
 
     // Register (returns existing if duplicate)
@@ -435,6 +454,8 @@ pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
         .ok()
         .and_then(|e| e.try_into().ok());
 
+    let actions = get_element_actions(&ax_element);
+
     let updated = AXElement {
         id: element_id.clone(),
         window_id,
@@ -449,6 +470,7 @@ pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
         bounds,
         focused,
         enabled,
+        actions,
     };
 
     ElementRegistry::update(element_id, updated.clone())?;
@@ -500,6 +522,145 @@ fn map_platform_role(platform_role: &str) -> AXRole {
         _ => AXRole::Unknown,
     }
 }
+
+/// Map macOS AX* action strings to platform-agnostic AXAction enum
+fn map_platform_action(action: &str) -> Option<AXAction> {
+    match action {
+        "AXPress" => Some(AXAction::Press),
+        "AXShowMenu" => Some(AXAction::ShowMenu),
+        "AXIncrement" => Some(AXAction::Increment),
+        "AXDecrement" => Some(AXAction::Decrement),
+        "AXConfirm" => Some(AXAction::Confirm),
+        "AXCancel" => Some(AXAction::Cancel),
+        "AXRaise" => Some(AXAction::Raise),
+        "AXPick" => Some(AXAction::Pick),
+        _ => None, // Unknown actions ignored
+    }
+}
+
+/// Convert AXAction to macOS action string for performing actions
+pub fn action_to_macos(action: AXAction) -> &'static str {
+    match action {
+        AXAction::Press => "AXPress",
+        AXAction::ShowMenu => "AXShowMenu",
+        AXAction::Increment => "AXIncrement",
+        AXAction::Decrement => "AXDecrement",
+        AXAction::Confirm => "AXConfirm",
+        AXAction::Cancel => "AXCancel",
+        AXAction::Raise => "AXRaise",
+        AXAction::Pick => "AXPick",
+    }
+}
+
+// ============================================================================
+// Batch Attribute Fetching
+// ============================================================================
+
+use accessibility_sys::{
+    kAXDescriptionAttribute, kAXEnabledAttribute, kAXFocusedAttribute,
+    kAXPlaceholderValueAttribute, kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute,
+    kAXValueAttribute, AXUIElementCopyActionNames, AXUIElementCopyMultipleAttributeValues,
+};
+use core_foundation::array::CFArray;
+use std::collections::HashMap;
+
+/// Attribute indices for batch fetch results
+const ATTR_ROLE: usize = 0;
+const ATTR_SUBROLE: usize = 1;
+const ATTR_TITLE: usize = 2;
+const ATTR_VALUE: usize = 3;
+const ATTR_DESCRIPTION: usize = 4;
+const ATTR_PLACEHOLDER: usize = 5;
+const ATTR_POSITION: usize = 6;
+const ATTR_SIZE: usize = 7;
+const ATTR_FOCUSED: usize = 8;
+const ATTR_ENABLED: usize = 9;
+
+/// Batch fetch multiple attributes in a single IPC call.
+/// Returns a map of attribute index to CFType value.
+fn batch_fetch_attributes(element: &AXUIElement) -> HashMap<usize, core_foundation::base::CFType> {
+    use core_foundation::base::CFType;
+
+    let attr_names: &[&str] = &[
+        kAXRoleAttribute,
+        kAXSubroleAttribute,
+        kAXTitleAttribute,
+        kAXValueAttribute,
+        kAXDescriptionAttribute,
+        kAXPlaceholderValueAttribute,
+        kAXPositionAttribute,
+        kAXSizeAttribute,
+        kAXFocusedAttribute,
+        kAXEnabledAttribute,
+    ];
+
+    // Build CFArray of attribute names
+    let cf_names: Vec<CFString> = attr_names.iter().map(|s| CFString::new(s)).collect();
+    let cf_array = CFArray::from_CFTypes(&cf_names);
+
+    let mut values_ref: core_foundation::array::CFArrayRef = std::ptr::null();
+
+    let result = unsafe {
+        AXUIElementCopyMultipleAttributeValues(
+            element.as_concrete_TypeRef(),
+            cf_array.as_concrete_TypeRef(),
+            0, // 0 = continue on error, we want partial results
+            &mut values_ref,
+        )
+    };
+
+    let mut attrs = HashMap::new();
+
+    if result != 0 || values_ref.is_null() {
+        return attrs;
+    }
+
+    let values = unsafe { CFArray::<CFType>::wrap_under_create_rule(values_ref) };
+
+    for (i, _) in attr_names.iter().enumerate() {
+        if let Some(value) = values.get(i as isize) {
+            // Check if it's kCFNull (missing attribute)
+            let type_id = unsafe { core_foundation::base::CFGetTypeID(value.as_CFTypeRef()) };
+            let null_type_id = unsafe { core_foundation::base::CFNullGetTypeID() };
+            if type_id != null_type_id {
+                // Clone the value by retaining it
+                attrs.insert(i, value.clone());
+            }
+        }
+    }
+
+    attrs
+}
+
+/// Get available actions for an element
+fn get_element_actions(element: &AXUIElement) -> Vec<AXAction> {
+    let mut actions_ref: core_foundation::array::CFArrayRef = std::ptr::null();
+
+    let result =
+        unsafe { AXUIElementCopyActionNames(element.as_concrete_TypeRef(), &mut actions_ref) };
+
+    if result != 0 || actions_ref.is_null() {
+        return vec![];
+    }
+
+    let actions_array = unsafe { CFArray::<CFString>::wrap_under_create_rule(actions_ref) };
+    let mut actions = Vec::new();
+
+    for i in 0..actions_array.len() {
+        if let Some(action_cf) = actions_array.get(i) {
+            let action_str = action_cf.to_string();
+            if let Some(action) = map_platform_action(&action_str) {
+                actions.push(action);
+            }
+        }
+    }
+
+    actions
+}
+
+// ============================================================================
+// Geometry Extraction
+// ============================================================================
 
 /// Extract geometry (position and size) from element
 fn get_element_bounds(element: &AXUIElement) -> Option<Bounds> {

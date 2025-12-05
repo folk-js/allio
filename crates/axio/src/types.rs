@@ -112,6 +112,31 @@ pub enum AXRole {
     Unknown,
 }
 
+// === Action types ===
+
+/// Platform-agnostic action enum.
+/// Maps to macOS kAX*Action constants and Windows UIA patterns.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, TS)]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+pub enum AXAction {
+    /// Primary activation (click, press). macOS: AXPress, Windows: Invoke
+    Press,
+    /// Show context menu. macOS: AXShowMenu
+    ShowMenu,
+    /// Increase value. macOS: AXIncrement, Windows: RangeValue
+    Increment,
+    /// Decrease value. macOS: AXDecrement, Windows: RangeValue
+    Decrement,
+    /// Confirm/submit. macOS: AXConfirm
+    Confirm,
+    /// Cancel operation. macOS: AXCancel
+    Cancel,
+    /// Bring to front. macOS: AXRaise, Windows: SetFocus
+    Raise,
+    /// Pick from list. macOS: AXPick
+    Pick,
+}
+
 // === Core types ===
 
 /// Window info from x-win + accessibility.
@@ -150,6 +175,8 @@ pub struct AXElement {
     pub bounds: Option<Bounds>,
     pub focused: Option<bool>,
     pub enabled: Option<bool>,
+    /// Available actions for this element
+    pub actions: Vec<AXAction>,
 }
 
 // === Events ===
