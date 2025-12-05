@@ -1,74 +1,17 @@
 //! Trait-based event system decoupled from transport.
 
-use crate::types::{AXElement, AXWindow, ElementId, TextRange, WindowId};
+use crate::types::{AXElement, AXWindow, ElementId, ServerEvent, TextRange, WindowId};
 
 /// Implement to receive AXIO events.
 /// Events notify clients when the Registry changes.
 pub trait EventSink: Send + Sync + 'static {
-    // Window lifecycle (depth_order is window IDs in z-order, front to back)
-    fn on_window_added(&self, window: &AXWindow, depth_order: &[WindowId]);
-    fn on_window_changed(&self, window: &AXWindow, depth_order: &[WindowId]);
-    fn on_window_removed(&self, window: &AXWindow, depth_order: &[WindowId]);
-
-    // Window focus (from polling)
-    fn on_focus_changed(&self, window_id: Option<&WindowId>);
-    fn on_active_changed(&self, window_id: &WindowId);
-
-    // Elements
-    fn on_element_added(&self, element: &AXElement);
-    fn on_element_changed(&self, element: &AXElement);
-    fn on_element_removed(&self, element: &AXElement);
-
-    // Element focus (from Tier 1 app observer)
-    fn on_focus_element(
-        &self,
-        window_id: &str,
-        element_id: &ElementId,
-        element: &AXElement,
-        previous_element_id: Option<&ElementId>,
-    );
-
-    // Selection (from Tier 1 app observer)
-    fn on_selection_changed(
-        &self,
-        window_id: &str,
-        element_id: &ElementId,
-        text: &str,
-        range: Option<&TextRange>,
-    );
-
-    // Input
-    fn on_mouse_position(&self, x: f64, y: f64);
+    fn emit(&self, event: ServerEvent);
 }
 
 pub struct NoopEventSink;
 
 impl EventSink for NoopEventSink {
-    fn on_window_added(&self, _window: &AXWindow, _depth_order: &[WindowId]) {}
-    fn on_window_changed(&self, _window: &AXWindow, _depth_order: &[WindowId]) {}
-    fn on_window_removed(&self, _window: &AXWindow, _depth_order: &[WindowId]) {}
-    fn on_focus_changed(&self, _window_id: Option<&WindowId>) {}
-    fn on_active_changed(&self, _window_id: &WindowId) {}
-    fn on_element_added(&self, _element: &AXElement) {}
-    fn on_element_changed(&self, _element: &AXElement) {}
-    fn on_element_removed(&self, _element: &AXElement) {}
-    fn on_focus_element(
-        &self,
-        _window_id: &str,
-        _element_id: &ElementId,
-        _element: &AXElement,
-        _previous_element_id: Option<&ElementId>,
-    ) {
-    }
-    fn on_selection_changed(
-        &self,
-        _window_id: &str,
-        _element_id: &ElementId,
-        _text: &str,
-        _range: Option<&TextRange>,
-    ) {
-    }
-    fn on_mouse_position(&self, _x: f64, _y: f64) {}
+    fn emit(&self, _event: ServerEvent) {}
 }
 
 static EVENT_SINK: std::sync::OnceLock<Box<dyn EventSink>> = std::sync::OnceLock::new();
@@ -84,37 +27,56 @@ pub fn set_event_sink(new_sink: impl EventSink) -> bool {
 
 // Window events
 pub(crate) fn emit_window_added(window: &AXWindow, depth_order: &[WindowId]) {
-    sink().on_window_added(window, depth_order);
+    sink().emit(ServerEvent::WindowAdded {
+        window: window.clone(),
+        depth_order: depth_order.to_vec(),
+    });
 }
 
 pub(crate) fn emit_window_changed(window: &AXWindow, depth_order: &[WindowId]) {
-    sink().on_window_changed(window, depth_order);
+    sink().emit(ServerEvent::WindowChanged {
+        window: window.clone(),
+        depth_order: depth_order.to_vec(),
+    });
 }
 
 pub(crate) fn emit_window_removed(window: &AXWindow, depth_order: &[WindowId]) {
-    sink().on_window_removed(window, depth_order);
+    sink().emit(ServerEvent::WindowRemoved {
+        window: window.clone(),
+        depth_order: depth_order.to_vec(),
+    });
 }
 
 // Focus events
 pub(crate) fn emit_focus_changed(window_id: Option<&WindowId>) {
-    sink().on_focus_changed(window_id);
+    sink().emit(ServerEvent::FocusChanged {
+        window_id: window_id.cloned(),
+    });
 }
 
 pub(crate) fn emit_active_changed(window_id: &WindowId) {
-    sink().on_active_changed(window_id);
+    sink().emit(ServerEvent::ActiveChanged {
+        window_id: window_id.clone(),
+    });
 }
 
 // Element events
 pub(crate) fn emit_element_added(element: &AXElement) {
-    sink().on_element_added(element);
+    sink().emit(ServerEvent::ElementAdded {
+        element: element.clone(),
+    });
 }
 
 pub(crate) fn emit_element_changed(element: &AXElement) {
-    sink().on_element_changed(element);
+    sink().emit(ServerEvent::ElementChanged {
+        element: element.clone(),
+    });
 }
 
 pub(crate) fn emit_element_removed(element: &AXElement) {
-    sink().on_element_removed(element);
+    sink().emit(ServerEvent::ElementRemoved {
+        element: element.clone(),
+    });
 }
 
 // Element focus (Tier 1)
@@ -124,7 +86,12 @@ pub(crate) fn emit_focus_element(
     element: &AXElement,
     previous_element_id: Option<&ElementId>,
 ) {
-    sink().on_focus_element(window_id, element_id, element, previous_element_id);
+    sink().emit(ServerEvent::FocusElement {
+        window_id: window_id.to_string(),
+        element_id: element_id.clone(),
+        element: element.clone(),
+        previous_element_id: previous_element_id.cloned(),
+    });
 }
 
 // Selection (Tier 1)
@@ -134,5 +101,10 @@ pub(crate) fn emit_selection_changed(
     text: &str,
     range: Option<&TextRange>,
 ) {
-    sink().on_selection_changed(window_id, element_id, text, range);
+    sink().emit(ServerEvent::SelectionChanged {
+        window_id: window_id.to_string(),
+        element_id: element_id.clone(),
+        text: text.to_string(),
+        range: range.cloned(),
+    });
 }

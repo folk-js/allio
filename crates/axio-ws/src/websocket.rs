@@ -1,6 +1,6 @@
 //! WebSocket server - thin transport layer over axio.
 
-use axio::{AXElement, AXWindow, EventSink, ServerEvent, SyncInit, WindowId};
+use axio::{EventSink, ServerEvent, SyncInit};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -14,12 +14,6 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
-
-fn send_event(sender: &broadcast::Sender<String>, event: ServerEvent) {
-    if let Ok(json) = serde_json::to_string(&event) {
-        let _ = sender.send(json);
-    }
-}
 
 /// Handler for app-specific RPC methods not in axio core.
 pub type CustomRpcHandler = Arc<dyn Fn(&str, &Value) -> Option<Value> + Send + Sync>;
@@ -46,119 +40,10 @@ impl WebSocketState {
 }
 
 impl EventSink for WebSocketState {
-    fn on_window_added(&self, window: &AXWindow, depth_order: &[WindowId]) {
-        send_event(
-            &self.sender,
-            ServerEvent::WindowAdded {
-                window: window.clone(),
-                depth_order: depth_order.to_vec(),
-            },
-        );
-    }
-
-    fn on_window_changed(&self, window: &AXWindow, depth_order: &[WindowId]) {
-        send_event(
-            &self.sender,
-            ServerEvent::WindowChanged {
-                window: window.clone(),
-                depth_order: depth_order.to_vec(),
-            },
-        );
-    }
-
-    fn on_window_removed(&self, window: &AXWindow, depth_order: &[WindowId]) {
-        send_event(
-            &self.sender,
-            ServerEvent::WindowRemoved {
-                window: window.clone(),
-                depth_order: depth_order.to_vec(),
-            },
-        );
-    }
-
-    fn on_focus_changed(&self, window_id: Option<&WindowId>) {
-        send_event(
-            &self.sender,
-            ServerEvent::FocusChanged {
-                window_id: window_id.cloned(),
-            },
-        );
-    }
-
-    fn on_active_changed(&self, window_id: &WindowId) {
-        send_event(
-            &self.sender,
-            ServerEvent::ActiveChanged {
-                window_id: window_id.clone(),
-            },
-        );
-    }
-
-    fn on_element_added(&self, element: &AXElement) {
-        send_event(
-            &self.sender,
-            ServerEvent::ElementAdded {
-                element: element.clone(),
-            },
-        );
-    }
-
-    fn on_element_changed(&self, element: &AXElement) {
-        send_event(
-            &self.sender,
-            ServerEvent::ElementChanged {
-                element: element.clone(),
-            },
-        );
-    }
-
-    fn on_element_removed(&self, element: &AXElement) {
-        send_event(
-            &self.sender,
-            ServerEvent::ElementRemoved {
-                element: element.clone(),
-            },
-        );
-    }
-
-    fn on_focus_element(
-        &self,
-        window_id: &str,
-        element_id: &axio::ElementId,
-        element: &AXElement,
-        previous_element_id: Option<&axio::ElementId>,
-    ) {
-        send_event(
-            &self.sender,
-            ServerEvent::FocusElement {
-                window_id: window_id.to_string(),
-                element_id: element_id.clone(),
-                element: element.clone(),
-                previous_element_id: previous_element_id.cloned(),
-            },
-        );
-    }
-
-    fn on_selection_changed(
-        &self,
-        window_id: &str,
-        element_id: &axio::ElementId,
-        text: &str,
-        range: Option<&axio::TextRange>,
-    ) {
-        send_event(
-            &self.sender,
-            ServerEvent::SelectionChanged {
-                window_id: window_id.to_string(),
-                element_id: element_id.clone(),
-                text: text.to_string(),
-                range: range.cloned(),
-            },
-        );
-    }
-
-    fn on_mouse_position(&self, x: f64, y: f64) {
-        send_event(&self.sender, ServerEvent::MousePosition { x, y });
+    fn emit(&self, event: ServerEvent) {
+        if let Ok(json) = serde_json::to_string(&event) {
+            let _ = self.sender.send(json);
+        }
     }
 }
 
@@ -202,9 +87,9 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
 
     // Compute depth_order (window IDs sorted by z_index, front to back)
     windows.sort_by_key(|w| w.z_index);
-    let depth_order: Vec<WindowId> = windows
+    let depth_order: Vec<axio::WindowId> = windows
         .iter()
-        .map(|w| WindowId::new(w.id.clone()))
+        .map(|w| axio::WindowId::new(w.id.clone()))
         .collect();
 
     // Query focused element and selection for the active window's app
@@ -244,8 +129,8 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
                         let response = handle_request(&text, &ws_state);
                         // Drain any pending events before sending RPC response
                         // This ensures events triggered by RPC are sent first
-                        while let Ok(event) = rx.try_recv() {
-                            let _ = socket.send(Message::Text(event)).await;
+                        while let Ok(event_json) = rx.try_recv() {
+                            let _ = socket.send(Message::Text(event_json)).await;
                         }
                         let _ = socket.send(Message::Text(response)).await;
                     }
@@ -267,8 +152,8 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
 
             broadcast = rx.recv() => {
                 match broadcast {
-                    Ok(msg) => {
-                        if socket.send(Message::Text(msg)).await.is_err() {
+                    Ok(event_json) => {
+                        if socket.send(Message::Text(event_json)).await.is_err() {
                             break;
                         }
                     }

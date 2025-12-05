@@ -41,8 +41,8 @@ fn get_overlay_files() -> Vec<String> {
 
 fn get_overlay_url(filename: &str) -> String {
     if is_dev_mode() {
-        // Dev mode: use vite dev server
-        format!("http://localhost:1420/{}", filename)
+        // Dev mode: use vite dev server with full path
+        format!("http://localhost:1420/src-web/overlays/{}", filename)
     } else {
         // Production: use tauri asset protocol
         format!("tauri://localhost/{}", filename)
@@ -168,7 +168,7 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .manage(AppState::default())
         .setup(|app| {
-            // Create broadcast channel for WebSocket broadcasts
+            // Create broadcast channel for WebSocket events
             let (sender, _) = tokio::sync::broadcast::channel(1000);
             let sender = std::sync::Arc::new(sender);
 

@@ -1,6 +1,6 @@
 //! Global mouse position tracking.
 
-use axio::EventSink;
+use axio::{EventSink, ServerEvent};
 use axio_ws::WebSocketState;
 use std::thread;
 use std::time::Duration;
@@ -37,7 +37,7 @@ pub fn start_mouse_tracking(ws_state: WebSocketState) {
 
                 if changed {
                     last_position = Some((x, y));
-                    ws_state.on_mouse_position(x, y);
+                    ws_state.emit(ServerEvent::MousePosition { x, y });
                 }
             }
 

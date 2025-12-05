@@ -41,7 +41,6 @@ export default defineConfig(async () => ({
     },
   },
   // Build config for multi-page app
-  root: "src-web/overlays",
   build: {
     outDir: path.resolve(__dirname, "dist"),
     emptyOutDir: true,
