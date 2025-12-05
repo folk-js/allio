@@ -203,6 +203,8 @@ pub struct SyncInit {
     pub selection: Option<Selection>,
     /// Window IDs in z-order (front to back)
     pub depth_order: Vec<WindowId>,
+    /// Whether accessibility permissions are granted
+    pub accessibility_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

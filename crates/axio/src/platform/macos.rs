@@ -15,6 +15,32 @@ use crate::types::{
 };
 
 // ============================================================================
+// Accessibility Permission Check
+// ============================================================================
+
+/// Check if accessibility permissions are granted.
+/// Returns true if trusted, false otherwise.
+pub fn check_accessibility_permissions() -> bool {
+    unsafe {
+        // AXIsProcessTrusted returns true if the app has accessibility permissions
+        accessibility_sys::AXIsProcessTrusted()
+    }
+}
+
+/// Check accessibility permissions and log a warning if not granted.
+/// Call this at app startup to help debug permission issues.
+pub fn verify_accessibility_permissions() {
+    if check_accessibility_permissions() {
+        println!("[axio] ✓ Accessibility permissions granted");
+    } else {
+        eprintln!("[axio] ⚠️  WARNING: Accessibility permissions NOT granted!");
+        eprintln!("[axio]    Go to System Preferences > Privacy & Security > Accessibility");
+        eprintln!("[axio]    and add this application to the list.");
+        eprintln!("[axio]    You may need to remove and re-add the app after rebuilding.");
+    }
+}
+
+// ============================================================================
 // macOS Accessibility Notifications
 // ============================================================================
 

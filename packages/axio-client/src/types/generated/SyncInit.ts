@@ -8,4 +8,8 @@ export type SyncInit = { windows: Array<AXWindow>, elements: Array<AXElement>, a
 /**
  * Window IDs in z-order (front to back)
  */
-depth_order: Array<WindowId>, };
+depth_order: Array<WindowId>, 
+/**
+ * Whether accessibility permissions are granted
+ */
+accessibility_enabled: boolean, };

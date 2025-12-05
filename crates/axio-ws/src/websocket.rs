@@ -227,6 +227,7 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
         focused_element,
         selection,
         depth_order,
+        accessibility_enabled: axio::platform::check_accessibility_permissions(),
     };
     let event = ServerEvent::SyncInit(init);
     if let Ok(msg) = serde_json::to_string(&event) {

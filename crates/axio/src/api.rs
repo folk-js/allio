@@ -50,6 +50,8 @@ pub fn unwatch(element_id: &ElementId) {
 
 /// Initialize the AXIO system.
 pub fn initialize() {
+    // Check accessibility permissions and warn if not granted
+    crate::platform::verify_accessibility_permissions();
     ElementRegistry::initialize();
 }
 
