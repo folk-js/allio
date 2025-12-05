@@ -16,7 +16,7 @@ core-foundation = "0.10.1"
 uuid = { version = "1", features = ["v4"] }
 once_cell = "1.19"
 thiserror = "1.0"
-x-win = "5.0.1"
+x-win = "5.3.3"
 ts-rs = "10"
 
 [target.'cfg(target_os = "macos")'.dependencies]

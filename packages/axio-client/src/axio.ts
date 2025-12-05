@@ -50,7 +50,7 @@ type WatchCallback = (element: AXElement) => void;
 export class AXIO extends EventEmitter<AxioEvents> {
   private ws: WebSocket | null = null;
   private requestId = 0;
-  private pending = new Map<string, Pending>();
+  private pending = new Map<number, Pending>();
   private watchCallbacks = new Map<string, Set<WatchCallback>>();
 
   // === State (mirrors Registry) ===
@@ -206,7 +206,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
       if (!this.connected) return reject(new Error("Not connected"));
-      const id = `r${++this.requestId}`;
+      const id = ++this.requestId;
       const timer = window.setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`Timeout: ${method}`));

@@ -22,23 +22,28 @@ class AXTreeOverlay {
   }
 
   private async init() {
-    // Simple event handlers - just re-render when things change
-    this.axio.on("active:changed", () => this.render());
-    this.axio.on("focus:changed", () => this.render());
-    this.axio.on("window:added", () => this.render());
-    this.axio.on("window:changed", () => this.render());
-    this.axio.on("window:removed", () => this.render());
+    const render = () => this.render();
 
+    // Re-render on window/element changes
+    (
+      [
+        "active:changed",
+        "focus:changed",
+        "window:added",
+        "window:changed",
+        "window:removed",
+        "element:changed",
+        "element:removed",
+      ] as const
+    ).forEach((e) => this.axio.on(e, render));
+
+    // Auto-watch textboxes for value changes
     this.axio.on("element:added", ({ element }) => {
-      // Auto-watch textboxes for value changes
       if (element.role === "textbox" || element.role === "searchbox") {
-        this.axio.watch(element.id, () => this.render());
+        this.axio.watch(element.id, render);
       }
-      this.render();
+      render();
     });
-
-    this.axio.on("element:changed", () => this.render());
-    this.axio.on("element:removed", () => this.render());
 
     // Mouse tracking for clickthrough
     this.axio.on("mouse:position", ({ x, y }) => {

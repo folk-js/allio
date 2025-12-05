@@ -1,64 +1,49 @@
-import { AXIO, AXWindow } from "@axio/client";
+import { AXIO } from "@axio/client";
 
 const axio = new AXIO();
 const output = document.getElementById("output")!;
 
-function property(key: string, value: any): string {
-  if (value === undefined || value === null) return "";
-  return `<div class="property"><span class="property-key">${key}</span><span class="property-value">${value}</span></div>`;
-}
+function render() {
+  const windows = [...axio.windows.values()];
 
-function renderWindows(windows: ReadonlyArray<AXWindow>) {
   if (windows.length === 0) {
     output.innerHTML = '<div class="connecting">No windows detected</div>';
     return;
   }
 
-  let html = "";
-
-  windows.forEach((window) => {
-    const focusedClass = window.focused ? "focused" : "";
-    html += `<div class="window-item ${focusedClass}">`;
-    html += `<div class="window-title">${
-      window.title || window.app_name || "Untitled Window"
-    }</div>`;
-
-    html += property("id", window.id);
-    html += property("app_name", window.app_name);
-    html += property("focused", window.focused);
-
-    const { x, y, w, h } = window.bounds;
-    html += property("position", `(${x}, ${y})`);
-    html += property("size", `${w} × ${h}`);
-
-    html += `</div>`;
-  });
-
-  output.innerHTML = html;
+  output.innerHTML = windows
+    .map((w) => {
+      const { x, y, w: width, h: height } = w.bounds;
+      return `
+        <div class="window-item ${w.focused ? "focused" : ""}">
+          <div class="window-title">${w.title || w.app_name || "Untitled"}</div>
+          <div class="property"><span class="property-key">id</span><span class="property-value">${
+            w.id
+          }</span></div>
+          <div class="property"><span class="property-key">app</span><span class="property-value">${
+            w.app_name
+          }</span></div>
+          <div class="property"><span class="property-key">position</span><span class="property-value">(${x}, ${y})</span></div>
+          <div class="property"><span class="property-key">size</span><span class="property-value">${width} × ${height}</span></div>
+        </div>
+      `;
+    })
+    .join("");
 }
 
-async function init() {
-  try {
-    await axio.connect();
-    output.innerHTML =
-      '<div class="connecting">Connected. Waiting for windows...</div>';
+// Single pattern: connect, then render on any window/focus change
+axio.connect().then(() => {
+  // sync:init already populated axio.windows, just render
+  render();
 
-    const updateWindows = () => renderWindows([...axio.windows.values()]);
-
-    // Use new event names
-    axio.on("window:added", updateWindows);
-    axio.on("window:changed", updateWindows);
-    axio.on("window:removed", updateWindows);
-    axio.on("focus:changed", updateWindows);
-    axio.on("active:changed", updateWindows);
-
-    if (axio.windows.size > 0) {
-      renderWindows([...axio.windows.values()]);
-    }
-  } catch (error) {
-    output.innerHTML = `<div class="connecting">Error: ${error}</div>`;
-    console.error(error);
-  }
-}
-
-init();
+  // Re-render on any change
+  const events = [
+    "sync:init",
+    "window:added",
+    "window:changed",
+    "window:removed",
+    "focus:changed",
+    "active:changed",
+  ] as const;
+  events.forEach((e) => axio.on(e, render));
+});
