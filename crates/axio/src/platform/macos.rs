@@ -116,6 +116,8 @@ struct AppState {
     #[allow(dead_code)] // Kept alive to maintain observer subscription
     observer: AXObserverRef,
     focused_element_id: Option<ElementId>,
+    /// For Tier 2: track if focused element should be auto-watched
+    focused_is_watchable: bool,
 }
 
 // SAFETY: AXObserverRef is a CFTypeRef (thread-safe with proper retain/release)
@@ -140,6 +142,7 @@ pub fn ensure_app_observer(pid: u32) {
                 AppState {
                     observer,
                     focused_element_id: None,
+                    focused_is_watchable: false,
                 },
             );
         }
@@ -237,7 +240,22 @@ unsafe extern "C" fn app_observer_callback(
     }
 }
 
-/// Handle focus change at app level (Tier 1)
+/// Check if an element should be auto-watched (Tier 2).
+/// These are interactive elements whose value can change while focused.
+fn should_auto_watch(role: &crate::types::AXRole) -> bool {
+    use crate::types::AXRole;
+    matches!(
+        role,
+        AXRole::Textbox
+            | AXRole::Searchbox
+            | AXRole::Checkbox
+            | AXRole::Radio
+            | AXRole::Toggle
+            | AXRole::Slider
+    )
+}
+
+/// Handle focus change at app level (Tier 1 + Tier 2)
 fn handle_app_focus_changed(pid: u32, element_ref: accessibility_sys::AXUIElementRef) {
     let ax_element = unsafe { AXUIElement::wrap_under_get_rule(element_ref) };
 
@@ -249,18 +267,41 @@ fn handle_app_focus_changed(pid: u32, element_ref: accessibility_sys::AXUIElemen
 
     // Build and register the element
     let element = build_element(&ax_element, &window_id, pid, None);
+    let new_is_watchable = should_auto_watch(&element.role);
 
-    // Get previous focused element and update state
-    let previous_element_id = {
+    // Get previous focused element info and update state
+    let (previous_element_id, previous_was_watchable) = {
         let mut observers = APP_OBSERVERS.lock().unwrap();
         if let Some(state) = observers.get_mut(&pid) {
-            let prev = state.focused_element_id.clone();
+            let prev_id = state.focused_element_id.clone();
+            let prev_was_watchable = state.focused_is_watchable;
             state.focused_element_id = Some(element.id.clone());
-            prev
+            state.focused_is_watchable = new_is_watchable;
+            (prev_id, prev_was_watchable)
         } else {
-            None
+            (None, false)
         }
     };
+
+    // Tier 2: Auto-watch/unwatch interactive elements
+    let same_element = previous_element_id.as_ref() == Some(&element.id);
+
+    // Unwatch previous element (if different from new one)
+    if previous_was_watchable && !same_element {
+        if let Some(ref prev_id) = previous_element_id {
+            println!("[axio] Tier 2: auto-unwatch {:?}", prev_id);
+            crate::element_registry::ElementRegistry::unwatch(prev_id);
+        }
+    }
+
+    // Watch new element (if watchable and different from previous)
+    if new_is_watchable && !same_element {
+        println!(
+            "[axio] Tier 2: auto-watch {:?} ({:?})",
+            element.id, element.role
+        );
+        let _ = crate::element_registry::ElementRegistry::watch(&element.id);
+    }
 
     // Emit focus:element event
     crate::events::emit_focus_element(

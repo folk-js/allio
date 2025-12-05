@@ -24,25 +24,21 @@ class AXTreeOverlay {
     const render = () => this.render();
 
     // Re-render on window/element changes
+    // Note: Tier 2 auto-watches text elements on focus, so element:changed fires automatically
     (
       [
         "active:changed",
         "focus:changed",
+        "focus:element", // Tier 1: element focus changes
+        "selection:changed", // Tier 1: text selection changes
         "window:added",
         "window:changed",
         "window:removed",
+        "element:added",
         "element:changed",
         "element:removed",
       ] as const
     ).forEach((e) => this.axio.on(e, render));
-
-    // Auto-watch textboxes for value changes
-    this.axio.on("element:added", ({ element }) => {
-      if (element.role === "textbox" || element.role === "searchbox") {
-        this.axio.watch(element.id, render);
-      }
-      render();
-    });
 
     // Mouse tracking for clickthrough - transparent unless over tree
     this.axio.on("mouse:position", ({ x, y }) => {
