@@ -240,17 +240,24 @@ pub fn start_polling(config: PollingConfig) {
                 let current_ids: HashSet<&String> = current_map.keys().collect();
                 let last_ids: HashSet<&String> = last_windows.keys().collect();
 
+                // Compute depth_order (window IDs sorted by z_index, front to back)
+                let depth_order: Vec<WindowId> = {
+                    let mut sorted = current_windows.clone();
+                    sorted.sort_by_key(|w| w.z_index);
+                    sorted.into_iter().map(|w| WindowId::new(w.id)).collect()
+                };
+
                 // Detect removed windows (emit before removal, include full data)
                 for removed_id in last_ids.difference(&current_ids) {
                     if let Some(window) = last_windows.get(*removed_id) {
-                        crate::events::emit_window_removed(window);
+                        crate::events::emit_window_removed(window, &depth_order);
                     }
                 }
 
                 // Detect added windows
                 for added_id in current_ids.difference(&last_ids) {
                     if let Some(window) = current_map.get(*added_id) {
-                        crate::events::emit_window_added(window);
+                        crate::events::emit_window_added(window, &depth_order);
                     }
                 }
 
@@ -259,7 +266,7 @@ pub fn start_polling(config: PollingConfig) {
                     let current = current_map.get(*id).unwrap();
                     let last = last_windows.get(*id).unwrap();
                     if current != last {
-                        crate::events::emit_window_changed(current);
+                        crate::events::emit_window_changed(current, &depth_order);
                     }
                 }
 

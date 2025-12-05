@@ -201,6 +201,8 @@ pub struct SyncInit {
     pub focused_window: Option<String>,
     pub focused_element: Option<AXElement>,
     pub selection: Option<Selection>,
+    /// Window IDs in z-order (front to back)
+    pub depth_order: Vec<WindowId>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -213,11 +215,20 @@ pub enum ServerEvent {
 
     // Window lifecycle (from polling)
     #[serde(rename = "window:added")]
-    WindowAdded { window: AXWindow },
+    WindowAdded {
+        window: AXWindow,
+        depth_order: Vec<WindowId>,
+    },
     #[serde(rename = "window:changed")]
-    WindowChanged { window: AXWindow },
+    WindowChanged {
+        window: AXWindow,
+        depth_order: Vec<WindowId>,
+    },
     #[serde(rename = "window:removed")]
-    WindowRemoved { window: AXWindow },
+    WindowRemoved {
+        window: AXWindow,
+        depth_order: Vec<WindowId>,
+    },
 
     // Element lifecycle (from RPC, watches)
     #[serde(rename = "element:added")]

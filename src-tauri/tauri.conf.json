@@ -28,7 +28,7 @@
   "productName": "axio",
   "mainBinaryName": "axio",
   "version": "0.0.0",
-  "identifier": "com.tauri.dev",
+  "identifier": "com.folkjs.axio",
   "plugins": {},
   "app": {
     "security": {
@@ -46,7 +46,7 @@
         "alwaysOnTop": true,
         "resizable": false,
         "decorations": false,
-        "useHttpsScheme": true,
+        "useHttpsScheme": false,
         "skipTaskbar": true,
         "visible": false
       }

@@ -2,7 +2,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{
-    fs,
     sync::{
         atomic::{AtomicBool, Ordering},
         Mutex,
@@ -19,45 +18,35 @@ mod mouse;
 use axio::windows::{get_main_screen_dimensions, PollingConfig, WindowEnumOptions};
 use axio_ws::WebSocketState;
 
-// Dynamic overlay handling
+// Check if running in dev mode
+fn is_dev_mode() -> bool {
+    // In dev mode, tauri runs with the dev server
+    // Check if running from target/debug or target/release
+    let exe_path = std::env::current_exe().unwrap_or_default();
+    let exe_dir = exe_path.parent().unwrap_or(std::path::Path::new(""));
+    exe_dir.ends_with("debug") || exe_dir.ends_with("release")
+}
+
+// Get overlay files - hardcoded list since we know what we build
 fn get_overlay_files() -> Vec<String> {
-    let exe_path = std::env::current_exe().expect("Failed to get current executable path");
-    let exe_dir = exe_path
-        .parent()
-        .expect("Executable path has no parent directory");
-
-    // In development: target/debug -> go up 2 levels to project root (workspace layout)
-    // In production: executable location varies
-    let project_root = if exe_dir.ends_with("debug") || exe_dir.ends_with("release") {
-        exe_dir
-            .parent() // target/
-            .and_then(|p| p.parent()) // project root
-            .expect("Failed to find project root from debug/release directory")
-    } else {
-        exe_dir
-    };
-
-    let overlays_path = project_root.join("src-web").join("overlays");
-    let mut overlays = Vec::new();
-
-    if overlays_path.exists() {
-        if let Ok(entries) = fs::read_dir(&overlays_path) {
-            for entry in entries.flatten() {
-                if let Some(file_name) = entry.file_name().to_str() {
-                    if file_name.ends_with(".html") {
-                        overlays.push(file_name.to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    overlays.sort();
-    overlays
+    // These are the HTML files in src-web/overlays that get built to dist/
+    vec![
+        "axtrees.html".to_string(),
+        "identifiers.html".to_string(),
+        "ports.html".to_string(),
+        "sand.html".to_string(),
+        "windows-debug.html".to_string(),
+    ]
 }
 
 fn get_overlay_url(filename: &str) -> String {
-    format!("http://localhost:1420/src-web/overlays/{}", filename)
+    if is_dev_mode() {
+        // Dev mode: use vite dev server
+        format!("http://localhost:1420/{}", filename)
+    } else {
+        // Production: use tauri asset protocol
+        format!("tauri://localhost/{}", filename)
+    }
 }
 
 // Helper function to get main window
@@ -222,11 +211,13 @@ fn main() {
                 window.show().ok();
             }
 
-            // Set up global shortcut with proper state handling
+            // Set up global shortcuts
             #[cfg(desktop)]
             {
                 let toggle_shortcut =
                     Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyE);
+                let devtools_shortcut =
+                    Shortcut::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::KeyI);
 
                 app.handle().plugin(
                     tauri_plugin_global_shortcut::Builder::new()
@@ -234,6 +225,15 @@ fn main() {
                             if event.state() == ShortcutState::Pressed {
                                 if shortcut == &toggle_shortcut {
                                     let _ = toggle_clickthrough_internal(&app_handle);
+                                } else if shortcut == &devtools_shortcut {
+                                    // Toggle dev tools
+                                    if let Some(window) = app_handle.get_webview_window("main") {
+                                        if window.is_devtools_open() {
+                                            window.close_devtools();
+                                        } else {
+                                            window.open_devtools();
+                                        }
+                                    }
                                 }
                             }
                         })
@@ -241,6 +241,7 @@ fn main() {
                 )?;
 
                 app.global_shortcut().register(toggle_shortcut)?;
+                app.global_shortcut().register(devtools_shortcut)?;
             }
 
             // Get overlay files once and reuse

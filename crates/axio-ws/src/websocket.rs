@@ -46,29 +46,32 @@ impl WebSocketState {
 }
 
 impl EventSink for WebSocketState {
-    fn on_window_added(&self, window: &AXWindow) {
+    fn on_window_added(&self, window: &AXWindow, depth_order: &[WindowId]) {
         send_event(
             &self.sender,
             ServerEvent::WindowAdded {
                 window: window.clone(),
+                depth_order: depth_order.to_vec(),
             },
         );
     }
 
-    fn on_window_changed(&self, window: &AXWindow) {
+    fn on_window_changed(&self, window: &AXWindow, depth_order: &[WindowId]) {
         send_event(
             &self.sender,
             ServerEvent::WindowChanged {
                 window: window.clone(),
+                depth_order: depth_order.to_vec(),
             },
         );
     }
 
-    fn on_window_removed(&self, window: &AXWindow) {
+    fn on_window_removed(&self, window: &AXWindow, depth_order: &[WindowId]) {
         send_event(
             &self.sender,
             ServerEvent::WindowRemoved {
                 window: window.clone(),
+                depth_order: depth_order.to_vec(),
             },
         );
     }
@@ -195,7 +198,14 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
 
     // Send initial state as sync:init
     let active = axio::get_active_window();
-    let windows = axio::get_current_windows();
+    let mut windows = axio::get_current_windows();
+
+    // Compute depth_order (window IDs sorted by z_index, front to back)
+    windows.sort_by_key(|w| w.z_index);
+    let depth_order: Vec<WindowId> = windows
+        .iter()
+        .map(|w| WindowId::new(w.id.clone()))
+        .collect();
 
     // Query focused element and selection for the active window's app
     let (focused_element, selection) = if let Some(ref window_id) = active {
@@ -216,6 +226,7 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
         focused_window: active, // Assume focused = active on connect
         focused_element,
         selection,
+        depth_order,
     };
     let event = ServerEvent::SyncInit(init);
     if let Ok(msg) = serde_json::to_string(&event) {

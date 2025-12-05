@@ -169,9 +169,9 @@ class PortsDemo {
 
   /** Get all windows sorted by z-order (frontmost first) */
   private get windows(): AXWindow[] {
-    return [...this.axio.windows.values()].sort(
-      (a, b) => a.z_index - b.z_index
-    );
+    return this.axio.depthOrder
+      .map((id) => this.axio.windows.get(id))
+      .filter((w): w is AXWindow => !!w);
   }
 
   private getWindowAt(x: number, y: number): AXWindow | null {

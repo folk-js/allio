@@ -38,7 +38,19 @@ type EventData<E extends EventName> = Extract<
   ServerEvent,
   { event: E }
 >["data"];
-type AxioEvents = { [E in EventName]: [EventData<E>] };
+
+// Namespace events (e.g., 'window' catches 'window:added', 'window:changed', 'window:removed')
+type EventNamespace =
+  | "window"
+  | "element"
+  | "focus"
+  | "active"
+  | "selection"
+  | "sync"
+  | "mouse";
+type NamespaceEvents = { [N in EventNamespace]: [ServerEvent] };
+
+type AxioEvents = { [E in EventName]: [EventData<E>] } & NamespaceEvents;
 
 type Pending = {
   resolve: (r: unknown) => void;
@@ -59,6 +71,9 @@ export class AXIO extends EventEmitter<AxioEvents> {
   readonly elements = new Map<string, AXElement>();
   readonly watched = new Set<string>();
   activeWindow: WindowId | null = null;
+
+  /** Window IDs sorted by z-order (front to back) */
+  depthOrder: WindowId[] = [];
 
   // Tier 1: Element focus and selection tracking
   focusedElement: AXElement | null = null;
@@ -273,6 +288,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
           focused_window,
           focused_element,
           selection,
+          depth_order,
         } = event.data;
         this.windows.clear();
         this.elements.clear();
@@ -282,6 +298,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
         this.focusedWindow = focused_window;
         this.focusedElement = focused_element;
         this.selection = selection;
+        this.depthOrder = depth_order;
         this.log(
           `synced: ${windows.length} windows, ${elements.length} elements`
         );
@@ -289,18 +306,23 @@ export class AXIO extends EventEmitter<AxioEvents> {
       }
 
       case "window:added": {
-        this.windows.set(event.data.window.id, event.data.window);
+        const { window, depth_order } = event.data;
+        this.windows.set(window.id, window);
+        this.depthOrder = depth_order;
         break;
       }
 
       case "window:changed": {
-        this.windows.set(event.data.window.id, event.data.window);
+        const { window, depth_order } = event.data;
+        this.windows.set(window.id, window);
+        this.depthOrder = depth_order;
         break;
       }
 
       case "window:removed": {
-        const { window } = event.data;
+        const { window, depth_order } = event.data;
         this.windows.delete(window.id);
+        this.depthOrder = depth_order;
         for (const [id, el] of this.elements) {
           if (el.window_id === window.id) {
             this.elements.delete(id);
@@ -357,8 +379,12 @@ export class AXIO extends EventEmitter<AxioEvents> {
         break;
     }
 
-    // Emit for external listeners
+    // Emit specific event for external listeners
     (this.emit as Function)(event.event, event.data);
+
+    // Emit namespace event (e.g., 'window' for 'window:added')
+    const namespace = event.event.split(":")[0] as EventNamespace;
+    (this.emit as Function)(namespace, event);
   }
 
   private async call<M extends RpcMethod>(

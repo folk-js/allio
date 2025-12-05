@@ -5,10 +5,10 @@ use crate::types::{AXElement, AXWindow, ElementId, TextRange, WindowId};
 /// Implement to receive AXIO events.
 /// Events notify clients when the Registry changes.
 pub trait EventSink: Send + Sync + 'static {
-    // Window lifecycle
-    fn on_window_added(&self, window: &AXWindow);
-    fn on_window_changed(&self, window: &AXWindow);
-    fn on_window_removed(&self, window: &AXWindow);
+    // Window lifecycle (depth_order is window IDs in z-order, front to back)
+    fn on_window_added(&self, window: &AXWindow, depth_order: &[WindowId]);
+    fn on_window_changed(&self, window: &AXWindow, depth_order: &[WindowId]);
+    fn on_window_removed(&self, window: &AXWindow, depth_order: &[WindowId]);
 
     // Window focus (from polling)
     fn on_focus_changed(&self, window_id: Option<&WindowId>);
@@ -44,9 +44,9 @@ pub trait EventSink: Send + Sync + 'static {
 pub struct NoopEventSink;
 
 impl EventSink for NoopEventSink {
-    fn on_window_added(&self, _window: &AXWindow) {}
-    fn on_window_changed(&self, _window: &AXWindow) {}
-    fn on_window_removed(&self, _window: &AXWindow) {}
+    fn on_window_added(&self, _window: &AXWindow, _depth_order: &[WindowId]) {}
+    fn on_window_changed(&self, _window: &AXWindow, _depth_order: &[WindowId]) {}
+    fn on_window_removed(&self, _window: &AXWindow, _depth_order: &[WindowId]) {}
     fn on_focus_changed(&self, _window_id: Option<&WindowId>) {}
     fn on_active_changed(&self, _window_id: &WindowId) {}
     fn on_element_added(&self, _element: &AXElement) {}
@@ -83,16 +83,16 @@ pub fn set_event_sink(new_sink: impl EventSink) -> bool {
 }
 
 // Window events
-pub(crate) fn emit_window_added(window: &AXWindow) {
-    sink().on_window_added(window);
+pub(crate) fn emit_window_added(window: &AXWindow, depth_order: &[WindowId]) {
+    sink().on_window_added(window, depth_order);
 }
 
-pub(crate) fn emit_window_changed(window: &AXWindow) {
-    sink().on_window_changed(window);
+pub(crate) fn emit_window_changed(window: &AXWindow, depth_order: &[WindowId]) {
+    sink().on_window_changed(window, depth_order);
 }
 
-pub(crate) fn emit_window_removed(window: &AXWindow) {
-    sink().on_window_removed(window);
+pub(crate) fn emit_window_removed(window: &AXWindow, depth_order: &[WindowId]) {
+    sink().on_window_removed(window, depth_order);
 }
 
 // Focus events

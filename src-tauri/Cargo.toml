@@ -19,7 +19,7 @@ axio = { path = "../crates/axio" }
 axio-ws = { path = "../crates/axio-ws" }
 
 # Tauri framework
-tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
+tauri = { version = "2", features = ["tray-icon", "macos-private-api", "devtools"] }
 tauri-plugin-shell = "2"
 
 # Async runtime (needed for WebSocket server)
