@@ -225,9 +225,8 @@ export class AXIO extends EventEmitter<AxioEvents> {
   /** Set clickthrough mode (for overlay apps) */
   async setClickthrough(enabled: boolean): Promise<void> {
     // Always tell server - state may have changed via global shortcut
-    this.clickthrough = enabled;
-    this.log("clickthrough", enabled ? "enabled" : "disabled");
     await this.rawCall("set_clickthrough", { enabled });
+    this.clickthrough = enabled;
   }
 
   // === Raw RPC ===
@@ -281,7 +280,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
         elements.forEach((e) => this.elements.set(e.id, e));
         this.activeWindow = active_window;
         this.focusedWindow = focused_window;
-        this.focusedElement = focused_element ?? null;
+        this.focusedElement = focused_element;
         this.selection = selection;
         this.log(
           `synced: ${windows.length} windows, ${elements.length} elements`
@@ -366,7 +365,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
     method: M,
     args: RpcArgs<M>
   ): Promise<RpcReturns[M]> {
-    const result = await this.rawCall(method, args as Record<string, unknown>);
+    const result = await this.rawCall(method, args);
     return result as RpcReturns[M];
   }
 
