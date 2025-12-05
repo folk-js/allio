@@ -42,12 +42,15 @@ async function init() {
     output.innerHTML =
       '<div class="connecting">Connected. Waiting for windows...</div>';
 
-    axio.on("windows", (windows) => {
-      renderWindows(windows);
-    });
+    const updateWindows = () => renderWindows([...axio.windows.values()]);
 
-    if (axio.windows.length > 0) {
-      renderWindows(axio.windows);
+    axio.on("sync:snapshot", updateWindows);
+    axio.on("window:opened", updateWindows);
+    axio.on("window:closed", updateWindows);
+    axio.on("window:updated", updateWindows);
+
+    if (axio.windows.size > 0) {
+      renderWindows([...axio.windows.values()]);
     }
   } catch (error) {
     output.innerHTML = `<div class="connecting">Error: ${error}</div>`;

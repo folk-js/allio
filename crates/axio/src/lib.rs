@@ -5,7 +5,7 @@
 mod types;
 pub use types::{
     AXElement, AXRole, AXValue, AXWindow, AxioError, AxioResult, Bounds, ElementId, Position,
-    ServerEvent, Size, WindowId,
+    ServerEvent, Size, Snapshot, WindowId,
 };
 
 pub mod events;
@@ -18,4 +18,6 @@ pub mod window_manager;
 pub mod windows;
 
 pub use api::{children, click, element_at, get, get_many, refresh, unwatch, watch, write};
-pub use windows::{get_current_windows, get_main_screen_dimensions, get_windows, start_polling};
+pub use windows::{
+    get_active_window, get_current_windows, get_main_screen_dimensions, get_windows, start_polling,
+};

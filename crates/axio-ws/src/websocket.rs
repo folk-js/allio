@@ -1,6 +1,6 @@
 //! WebSocket server - thin transport layer over axio.
 
-use axio::{AXElement, AXWindow, ElementId, EventSink, ServerEvent};
+use axio::{AXElement, AXWindow, ElementId, EventSink, ServerEvent, Snapshot};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -46,12 +46,47 @@ impl WebSocketState {
 }
 
 impl EventSink for WebSocketState {
-    fn on_window_update(&self, windows: &[AXWindow]) {
-        send_event(&self.sender, ServerEvent::WindowUpdate(windows.to_vec()));
+    fn on_window_opened(&self, window: &AXWindow) {
+        send_event(&self.sender, ServerEvent::WindowOpened(window.clone()));
     }
 
-    fn on_elements(&self, elements: &[AXElement]) {
-        send_event(&self.sender, ServerEvent::Elements(elements.to_vec()));
+    fn on_window_closed(&self, window_id: &str) {
+        send_event(
+            &self.sender,
+            ServerEvent::WindowClosed {
+                window_id: window_id.to_string(),
+            },
+        );
+    }
+
+    fn on_window_updated(&self, window: &AXWindow) {
+        send_event(&self.sender, ServerEvent::WindowUpdated(window.clone()));
+    }
+
+    fn on_window_active(&self, window_id: Option<&str>) {
+        send_event(
+            &self.sender,
+            ServerEvent::WindowActive {
+                window_id: window_id.map(|s| s.to_string()),
+            },
+        );
+    }
+
+    fn on_element_discovered(&self, element: &AXElement) {
+        send_event(
+            &self.sender,
+            ServerEvent::ElementDiscovered(element.clone()),
+        );
+    }
+
+    fn on_element_updated(&self, element: &AXElement, changed: &[String]) {
+        send_event(
+            &self.sender,
+            ServerEvent::ElementUpdated {
+                element: element.clone(),
+                changed: changed.to_vec(),
+            },
+        );
     }
 
     fn on_element_destroyed(&self, element_id: &ElementId) {
@@ -102,12 +137,13 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
 
     println!("[client] connected");
 
-    // Send current window state
-    let windows = axio::get_current_windows();
-    if !windows.is_empty() {
-        if let Ok(msg) = serde_json::to_string(&ServerEvent::WindowUpdate(windows)) {
-            let _ = socket.send(Message::Text(msg)).await;
-        }
+    // Send sync:snapshot with current state
+    let snapshot = Snapshot {
+        windows: axio::get_current_windows(),
+        active_window: axio::get_active_window(),
+    };
+    if let Ok(msg) = serde_json::to_string(&ServerEvent::Snapshot(snapshot)) {
+        let _ = socket.send(Message::Text(msg)).await;
     }
 
     loop {

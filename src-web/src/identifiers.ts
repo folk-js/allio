@@ -45,10 +45,14 @@ class WindowOverlay {
 
   private async setupWebSocketListener() {
     try {
-      // Set up window update handler
-      this.axio.on("windows", (windows) => {
-        this.updateWindowRectangles(windows);
-      });
+      // Set up handlers for window changes
+      const updateWindows = () =>
+        this.updateWindowRectangles([...this.axio.windows.values()]);
+
+      this.axio.on("sync:snapshot", updateWindows);
+      this.axio.on("window:opened", updateWindows);
+      this.axio.on("window:closed", updateWindows);
+      this.axio.on("window:updated", updateWindows);
 
       // Connect to websocket
       await this.axio.connect();

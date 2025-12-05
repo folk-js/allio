@@ -172,7 +172,7 @@ fn handle_notification(element_id: &ElementId, notification: &str, ax_element: &
                     if let Ok(mut element) = ElementRegistry::get(element_id) {
                         element.value = Some(value);
                         let _ = ElementRegistry::update(element_id, element.clone());
-                        crate::events::emit_elements(vec![element]);
+                        crate::events::emit_element_updated(&element, &["value".to_string()]);
                     }
                 }
             }
@@ -185,7 +185,7 @@ fn handle_notification(element_id: &ElementId, notification: &str, ax_element: &
                     if let Ok(mut element) = ElementRegistry::get(element_id) {
                         element.label = Some(label);
                         let _ = ElementRegistry::update(element_id, element.clone());
-                        crate::events::emit_elements(vec![element]);
+                        crate::events::emit_element_updated(&element, &["label".to_string()]);
                     }
                 }
             }
@@ -336,7 +336,13 @@ pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResu
         }
     }
 
-    ElementRegistry::set_children(parent_id, child_ids)?;
+    ElementRegistry::set_children(parent_id, child_ids.clone())?;
+
+    // Emit element:updated for the parent so client knows it now has children
+    if let Ok(updated_parent) = ElementRegistry::get(parent_id) {
+        crate::events::emit_element_updated(&updated_parent, &["children".to_string()]);
+    }
+
     Ok(children)
 }
 

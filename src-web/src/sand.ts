@@ -194,8 +194,6 @@ export class FolkSand extends HTMLElement {
   }
 
   #initializeSimulation() {
-    console.log("initializing", vertexShader);
-    console.log("initializingfrag", simulationShader);
     // Create shaders and programs
     this.#program = this.#createProgramFromStrings({
       vertex: vertexShader,
@@ -877,9 +875,6 @@ export class FolkSand extends HTMLElement {
     vertex: string;
     fragment: string;
   }): WebGLProgram | undefined {
-    console.log("utils", WebGLUtils);
-    console.log("gl", this.#gl);
-    console.log(vertex);
     const vertexShader = WebGLUtils.createShader(
       this.#gl,
       this.#gl.VERTEX_SHADER,
@@ -902,18 +897,18 @@ export class FolkSand extends HTMLElement {
   // Add method to setup WebSocket connection
   async #setupWebSocketConnection() {
     try {
-      // Set up window update handler to refresh collision data
-      this.#axio.on("windows", () => {
-        console.log(
-          `Sand overlay received window update: ${
-            this.#axio.windows.length
-          } windows`
-        );
+      // Set up window update handlers to refresh collision data
+      const handleWindowUpdate = () => {
         this.#handleShapeTransform();
-      });
+      };
+
+      this.#axio.on("sync:snapshot", handleWindowUpdate);
+      this.#axio.on("window:opened", handleWindowUpdate);
+      this.#axio.on("window:closed", handleWindowUpdate);
+      this.#axio.on("window:updated", handleWindowUpdate);
 
       // Set up global mouse position handler for clickthrough (works even when unfocused)
-      this.#axio.on("mouse", ({ x, y }) => {
+      this.#axio.on("mouse:position", ({ x, y }) => {
         this.#updateClickthrough(x, y);
       });
 
@@ -933,7 +928,7 @@ export class FolkSand extends HTMLElement {
     let vertexOffset = 0;
 
     // Use AXIO windows (always up-to-date)
-    this.#axio.windows.forEach((win) => {
+    this.#axio.windows.forEach((win, _id) => {
       const x = win.x;
       const y = win.y;
       const w = win.w;
@@ -1035,7 +1030,7 @@ export class FolkSand extends HTMLElement {
    * Check if a screen point (clientX, clientY) is inside any window
    */
   #isPointInWindow(x: number, y: number): boolean {
-    for (const win of this.#axio.windows) {
+    for (const win of this.#axio.windows.values()) {
       if (
         x >= win.x &&
         x <= win.x + win.w &&

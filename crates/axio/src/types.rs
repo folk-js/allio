@@ -10,7 +10,7 @@ use ts_rs::TS;
 
 #[derive(Branded, TS)]
 #[branded(serde)]
-#[ts(export, export_to = "packages/axio-client/src/types/")]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub struct ElementId(pub String);
 
 impl Borrow<str> for ElementId {
@@ -58,7 +58,7 @@ pub type AxioResult<T> = Result<T, AxioError>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[serde(tag = "type", content = "value")]
-#[ts(export, export_to = "packages/axio-client/src/types/")]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub enum AXValue {
     String(String),
     Integer(i64),
@@ -67,21 +67,21 @@ pub enum AXValue {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, TS)]
-#[ts(export, export_to = "packages/axio-client/src/types/")]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub struct Position {
     pub x: f64,
     pub y: f64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, TS)]
-#[ts(export, export_to = "packages/axio-client/src/types/")]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub struct Size {
     pub width: f64,
     pub height: f64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, TS)]
-#[ts(export, export_to = "packages/axio-client/src/types/")]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub struct Bounds {
     pub position: Position,
     pub size: Size,
@@ -91,7 +91,7 @@ pub struct Bounds {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, TS)]
 #[serde(rename_all = "lowercase")]
-#[ts(export, export_to = "packages/axio-client/src/types/")]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub enum AXRole {
     Application,
     Document,
@@ -126,7 +126,7 @@ pub enum AXRole {
 /// The unified element type - stored in registry and returned from API.
 /// Flat structure: children are IDs, not nested. Trees derived client-side.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "packages/axio-client/src/types/")]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub struct AXElement {
     pub id: ElementId,
     pub window_id: String,
@@ -147,7 +147,7 @@ pub struct AXElement {
 
 /// Window info from x-win + accessibility.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "packages/axio-client/src/types/")]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub struct AXWindow {
     pub id: String,
     pub title: String,
@@ -164,16 +164,46 @@ pub struct AXWindow {
 
 // Events
 
+/// Snapshot sent on client connection - full current state
 #[derive(Debug, Clone, Serialize, TS)]
-#[serde(tag = "event", content = "data", rename_all = "snake_case")]
-#[ts(export, export_to = "packages/axio-client/src/types/")]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+pub struct Snapshot {
+    pub windows: Vec<AXWindow>,
+    pub active_window: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(tag = "event", content = "data")]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub enum ServerEvent {
-    /// Window list changed
-    WindowUpdate(Vec<AXWindow>),
-    /// Elements discovered/updated (batch)
-    Elements(Vec<AXElement>),
-    /// Element destroyed
+    // Sync
+    #[serde(rename = "sync:snapshot")]
+    Snapshot(Snapshot),
+
+    // Window lifecycle
+    #[serde(rename = "window:opened")]
+    WindowOpened(AXWindow),
+    #[serde(rename = "window:closed")]
+    WindowClosed { window_id: String },
+    #[serde(rename = "window:updated")]
+    WindowUpdated(AXWindow),
+
+    // Focus
+    #[serde(rename = "window:active")]
+    WindowActive { window_id: Option<String> },
+
+    // Elements
+    #[serde(rename = "element:discovered")]
+    ElementDiscovered(AXElement),
+    #[serde(rename = "element:updated")]
+    ElementUpdated {
+        element: AXElement,
+        changed: Vec<String>,
+    },
+    #[serde(rename = "element:destroyed")]
     ElementDestroyed { element_id: ElementId },
-    /// Mouse position
+
+    // Input
+    #[serde(rename = "mouse:position")]
     MousePosition { x: f64, y: f64 },
 }

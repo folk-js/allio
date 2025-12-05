@@ -4,7 +4,7 @@ use crate::types::AXWindow;
 use crate::window_manager::WindowManager;
 use crate::WindowId;
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -28,9 +28,17 @@ static BUNDLE_ID_CACHE: Lazy<Mutex<HashMap<u32, Option<String>>>> =
 /// Last known window list from polling. Always available immediately.
 static CURRENT_WINDOWS: Lazy<RwLock<Vec<AXWindow>>> = Lazy::new(|| RwLock::new(Vec::new()));
 
+/// Active window ID - the most recent valid focused window (preserved when focus goes to desktop)
+static ACTIVE_WINDOW: Lazy<RwLock<Option<String>>> = Lazy::new(|| RwLock::new(None));
+
 /// Get the last known window list. Returns immediately without polling.
 pub fn get_current_windows() -> Vec<AXWindow> {
     CURRENT_WINDOWS.read().unwrap().clone()
+}
+
+/// Get the active window ID (most recent valid focus, preserved when desktop focused)
+pub fn get_active_window() -> Option<String> {
+    ACTIVE_WINDOW.read().unwrap().clone()
 }
 
 #[cfg(target_os = "macos")]
@@ -201,58 +209,99 @@ impl Default for PollingConfig {
 /// Runs in background thread, emits events via EventSink.
 pub fn start_polling(config: PollingConfig) {
     thread::spawn(move || {
-        let mut last_windows: Option<Vec<AXWindow>> = None;
-        let mut last_focused_id: Option<String> = None;
+        let mut last_windows: HashMap<String, AXWindow> = HashMap::new();
+        let mut last_active_id: Option<String> = None;
 
         loop {
             let loop_start = Instant::now();
 
-            if let Some(mut current_windows) = get_windows(&config.enum_options) {
-                // Update WindowManager first so get_window_root can find the window
-                let _ = WindowManager::update_windows(current_windows.clone());
+            if let Some(raw_windows) = get_windows(&config.enum_options) {
+                // Update WindowManager - returns windows with preserved children/title
+                let (managed_windows, _, _) = WindowManager::update_windows(raw_windows);
 
-                // Find focused window from our window list (not desktop/other apps not in list)
+                // Build current window map from managed windows (preserves children)
+                let mut current_windows: Vec<AXWindow> =
+                    managed_windows.iter().map(|m| m.info.clone()).collect();
+                let current_map: HashMap<String, AXWindow> = current_windows
+                    .iter()
+                    .map(|w| (w.id.clone(), w.clone()))
+                    .collect();
+                let current_ids: HashSet<&String> = current_map.keys().collect();
+                let last_ids: HashSet<&String> = last_windows.keys().collect();
+
+                // Detect closed windows
+                for closed_id in last_ids.difference(&current_ids) {
+                    crate::events::emit_window_closed(closed_id);
+                }
+
+                // Detect opened windows
+                for opened_id in current_ids.difference(&last_ids) {
+                    if let Some(window) = current_map.get(*opened_id) {
+                        crate::events::emit_window_opened(window);
+                    }
+                }
+
+                // Detect updated windows (position, title, etc changed)
+                for id in current_ids.intersection(&last_ids) {
+                    let current = current_map.get(*id).unwrap();
+                    let last = last_windows.get(*id).unwrap();
+                    if current != last {
+                        crate::events::emit_window_updated(current);
+                    }
+                }
+
+                // Find focused window and update active_window
                 let focused_window = current_windows.iter_mut().find(|w| w.focused);
                 let current_focused_id = focused_window.as_ref().map(|w| w.id.clone());
 
-                // Discover children when focus changes to a new window
-                let focus_changed = current_focused_id != last_focused_id;
-                if focus_changed {
-                    if let Some(focused) = focused_window {
-                        let window_id = WindowId::new(focused.id.clone());
-                        if let Ok(root) = crate::platform::macos::get_window_root(&window_id) {
-                            // Hydrate window info from accessibility (persisted, higher precedence)
-                            if let Some(title) = &root.label {
-                                if !title.is_empty() {
-                                    WindowManager::set_ax_title(&window_id, title.clone());
-                                    focused.title = title.clone();
-                                }
-                            }
+                // Update active_window: if a window has focus, it becomes active
+                // If no window has focus (desktop), active_window is preserved
+                if let Some(ref focused_id) = current_focused_id {
+                    let active_changed = last_active_id.as_ref() != Some(focused_id);
+                    if active_changed {
+                        *ACTIVE_WINDOW.write().unwrap() = Some(focused_id.clone());
+                        crate::events::emit_window_active(Some(focused_id));
+                        last_active_id = Some(focused_id.clone());
 
-                            // Get root's children as the window's top-level elements
-                            if let Ok(children) =
-                                crate::platform::macos::discover_children(&root.id, 100)
-                            {
-                                let child_ids: Vec<_> =
-                                    children.iter().map(|c| c.id.clone()).collect();
-                                crate::events::emit_elements(children);
-                                WindowManager::set_children(&window_id, child_ids.clone());
-                                focused.children = Some(child_ids);
-                            } else {
-                                WindowManager::set_children(&window_id, vec![]);
-                                focused.children = Some(vec![]);
+                        // Discover children when active window changes
+                        if let Some(focused) = focused_window {
+                            let window_id = WindowId::new(focused.id.clone());
+                            if let Ok(root) = crate::platform::macos::get_window_root(&window_id) {
+                                // Hydrate window info from accessibility
+                                if let Some(title) = &root.label {
+                                    if !title.is_empty() {
+                                        WindowManager::set_ax_title(&window_id, title.clone());
+                                        focused.title = title.clone();
+                                    }
+                                }
+
+                                // Get root's children as the window's top-level elements
+                                if let Ok(children) =
+                                    crate::platform::macos::discover_children(&root.id, 100)
+                                {
+                                    let child_ids: Vec<_> =
+                                        children.iter().map(|c| c.id.clone()).collect();
+                                    for child in &children {
+                                        crate::events::emit_element_discovered(child);
+                                    }
+                                    WindowManager::set_children(&window_id, child_ids.clone());
+                                    focused.children = Some(child_ids);
+                                } else {
+                                    WindowManager::set_children(&window_id, vec![]);
+                                    focused.children = Some(vec![]);
+                                }
+                                // Notify client that window now has children
+                                crate::events::emit_window_updated(focused);
                             }
                         }
                     }
-                    last_focused_id = current_focused_id;
                 }
+                // Note: when focus goes to desktop (current_focused_id is None),
+                // we preserve last_active_id - no event emitted, active window stays same
 
-                if last_windows.as_ref() != Some(&current_windows) {
-                    *CURRENT_WINDOWS.write().unwrap() = current_windows.clone();
-                    crate::events::emit_window_update(&current_windows);
-
-                    last_windows = Some(current_windows);
-                }
+                // Update global state
+                *CURRENT_WINDOWS.write().unwrap() = current_windows;
+                last_windows = current_map;
             }
 
             let elapsed = loop_start.elapsed();

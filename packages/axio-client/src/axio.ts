@@ -1,221 +1,224 @@
 /**
  * AXIO - Accessibility I/O Layer (TypeScript Client)
  *
- * Uses flat element storage - elements stored by ID in a map,
- * relationships tracked via IDs (children, parent_id).
+ * Mirrors Rust state via WebSocket events.
+ * Flat element storage - elements stored by ID in a map.
  */
 
 import EventEmitter from "eventemitter3";
-import { RpcClient } from "./rpc";
 import type {
-  AXElement,
-  ServerEvent,
-  AXWindow,
   RpcRequest,
+  ServerEvent,
+  AXElement,
+  AXWindow,
   ElementId,
 } from "./types";
 
-// Extract args type for a specific RPC method (type-safe against Rust)
-type RpcArgs<M extends RpcRequest["method"]> = Extract<
-  RpcRequest,
-  { method: M }
->["args"];
+// === Type helpers (derived from generated RpcRequest) ===
+type RpcMethod = RpcRequest["method"];
+type RpcArgs<M extends RpcMethod> = Extract<RpcRequest, { method: M }>["args"];
 
-// Derive backend event types from generated ServerEvent
-type EventData<E extends ServerEvent["event"]> = Extract<
+// Manual return type mapping (matches Rust dispatch)
+type RpcReturns = {
+  element_at: AXElement;
+  get: AXElement;
+  children: AXElement[];
+  refresh: AXElement;
+  write: void;
+  click: void;
+  watch: void;
+  unwatch: void;
+};
+
+// Event types derived from ServerEvent
+type EventName = ServerEvent["event"];
+type EventData<E extends EventName> = Extract<
   ServerEvent,
   { event: E }
 >["data"];
-type BackendEvents = { [E in ServerEvent["event"]]: EventData<E> };
+type AxioEvents = { [E in EventName]: [EventData<E>] };
 
-// Client-facing events
-interface AxioEvents {
-  windows: [AXWindow[]];
-  focus: [AXWindow | null];
-  mouse: [{ x: number; y: number }];
-  elements: [AXElement[]];
-  destroyed: [string]; // element_id
-}
-
-/** Something with children IDs (element or window) */
-type HasChildren = { children: ElementId[] | null };
+type Pending = {
+  resolve: (r: unknown) => void;
+  reject: (e: Error) => void;
+  timer: number;
+};
 
 export class AXIO extends EventEmitter<AxioEvents> {
-  private rpc: RpcClient<BackendEvents>;
+  private ws: WebSocket | null = null;
+  private requestId = 0;
+  private pending = new Map<string, Pending>();
 
-  /** Flat element registry - all elements by ID */
+  // === State (mirrors Rust) ===
+  readonly windows = new Map<string, AXWindow>();
   readonly elements = new Map<string, AXElement>();
+  activeWindow: string | null = null;
 
-  /** Current windows */
-  windows: AXWindow[] = [];
-
-  /** Currently focused window (preserved when focus goes to overlay/desktop) */
-  focused: AXWindow | null = null;
-
-  constructor(url = "ws://localhost:3030/ws") {
+  constructor(private url = "ws://localhost:3030/ws", private timeout = 5000) {
     super();
-    this.rpc = new RpcClient<BackendEvents>({ url });
-    this.setup();
   }
 
-  async connect(): Promise<void> {
-    await this.rpc.connect();
-    console.log("[AXIO] Connected");
+  // === Connection ===
+  connect(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.ws = new WebSocket(this.url);
+      this.ws.onopen = () => resolve();
+      this.ws.onerror = reject;
+      this.ws.onmessage = (e) => this.onMessage(e.data);
+      this.ws.onclose = () => this.scheduleReconnect();
+    });
   }
 
   disconnect(): void {
-    this.rpc.disconnect();
+    this.ws?.close();
+    this.ws = null;
   }
 
   get connected(): boolean {
-    return this.rpc.connected;
+    return this.ws?.readyState === WebSocket.OPEN;
   }
 
-  // === Element Access ===
-
-  /** Get element by ID from local cache */
-  get(elementId: string): AXElement | undefined {
-    return this.elements.get(elementId);
+  // === State access ===
+  get(id: string): AXElement | undefined {
+    return this.elements.get(id);
   }
 
-  /** Get children of an element or window (from cache). Returns empty if not discovered. */
-  getChildren(parent: HasChildren): AXElement[] {
-    if (parent.children === null) return []; // Not discovered yet
-    return parent.children
+  get active(): AXWindow | null {
+    return this.activeWindow
+      ? this.windows.get(this.activeWindow) ?? null
+      : null;
+  }
+
+  getChildren(parent: { children: ElementId[] | null }): AXElement[] {
+    return (parent.children ?? [])
       .map((id) => this.elements.get(id))
-      .filter((e): e is AXElement => e !== undefined);
+      .filter((e): e is AXElement => !!e);
   }
 
-  /** Get parent of an element (from cache) */
-  getParent(element: AXElement): AXElement | undefined {
-    return element.parent_id ? this.elements.get(element.parent_id) : undefined;
-  }
+  // === RPC Methods (typed, nice API) ===
+  elementAt = (x: number, y: number) => this.call("element_at", { x, y });
+  getElement = (elementId: ElementId) =>
+    this.call("get", { element_id: elementId });
+  children = (elementId: ElementId, maxChildren = 1000) =>
+    this.call("children", { element_id: elementId, max_children: maxChildren });
+  refresh = (elementId: ElementId) =>
+    this.call("refresh", { element_id: elementId });
+  write = (elementId: ElementId, text: string) =>
+    this.call("write", { element_id: elementId, text });
+  click = (elementId: ElementId) =>
+    this.call("click", { element_id: elementId });
+  watch = (elementId: ElementId) =>
+    this.call("watch", { element_id: elementId });
+  unwatch = (elementId: ElementId) =>
+    this.call("unwatch", { element_id: elementId });
 
-  // === RPC Methods (typed against Rust RpcRequest) ===
-
-  /** Get the deepest element at screen coordinates */
-  async elementAt(x: number, y: number): Promise<AXElement> {
-    const args: RpcArgs<"element_at"> = { x, y };
-    const element = await this.rpc.call<AXElement>("element_at", args);
-    return this.register(element);
-  }
-
-  /** Get cached element by ID from server */
-  async getFromServer(elementId: ElementId): Promise<AXElement> {
-    const args: RpcArgs<"get"> = { element_id: elementId };
-    const element = await this.rpc.call<AXElement>("get", args);
-    return this.register(element);
-  }
-
-  /** Discover children of an element (fetches from macOS, caches locally) */
-  async discoverChildren(
-    elementId: ElementId,
-    maxChildren = 2000
-  ): Promise<AXElement[]> {
-    const args: RpcArgs<"children"> = {
-      element_id: elementId,
-      max_children: maxChildren,
-    };
-    const elements = await this.rpc.call<AXElement[]>("children", args);
-    return elements.map((e) => this.register(e));
-  }
-
-  /** Refresh an element's attributes from macOS */
-  async refresh(elementId: ElementId): Promise<AXElement> {
-    const args: RpcArgs<"refresh"> = { element_id: elementId };
-    const element = await this.rpc.call<AXElement>("refresh", args);
-    return this.register(element);
-  }
-
-  /** Write text to element */
-  async write(elementId: ElementId, text: string): Promise<void> {
-    const args: RpcArgs<"write"> = { element_id: elementId, text };
-    await this.rpc.call("write", args);
-  }
-
-  /** Click element */
-  async click(elementId: ElementId): Promise<void> {
-    const args: RpcArgs<"click"> = { element_id: elementId };
-    await this.rpc.call("click", args);
-  }
-
-  /** Watch element for changes */
-  async watch(elementId: ElementId): Promise<void> {
-    const args: RpcArgs<"watch"> = { element_id: elementId };
-    await this.rpc.call("watch", args);
-  }
-
-  /** Stop watching element */
-  async unwatch(elementId: ElementId): Promise<void> {
-    const args: RpcArgs<"unwatch"> = { element_id: elementId };
-    await this.rpc.call("unwatch", args);
-  }
-
-  /** Set clickthrough (app-specific, not in core RPC) */
+  /** Custom RPC for app-specific clickthrough (not in core RpcRequest) */
   async setClickthrough(enabled: boolean): Promise<void> {
-    await this.rpc.call("set_clickthrough", { enabled });
+    await this.rawCall("set_clickthrough", { enabled });
+  }
+
+  // === State effects (declarative) ===
+  private effects: Partial<Record<EventName, (d: unknown) => void>> = {
+    "sync:snapshot": (d) => {
+      const data = d as EventData<"sync:snapshot">;
+      this.windows.clear();
+      data.windows.forEach((w) => this.windows.set(w.id, w));
+      this.activeWindow = data.active_window;
+    },
+    "window:opened": (d) => {
+      const w = d as AXWindow;
+      this.windows.set(w.id, w);
+    },
+    "window:closed": (d) => {
+      const { window_id } = d as EventData<"window:closed">;
+      this.windows.delete(window_id);
+    },
+    "window:updated": (d) => {
+      const w = d as AXWindow;
+      this.windows.set(w.id, w);
+    },
+    "window:active": (d) => {
+      const { window_id } = d as EventData<"window:active">;
+      if (window_id !== null) {
+        this.activeWindow = window_id;
+      }
+      // When null (desktop focused), preserve activeWindow
+    },
+    "element:discovered": (d) => this.register(d as AXElement),
+    "element:updated": (d) => {
+      const { element } = d as EventData<"element:updated">;
+      this.register(element);
+    },
+    "element:destroyed": (d) => {
+      const { element_id } = d as EventData<"element:destroyed">;
+      this.elements.delete(element_id);
+    },
+  };
+
+  // === Raw RPC (for custom methods not in RpcRequest) ===
+  rawCall(
+    method: string,
+    args: Record<string, unknown> = {}
+  ): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      if (!this.connected) return reject(new Error("Not connected"));
+      const id = `r${++this.requestId}`;
+      const timer = window.setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Timeout: ${method}`));
+      }, this.timeout);
+      this.pending.set(id, { resolve, reject, timer });
+      this.ws!.send(JSON.stringify({ id, method, args }));
+    });
   }
 
   // === Internal ===
-
-  private setup(): void {
-    this.rpc.on("window_update", (windows) => {
-      // Find closed windows and clear their elements from cache
-      const newWindowIds = new Set(windows.map((w) => w.id));
-      for (const [elementId, element] of this.elements) {
-        if (!newWindowIds.has(element.window_id)) {
-          this.elements.delete(elementId);
-        }
-      }
-
-      this.windows = windows;
-
-      // Update focused: prefer currently focused, fall back to last focused if still exists
-      const newFocused = this.windows.find((w) => w.focused);
-      const prevFocusedId = this.focused?.id;
-
-      if (newFocused) {
-        this.focused = newFocused;
-      } else if (this.focused) {
-        // When no window is focused (desktop/overlay), preserve last focused if it still exists
-        const stillExists = this.windows.find((w) => w.id === this.focused!.id);
-        if (stillExists) {
-          this.focused = stillExists;
-        } else {
-          this.focused = null;
-        }
-      }
-
-      this.emit("windows", this.windows);
-      if (this.focused?.id !== prevFocusedId) {
-        this.emit("focus", this.focused);
-      }
-    });
-
-    this.rpc.on("elements", (elements) => {
-      const registered = elements.map((e) => this.register(e));
-      this.emit("elements", registered);
-    });
-
-    this.rpc.on("element_destroyed", ({ element_id }) => {
-      this.elements.delete(element_id);
-      this.emit("destroyed", element_id);
-    });
-
-    this.rpc.on("mouse_position", (pos) => {
-      this.emit("mouse", pos);
-    });
+  private onMessage(raw: string): void {
+    const msg = JSON.parse(raw);
+    if (msg.event) {
+      this.effects[msg.event as EventName]?.(msg.data);
+      (this.emit as Function)(msg.event, msg.data);
+    } else if (msg.id && this.pending.has(msg.id)) {
+      const { resolve, reject, timer } = this.pending.get(msg.id)!;
+      this.pending.delete(msg.id);
+      clearTimeout(timer);
+      msg.error ? reject(new Error(msg.error)) : resolve(msg.result);
+    }
   }
 
-  /** Register element in cache, returns same instance for reference equality */
-  private register(element: AXElement): AXElement {
-    const existing = this.elements.get(element.id);
+  private async call<M extends RpcMethod>(
+    method: M,
+    args: RpcArgs<M>
+  ): Promise<RpcReturns[M]> {
+    const result = await this.rawCall(method, args as Record<string, unknown>);
+    this.registerResult(result);
+    return result as RpcReturns[M];
+  }
+
+  private register(el: AXElement): AXElement {
+    const existing = this.elements.get(el.id);
     if (existing) {
-      // Update existing element in place (preserves reference equality)
-      Object.assign(existing, element);
+      Object.assign(existing, el);
       return existing;
     }
-    this.elements.set(element.id, element);
-    return element;
+    this.elements.set(el.id, el);
+    return el;
+  }
+
+  private registerResult(result: unknown): void {
+    if (
+      result &&
+      typeof result === "object" &&
+      "id" in result &&
+      "role" in result
+    ) {
+      this.register(result as AXElement);
+    } else if (Array.isArray(result)) {
+      result.forEach((r) => this.registerResult(r));
+    }
+  }
+
+  private scheduleReconnect(): void {
+    setTimeout(() => this.connect().catch(() => {}), 1000);
   }
 }

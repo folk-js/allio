@@ -11,7 +11,7 @@ use ts_rs::TS;
 /// RPC request - deserialize from `{ method, args }` format
 #[derive(Debug, Deserialize, TS)]
 #[serde(tag = "method", content = "args", rename_all = "snake_case")]
-#[ts(export, export_to = "packages/axio-client/src/types/")]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub enum RpcRequest {
     /// Get deepest element at screen coordinates
     ElementAt { x: f64, y: f64 },
@@ -42,7 +42,7 @@ fn default_max_children() -> usize {
 /// RPC response variants
 #[derive(Debug, Serialize, TS)]
 #[serde(untagged)]
-#[ts(export, export_to = "packages/axio-client/src/types/")]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub enum RpcResponse {
     Element(AXElement),
     Elements(Vec<AXElement>),
@@ -125,4 +125,3 @@ mod tests {
         RpcResponse::export().expect("export RpcResponse");
     }
 }
-

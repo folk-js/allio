@@ -75,9 +75,19 @@ class PortsDemo {
 
   private async setupWebSocket() {
     try {
-      this.axio.on("windows", (windows) => this.updateWindows(windows));
-      this.axio.on("elements", (elements) =>
-        this.handleElementsUpdate(elements)
+      const updateWindows = () =>
+        this.updateWindows([...this.axio.windows.values()]);
+
+      this.axio.on("sync:snapshot", updateWindows);
+      this.axio.on("window:opened", updateWindows);
+      this.axio.on("window:closed", updateWindows);
+      this.axio.on("window:updated", updateWindows);
+
+      this.axio.on("element:discovered", (element) =>
+        this.handleElementsUpdate([element])
+      );
+      this.axio.on("element:updated", ({ element }) =>
+        this.handleElementsUpdate([element])
       );
 
       await this.axio.connect();
@@ -89,7 +99,7 @@ class PortsDemo {
 
   private setupMouseTracking() {
     // Listen for global mouse position from backend
-    this.axio.on("mouse", ({ x, y }) => {
+    this.axio.on("mouse:position", ({ x, y }) => {
       // Update temp connection line if drawing
       if (this.connectingFromPort && this.tempConnectionLine) {
         this.updateTempConnection(x, y);
@@ -112,9 +122,11 @@ class PortsDemo {
       // Only update if state changed
       if (shouldEnableClickthrough !== this.isClickthroughEnabled) {
         this.isClickthroughEnabled = shouldEnableClickthrough;
-        this.axio.setClickthrough(shouldEnableClickthrough).catch((err) => {
-          console.error("Failed to set clickthrough:", err);
-        });
+        this.axio
+          .setClickthrough(shouldEnableClickthrough)
+          .catch((err: Error) => {
+            console.error("Failed to set clickthrough:", err);
+          });
       }
     });
   }
@@ -321,7 +333,7 @@ class PortsDemo {
     let lastMouseY = 0;
 
     // Track mouse position
-    this.axio.on("mouse", ({ x, y }) => {
+    this.axio.on("mouse:position", ({ x, y }) => {
       lastMouseX = x;
       lastMouseY = y;
     });
