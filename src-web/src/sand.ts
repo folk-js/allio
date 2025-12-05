@@ -913,7 +913,6 @@ export class FolkSand extends HTMLElement {
       });
 
       await this.#axio.connect();
-      console.log("AXIO connected for folk-sand");
 
       // Initial shape transform with current windows
       this.#handleShapeTransform();
@@ -1036,18 +1035,9 @@ export class FolkSand extends HTMLElement {
     return false;
   }
 
-  /**
-   * Toggle clickthrough based on mouse position:
-   * - Transparent (clickthrough enabled) if mouse is over a window
-   * - Solid (clickthrough disabled) if mouse is in empty space
-   */
+  /** Clickthrough when over a window, solid when in empty space */
   #updateClickthrough(clientX: number, clientY: number) {
-    const overWindow = this.#isPointInWindow(clientX, clientY);
-
-    // Enable clickthrough when over a window, disable when in empty space
-    this.#axio.setClickthrough(overWindow).catch((err) => {
-      console.error("Failed to set clickthrough:", err);
-    });
+    this.#axio.setClickthrough(this.#isPointInWindow(clientX, clientY));
   }
 }
 

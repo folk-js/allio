@@ -53,7 +53,6 @@ class PortsDemo {
   private portCreationMode: PortType | null = null;
   private activeWindowId: string | null = null;
   private elementHighlight: HTMLElement | null = null;
-  private isClickthroughEnabled: boolean = true;
 
   // Connection drawing
   private connectingFromPort: Port | null = null;
@@ -74,31 +73,25 @@ class PortsDemo {
   }
 
   private async setupWebSocket() {
-    try {
-      const updateWindows = () =>
-        this.updateWindows([...this.axio.windows.values()]);
+    const updateWindows = () =>
+      this.updateWindows([...this.axio.windows.values()]);
 
-      this.axio.on("sync:init", updateWindows);
-      this.axio.on("window:added", updateWindows);
-      this.axio.on("window:removed", updateWindows);
-      this.axio.on("window:changed", updateWindows);
+    this.axio.on("sync:init", updateWindows);
+    this.axio.on("window:added", updateWindows);
+    this.axio.on("window:removed", updateWindows);
+    this.axio.on("window:changed", updateWindows);
 
-      this.axio.on("element:added", ({ element }) =>
-        this.handleElementsUpdate([element])
-      );
-      this.axio.on("element:changed", ({ element }) =>
-        this.handleElementsUpdate([element])
-      );
+    this.axio.on("element:added", ({ element }) =>
+      this.handleElementsUpdate([element])
+    );
+    this.axio.on("element:changed", ({ element }) =>
+      this.handleElementsUpdate([element])
+    );
 
-      await this.axio.connect();
-      console.log("📡 Ports Demo connected");
-    } catch (error) {
-      console.error("❌ Failed to connect:", error);
-    }
+    await this.axio.connect();
   }
 
   private setupMouseTracking() {
-    // Listen for global mouse position from backend
     this.axio.on("mouse:position", ({ x, y }) => {
       // Update temp connection line if drawing
       if (this.connectingFromPort && this.tempConnectionLine) {
@@ -111,23 +104,9 @@ class PortsDemo {
         this.clickCaptureOverlay.style.setProperty("--mouse-y", `${y}px`);
       }
 
-      // Check what element is at this position for clickthrough
-      const elementUnderCursor = document.elementFromPoint(x, y);
-      const isOverInteractive = this.isElementInteractive(elementUnderCursor);
-
       // Enable clickthrough when NOT over interactive elements
-      // Port creation mode no longer affects clickthrough - overlay stays transparent
-      const shouldEnableClickthrough = !isOverInteractive;
-
-      // Only update if state changed
-      if (shouldEnableClickthrough !== this.isClickthroughEnabled) {
-        this.isClickthroughEnabled = shouldEnableClickthrough;
-        this.axio
-          .setClickthrough(shouldEnableClickthrough)
-          .catch((err: Error) => {
-            console.error("Failed to set clickthrough:", err);
-          });
-      }
+      const el = document.elementFromPoint(x, y);
+      this.axio.setClickthrough(!this.isElementInteractive(el));
     });
   }
 
@@ -783,7 +762,10 @@ class PortsDemo {
         portSize / 2;
 
       // X position
-      const x = port.type === "input" ? window.bounds.x : window.bounds.x + window.bounds.w;
+      const x =
+        port.type === "input"
+          ? window.bounds.x
+          : window.bounds.x + window.bounds.w;
 
       // Update stored position
       port.x = x;

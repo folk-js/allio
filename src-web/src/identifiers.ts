@@ -40,7 +40,6 @@ class WindowOverlay {
 
   private async connect() {
     await this.axio.connect();
-    console.log("📡 AXIO connected");
 
     const render = () => this.render([...this.axio.windows.values()]);
     render();

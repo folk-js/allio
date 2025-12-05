@@ -13,7 +13,6 @@ class AXTreeOverlay {
   private expanded = new Set<string>();
   private treeEl: HTMLElement | null = null;
   private outlineEl: HTMLElement | null = null;
-  private isClickthroughEnabled = true;
 
   constructor() {
     this.container = document.getElementById("windowContainer")!;
@@ -45,20 +44,14 @@ class AXTreeOverlay {
       render();
     });
 
-    // Mouse tracking for clickthrough
+    // Mouse tracking for clickthrough - transparent unless over tree
     this.axio.on("mouse:position", ({ x, y }) => {
       const el = document.elementFromPoint(x, y);
       const overTree = el && this.treeEl?.contains(el);
-      const shouldClickthrough = !overTree;
-
-      if (shouldClickthrough !== this.isClickthroughEnabled) {
-        this.isClickthroughEnabled = shouldClickthrough;
-        this.axio.setClickthrough(shouldClickthrough).catch(() => {});
-      }
+      this.axio.setClickthrough(!overTree);
     });
 
     await this.axio.connect();
-    console.log("📡 AXTree connected");
   }
 
   private render() {

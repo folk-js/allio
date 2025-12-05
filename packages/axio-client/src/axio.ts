@@ -61,22 +61,49 @@ export class AXIO extends EventEmitter<AxioEvents> {
   focusedWindow: WindowId | null = null;
   clickthrough = false;
 
-  constructor(private url = "ws://localhost:3030/ws", private timeout = 5000) {
+  // === Options ===
+  debug: boolean;
+
+  constructor(
+    private url = "ws://localhost:3030/ws",
+    private timeout = 5000,
+    options: { debug?: boolean } = {}
+  ) {
     super();
+    this.debug = options.debug ?? true; // Enabled by default for now
+  }
+
+  private log(...args: unknown[]) {
+    if (this.debug) console.log("[axio]", ...args);
+  }
+
+  private logError(...args: unknown[]) {
+    if (this.debug) console.error("[axio]", ...args);
   }
 
   // === Connection ===
   connect(): Promise<void> {
+    this.log("connecting to", this.url);
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(this.url);
-      this.ws.onopen = () => resolve();
-      this.ws.onerror = reject;
+      this.ws.onopen = () => {
+        this.log("connected ✓");
+        resolve();
+      };
+      this.ws.onerror = (e) => {
+        this.logError("connection error", e);
+        reject(e);
+      };
       this.ws.onmessage = (e) => this.onMessage(e.data);
-      this.ws.onclose = () => this.scheduleReconnect();
+      this.ws.onclose = () => {
+        this.log("disconnected, reconnecting...");
+        this.scheduleReconnect();
+      };
     });
   }
 
   disconnect(): void {
+    this.log("disconnecting");
     this.ws?.close();
     this.ws = null;
   }
@@ -193,9 +220,11 @@ export class AXIO extends EventEmitter<AxioEvents> {
     return this.rawCall("unwatch", { element_id: elementId }) as Promise<void>;
   }
 
-  /** Custom RPC for app-specific clickthrough */
+  /** Set clickthrough mode (for overlay apps) */
   async setClickthrough(enabled: boolean): Promise<void> {
+    if (enabled === this.clickthrough) return; // No change
     this.clickthrough = enabled;
+    this.log("clickthrough", enabled ? "enabled" : "disabled");
     await this.rawCall("set_clickthrough", { enabled });
   }
 
@@ -243,6 +272,9 @@ export class AXIO extends EventEmitter<AxioEvents> {
         elements.forEach((e) => this.elements.set(e.id, e));
         this.activeWindow = active_window;
         this.focusedWindow = focused_window;
+        this.log(
+          `synced: ${windows.length} windows, ${elements.length} elements`
+        );
         break;
       }
 
