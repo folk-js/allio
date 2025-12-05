@@ -13,6 +13,7 @@ import type {
   AXWindow,
   ElementId,
   WindowId,
+  Selection,
 } from "./types";
 
 // === Type helpers ===
@@ -58,6 +59,10 @@ export class AXIO extends EventEmitter<AxioEvents> {
   readonly elements = new Map<string, AXElement>();
   readonly watched = new Set<string>();
   activeWindow: WindowId | null = null;
+
+  // Tier 1: Element focus and selection tracking
+  focusedElement: AXElement | null = null;
+  selection: Selection | null = null;
   focusedWindow: WindowId | null = null;
   clickthrough = false;
 
@@ -160,64 +165,61 @@ export class AXIO extends EventEmitter<AxioEvents> {
   elementAt = (x: number, y: number) => this.call("element_at", { x, y });
 
   /** Get element by ID (from registry, fetches if needed) */
-  getElement = (elementId: ElementId) =>
-    this.call("get", { element_id: elementId });
+  getElement = (element_id: ElementId) => this.call("get", { element_id });
 
   /** Get children of element (fetches from OS) */
-  children = (elementId: ElementId, maxChildren = 1000) =>
-    this.call("children", { element_id: elementId, max_children: maxChildren });
+  children = (element_id: ElementId, max_children = 1000) =>
+    this.call("children", { element_id, max_children });
 
   /** Force re-fetch element from OS */
-  refresh = (elementId: ElementId) =>
-    this.call("refresh", { element_id: elementId });
+  refresh = (element_id: ElementId) => this.call("refresh", { element_id });
 
   /** Write text to element */
-  write = (elementId: ElementId, text: string) =>
-    this.call("write", { element_id: elementId, text });
+  write = (element_id: ElementId, text: string) =>
+    this.call("write", { element_id, text });
 
   /** Click element */
-  click = (elementId: ElementId) =>
-    this.call("click", { element_id: elementId });
+  click = (element_id: ElementId) => this.call("click", { element_id });
 
   /**
    * Watch an element for changes.
    * Returns a cleanup function.
    * Optionally pass a callback to be called when the element changes.
    */
-  watch(elementId: ElementId, callback?: WatchCallback): () => void {
+  watch(element_id: ElementId, callback?: WatchCallback): () => void {
     if (callback) {
-      if (!this.watchCallbacks.has(elementId)) {
-        this.watchCallbacks.set(elementId, new Set());
+      if (!this.watchCallbacks.has(element_id)) {
+        this.watchCallbacks.set(element_id, new Set());
       }
-      this.watchCallbacks.get(elementId)!.add(callback);
+      this.watchCallbacks.get(element_id)!.add(callback);
     }
 
-    const isFirst = !this.watched.has(elementId);
+    const isFirst = !this.watched.has(element_id);
     if (isFirst) {
-      this.watched.add(elementId);
-      this.rawCall("watch", { element_id: elementId }).catch(() => {});
+      this.watched.add(element_id);
+      this.rawCall("watch", { element_id }).catch(() => {});
     }
 
     return () => {
-      if (callback && this.watchCallbacks.has(elementId)) {
-        this.watchCallbacks.get(elementId)!.delete(callback);
+      if (callback && this.watchCallbacks.has(element_id)) {
+        this.watchCallbacks.get(element_id)!.delete(callback);
       }
       const hasCallbacks =
-        this.watchCallbacks.has(elementId) &&
-        this.watchCallbacks.get(elementId)!.size > 0;
+        this.watchCallbacks.has(element_id) &&
+        this.watchCallbacks.get(element_id)!.size > 0;
       if (!hasCallbacks) {
-        this.watchCallbacks.delete(elementId);
-        this.watched.delete(elementId);
-        this.rawCall("unwatch", { element_id: elementId }).catch(() => {});
+        this.watchCallbacks.delete(element_id);
+        this.watched.delete(element_id);
+        this.rawCall("unwatch", { element_id }).catch(() => {});
       }
     };
   }
 
   /** Unwatch an element */
-  unwatch(elementId: ElementId): Promise<void> {
-    this.watched.delete(elementId);
-    this.watchCallbacks.delete(elementId);
-    return this.rawCall("unwatch", { element_id: elementId }) as Promise<void>;
+  unwatch(element_id: ElementId): Promise<void> {
+    this.watched.delete(element_id);
+    this.watchCallbacks.delete(element_id);
+    return this.rawCall("unwatch", { element_id }) as Promise<void>;
   }
 
   /** Set clickthrough mode (for overlay apps) */
@@ -265,13 +267,22 @@ export class AXIO extends EventEmitter<AxioEvents> {
     const event = msg as ServerEvent;
     switch (event.event) {
       case "sync:init": {
-        const { windows, elements, active_window, focused_window } = event.data;
+        const {
+          windows,
+          elements,
+          active_window,
+          focused_window,
+          focused_element,
+          selection,
+        } = event.data;
         this.windows.clear();
         this.elements.clear();
         windows.forEach((w) => this.windows.set(w.id, w));
         elements.forEach((e) => this.elements.set(e.id, e));
         this.activeWindow = active_window;
         this.focusedWindow = focused_window;
+        this.focusedElement = focused_element ?? null;
+        this.selection = selection;
         this.log(
           `synced: ${windows.length} windows, ${elements.length} elements`
         );
@@ -325,6 +336,20 @@ export class AXIO extends EventEmitter<AxioEvents> {
 
       case "active:changed": {
         this.activeWindow = event.data.window_id;
+        break;
+      }
+
+      case "focus:element": {
+        const { element } = event.data;
+        this.focusedElement = element;
+        this.elements.set(element.id, element);
+        break;
+      }
+
+      case "selection:changed": {
+        const { element_id, text, range } = event.data;
+        // Clear selection if text is empty
+        this.selection = text ? { text, element_id, range } : null;
         break;
       }
 

@@ -89,12 +89,354 @@ impl AXNotification {
 
 use accessibility_sys::{AXObserverCreate, AXObserverGetRunLoopSource, AXObserverRef};
 use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopSource};
+use once_cell::sync::Lazy;
+use std::collections::HashMap as StdHashMap;
+use std::sync::Mutex;
 
-/// Context passed to AX observer callbacks
+/// Context passed to per-element AX observer callbacks
 #[derive(Clone)]
 #[repr(C)]
 pub struct ObserverContext {
     pub element_id: ElementId,
+}
+
+/// Context passed to app-level observer callbacks (Tier 1)
+#[derive(Clone)]
+#[repr(C)]
+pub struct AppObserverContext {
+    pub pid: u32,
+}
+
+// ============================================================================
+// App-Level Observer State (Tier 1)
+// ============================================================================
+
+/// Per-app state for Tier 1 tracking
+struct AppState {
+    #[allow(dead_code)] // Kept alive to maintain observer subscription
+    observer: AXObserverRef,
+    focused_element_id: Option<ElementId>,
+}
+
+// SAFETY: AXObserverRef is a CFTypeRef (thread-safe with proper retain/release)
+unsafe impl Send for AppState {}
+unsafe impl Sync for AppState {}
+
+static APP_OBSERVERS: Lazy<Mutex<StdHashMap<u32, AppState>>> =
+    Lazy::new(|| Mutex::new(StdHashMap::new()));
+
+/// Ensure app-level observer is set up for a PID (Tier 1).
+/// Called when first element from an app is registered.
+pub fn ensure_app_observer(pid: u32) {
+    let mut observers = APP_OBSERVERS.lock().unwrap();
+    if observers.contains_key(&pid) {
+        return;
+    }
+
+    match create_app_observer(pid) {
+        Ok(observer) => {
+            observers.insert(
+                pid,
+                AppState {
+                    observer,
+                    focused_element_id: None,
+                },
+            );
+        }
+        Err(e) => {
+            eprintln!(
+                "[axio] Failed to create app observer for PID {}: {:?}",
+                pid, e
+            );
+        }
+    }
+}
+
+/// Create an app-level observer for Tier 1 notifications
+fn create_app_observer(pid: u32) -> AxioResult<AXObserverRef> {
+    use accessibility_sys::AXObserverAddNotification;
+
+    let mut observer_ref: AXObserverRef = std::ptr::null_mut();
+
+    let result =
+        unsafe { AXObserverCreate(pid as i32, app_observer_callback as _, &mut observer_ref) };
+
+    if result != 0 {
+        return Err(AxioError::ObserverError(format!(
+            "AXObserverCreate failed for app PID {} with code {}",
+            pid, result
+        )));
+    }
+
+    // Add to main run loop
+    unsafe {
+        let run_loop_source_ref = AXObserverGetRunLoopSource(observer_ref);
+        if !run_loop_source_ref.is_null() {
+            let run_loop_source =
+                CFRunLoopSource::wrap_under_get_rule(run_loop_source_ref as *mut _);
+            let main_run_loop = CFRunLoop::get_main();
+            main_run_loop.add_source(&run_loop_source, kCFRunLoopDefaultMode);
+        }
+    }
+
+    // Subscribe to app-level notifications on the application element
+    let app_element = AXUIElement::application(pid as i32);
+
+    // Create context for this app (leaked intentionally - lives for app lifetime)
+    let context = Box::new(AppObserverContext { pid });
+    let context_ptr = Box::into_raw(context) as *mut std::ffi::c_void;
+
+    // Subscribe to focus changes
+    let focus_notif = CFString::new("AXFocusedUIElementChanged");
+    unsafe {
+        let _ = AXObserverAddNotification(
+            observer_ref,
+            app_element.as_concrete_TypeRef(),
+            focus_notif.as_concrete_TypeRef() as _,
+            context_ptr,
+        );
+    }
+
+    // Subscribe to selection changes
+    let selection_notif = CFString::new("AXSelectedTextChanged");
+    unsafe {
+        let _ = AXObserverAddNotification(
+            observer_ref,
+            app_element.as_concrete_TypeRef(),
+            selection_notif.as_concrete_TypeRef() as _,
+            context_ptr,
+        );
+    }
+
+    Ok(observer_ref)
+}
+
+/// Callback for app-level notifications (Tier 1)
+unsafe extern "C" fn app_observer_callback(
+    _observer: AXObserverRef,
+    element: accessibility_sys::AXUIElementRef,
+    notification: core_foundation::string::CFStringRef,
+    refcon: *mut std::ffi::c_void,
+) {
+    if refcon.is_null() || element.is_null() {
+        return;
+    }
+
+    let context = &*(refcon as *const AppObserverContext);
+    let notif_cfstring = CFString::wrap_under_get_rule(notification);
+    let notification_name = notif_cfstring.to_string();
+
+    match notification_name.as_str() {
+        "AXFocusedUIElementChanged" => {
+            handle_app_focus_changed(context.pid, element);
+        }
+        "AXSelectedTextChanged" => {
+            handle_app_selection_changed(context.pid, element);
+        }
+        _ => {}
+    }
+}
+
+/// Handle focus change at app level (Tier 1)
+fn handle_app_focus_changed(pid: u32, element_ref: accessibility_sys::AXUIElementRef) {
+    let ax_element = unsafe { AXUIElement::wrap_under_get_rule(element_ref) };
+
+    // Find the window this element belongs to
+    let window_id = match get_window_id_from_ax_element(&ax_element) {
+        Some(id) => id,
+        None => return, // Element not in a tracked window
+    };
+
+    // Build and register the element
+    let element = build_element(&ax_element, &window_id, pid, None);
+
+    // Get previous focused element and update state
+    let previous_element_id = {
+        let mut observers = APP_OBSERVERS.lock().unwrap();
+        if let Some(state) = observers.get_mut(&pid) {
+            let prev = state.focused_element_id.clone();
+            state.focused_element_id = Some(element.id.clone());
+            prev
+        } else {
+            None
+        }
+    };
+
+    // Emit focus:element event
+    crate::events::emit_focus_element(
+        &window_id.0,
+        &element.id,
+        &element,
+        previous_element_id.as_ref(),
+    );
+}
+
+/// Handle selection change at app level (Tier 1)
+fn handle_app_selection_changed(pid: u32, element_ref: accessibility_sys::AXUIElementRef) {
+    let ax_element = unsafe { AXUIElement::wrap_under_get_rule(element_ref) };
+
+    // Find the window this element belongs to
+    let window_id = match get_window_id_from_ax_element(&ax_element) {
+        Some(id) => id,
+        None => return,
+    };
+
+    // Build/get the element
+    let element = build_element(&ax_element, &window_id, pid, None);
+
+    // Get selected text
+    let selected_text = ax_element
+        .attribute(&AXAttribute::new(&CFString::new("AXSelectedText")))
+        .ok()
+        .and_then(|v| {
+            // Check if it's a CFString
+            unsafe {
+                let type_id = core_foundation::base::CFGetTypeID(v.as_CFTypeRef());
+                if type_id == CFString::type_id() {
+                    let cf_string = CFString::wrap_under_get_rule(v.as_CFTypeRef() as *const _);
+                    Some(cf_string.to_string())
+                } else {
+                    None
+                }
+            }
+        })
+        .unwrap_or_default();
+
+    // Get selected text range (if available)
+    let range = if selected_text.is_empty() {
+        None
+    } else {
+        get_selected_text_range(&ax_element)
+    };
+
+    // Always emit - empty text means selection was cleared
+    crate::events::emit_selection_changed(
+        &window_id.0,
+        &element.id,
+        &selected_text,
+        range.as_ref(),
+    );
+}
+
+/// Get selected text range from an element
+fn get_selected_text_range(element: &AXUIElement) -> Option<crate::types::TextRange> {
+    let range_attr = element
+        .attribute(&AXAttribute::new(&CFString::new("AXSelectedTextRange")))
+        .ok()?;
+
+    // Try to extract CFRange from the AXValue
+    unsafe {
+        use core_foundation::base::CFRange;
+
+        let value_ref = range_attr.as_CFTypeRef();
+        let mut range = CFRange {
+            location: 0,
+            length: 0,
+        };
+
+        // AXValueGetValue with kAXValueTypeCFRange (4)
+        let success = accessibility_sys::AXValueGetValue(
+            value_ref as _,
+            4, // kAXValueTypeCFRange
+            &mut range as *mut _ as *mut std::ffi::c_void,
+        );
+
+        if success {
+            Some(crate::types::TextRange {
+                start: range.location as u32,
+                length: range.length as u32,
+            })
+        } else {
+            None
+        }
+    }
+}
+
+/// Query the currently focused element and selection for an app.
+/// Used for initial sync state.
+pub fn get_current_focus(
+    pid: u32,
+) -> (
+    Option<crate::types::AXElement>,
+    Option<crate::types::Selection>,
+) {
+    let app_element = AXUIElement::application(pid as i32);
+
+    // Get the focused UI element
+    let focused_attr = AXAttribute::new(&CFString::new("AXFocusedUIElement"));
+    let focused_ref = match app_element.attribute(&focused_attr) {
+        Ok(ref_val) => ref_val,
+        Err(_) => return (None, None),
+    };
+
+    let element_ref = focused_ref.as_CFTypeRef() as accessibility_sys::AXUIElementRef;
+    if element_ref.is_null() {
+        return (None, None);
+    }
+
+    let ax_element = unsafe { AXUIElement::wrap_under_get_rule(element_ref) };
+
+    // Find the window this element belongs to
+    let window_id = match get_window_id_from_ax_element(&ax_element) {
+        Some(id) => id,
+        None => return (None, None),
+    };
+
+    // Build the element
+    let element = build_element(&ax_element, &window_id, pid, None);
+
+    // Get selected text (if any)
+    let selection =
+        get_element_selected_text(&ax_element).map(|(text, range)| crate::types::Selection {
+            element_id: element.id.clone(),
+            text,
+            range,
+        });
+
+    (Some(element), selection)
+}
+
+/// Get selected text and range from an element (if it has a text selection)
+fn get_element_selected_text(
+    element: &AXUIElement,
+) -> Option<(String, Option<crate::types::TextRange>)> {
+    let selected_text = element
+        .attribute(&AXAttribute::new(&CFString::new("AXSelectedText")))
+        .ok()
+        .and_then(|v| unsafe {
+            let type_id = core_foundation::base::CFGetTypeID(v.as_CFTypeRef());
+            if type_id == CFString::type_id() {
+                let cf_string = CFString::wrap_under_get_rule(v.as_CFTypeRef() as *const _);
+                let s = cf_string.to_string();
+                if !s.is_empty() {
+                    Some(s)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })?;
+
+    let range = get_selected_text_range(element);
+    Some((selected_text, range))
+}
+
+/// Get window ID from an AX element by looking at its window attribute
+fn get_window_id_from_ax_element(element: &AXUIElement) -> Option<WindowId> {
+    use crate::window_manager::WindowManager;
+
+    // Try to get the window attribute
+    let window_element = element
+        .attribute(&AXAttribute::new(&CFString::new("AXWindow")))
+        .ok()?;
+
+    // Get position of the window to match with our tracked windows
+    let window_ax = unsafe { AXUIElement::wrap_under_get_rule(window_element.as_CFTypeRef() as _) };
+    let bounds = get_element_bounds(&window_ax)?;
+
+    // Find matching window by bounds
+    WindowManager::find_window_id_by_bounds(bounds.x, bounds.y, bounds.w, bounds.h)
 }
 
 /// Create an AXObserver for a process and add it to the main run loop.
@@ -252,6 +594,9 @@ pub fn build_element(
     parent_id: Option<&ElementId>,
 ) -> AXElement {
     use crate::element_registry::ElementRegistry;
+
+    // Ensure Tier 1 app-level observer is set up for this app
+    ensure_app_observer(pid);
 
     // Batch fetch all attributes in one IPC call
     let attrs = batch_fetch_attributes(ax_element);

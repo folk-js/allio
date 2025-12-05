@@ -186,11 +186,21 @@ pub struct AXElement {
 /// Initial state sent on connection
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+pub struct Selection {
+    pub element_id: ElementId,
+    pub text: String,
+    pub range: Option<TextRange>,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub struct SyncInit {
     pub windows: Vec<AXWindow>,
     pub elements: Vec<AXElement>,
     pub active_window: Option<String>,
     pub focused_window: Option<String>,
+    pub focused_element: Option<AXElement>,
+    pub selection: Option<Selection>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -217,13 +227,39 @@ pub enum ServerEvent {
     #[serde(rename = "element:removed")]
     ElementRemoved { element: AXElement },
 
-    // Focus (from polling)
+    // Window focus (from polling)
     #[serde(rename = "focus:changed")]
     FocusChanged { window_id: Option<WindowId> },
     #[serde(rename = "active:changed")]
     ActiveChanged { window_id: WindowId },
 
+    // Element focus (from Tier 1 app-level observer)
+    #[serde(rename = "focus:element")]
+    FocusElement {
+        window_id: String,
+        element_id: ElementId,
+        element: AXElement,
+        previous_element_id: Option<ElementId>,
+    },
+
+    // Text selection (from Tier 1 app-level observer)
+    #[serde(rename = "selection:changed")]
+    SelectionChanged {
+        window_id: String,
+        element_id: ElementId,
+        text: String,
+        range: Option<TextRange>,
+    },
+
     // Input tracking
     #[serde(rename = "mouse:position")]
     MousePosition { x: f64, y: f64 },
+}
+
+/// Text selection range within an element
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+pub struct TextRange {
+    pub start: u32,
+    pub length: u32,
 }

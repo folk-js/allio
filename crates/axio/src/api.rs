@@ -1,7 +1,7 @@
 //! Public API for AXIO operations.
 
 use crate::element_registry::ElementRegistry;
-use crate::types::{AXElement, AxioResult, ElementId};
+use crate::types::{AXElement, AxioResult, ElementId, Selection};
 
 /// Discover element at screen coordinates.
 pub fn element_at(x: f64, y: f64) -> AxioResult<AXElement> {
@@ -51,4 +51,10 @@ pub fn unwatch(element_id: &ElementId) {
 /// Initialize the AXIO system.
 pub fn initialize() {
     ElementRegistry::initialize();
+}
+
+/// Get currently focused element and selection for a given PID.
+/// Returns (focused_element, selection).
+pub fn get_current_focus(pid: u32) -> (Option<AXElement>, Option<Selection>) {
+    crate::platform::macos::get_current_focus(pid)
 }

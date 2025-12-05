@@ -118,6 +118,42 @@ impl EventSink for WebSocketState {
         );
     }
 
+    fn on_focus_element(
+        &self,
+        window_id: &str,
+        element_id: &axio::ElementId,
+        element: &AXElement,
+        previous_element_id: Option<&axio::ElementId>,
+    ) {
+        send_event(
+            &self.sender,
+            ServerEvent::FocusElement {
+                window_id: window_id.to_string(),
+                element_id: element_id.clone(),
+                element: element.clone(),
+                previous_element_id: previous_element_id.cloned(),
+            },
+        );
+    }
+
+    fn on_selection_changed(
+        &self,
+        window_id: &str,
+        element_id: &axio::ElementId,
+        text: &str,
+        range: Option<&axio::TextRange>,
+    ) {
+        send_event(
+            &self.sender,
+            ServerEvent::SelectionChanged {
+                window_id: window_id.to_string(),
+                element_id: element_id.clone(),
+                text: text.to_string(),
+                range: range.cloned(),
+            },
+        );
+    }
+
     fn on_mouse_position(&self, x: f64, y: f64) {
         send_event(&self.sender, ServerEvent::MousePosition { x, y });
     }
@@ -159,11 +195,27 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
 
     // Send initial state as sync:init
     let active = axio::get_active_window();
+    let windows = axio::get_current_windows();
+
+    // Query focused element and selection for the active window's app
+    let (focused_element, selection) = if let Some(ref window_id) = active {
+        // Find the window to get its PID
+        if let Some(window) = windows.iter().find(|w| &w.id == window_id) {
+            axio::get_current_focus(window.process_id)
+        } else {
+            (None, None)
+        }
+    } else {
+        (None, None)
+    };
+
     let init = SyncInit {
-        windows: axio::get_current_windows(),
+        windows,
         elements: axio::element_registry::ElementRegistry::get_all(),
         active_window: active.clone(),
         focused_window: active, // Assume focused = active on connect
+        focused_element,
+        selection,
     };
     let event = ServerEvent::SyncInit(init);
     if let Ok(msg) = serde_json::to_string(&event) {
