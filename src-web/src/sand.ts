@@ -902,10 +902,10 @@ export class FolkSand extends HTMLElement {
         this.#handleShapeTransform();
       };
 
-      this.#axio.on("sync:snapshot", handleWindowUpdate);
-      this.#axio.on("window:opened", handleWindowUpdate);
-      this.#axio.on("window:closed", handleWindowUpdate);
-      this.#axio.on("window:updated", handleWindowUpdate);
+      this.#axio.on("sync:init", handleWindowUpdate);
+      this.#axio.on("window:added", handleWindowUpdate);
+      this.#axio.on("window:removed", handleWindowUpdate);
+      this.#axio.on("window:changed", handleWindowUpdate);
 
       // Set up global mouse position handler for clickthrough (works even when unfocused)
       this.#axio.on("mouse:position", ({ x, y }) => {
@@ -929,10 +929,7 @@ export class FolkSand extends HTMLElement {
 
     // Use AXIO windows (always up-to-date)
     this.#axio.windows.forEach((win, _id) => {
-      const x = win.x;
-      const y = win.y;
-      const w = win.w;
-      const h = win.h;
+      const { x, y, w, h } = win.bounds;
 
       // Convert window coordinates to buffer coordinates
       const bufferPoints = [
@@ -1031,12 +1028,8 @@ export class FolkSand extends HTMLElement {
    */
   #isPointInWindow(x: number, y: number): boolean {
     for (const win of this.#axio.windows.values()) {
-      if (
-        x >= win.x &&
-        x <= win.x + win.w &&
-        y >= win.y &&
-        y <= win.y + win.h
-      ) {
+      const b = win.bounds;
+      if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
         return true;
       }
     }

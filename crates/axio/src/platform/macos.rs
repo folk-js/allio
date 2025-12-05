@@ -11,7 +11,7 @@ use core_foundation::string::CFString;
 use uuid::Uuid;
 
 use crate::types::{
-    AXElement, AXRole, AXValue, AxioError, AxioResult, Bounds, ElementId, Position, Size, WindowId,
+    AXElement, AXRole, AXValue, AxioError, AxioResult, Bounds, ElementId, WindowId,
 };
 
 // ============================================================================
@@ -172,7 +172,7 @@ fn handle_notification(element_id: &ElementId, notification: &str, ax_element: &
                     if let Ok(mut element) = ElementRegistry::get(element_id) {
                         element.value = Some(value);
                         let _ = ElementRegistry::update(element_id, element.clone());
-                        crate::events::emit_element_updated(&element, &["value".to_string()]);
+                        crate::events::emit_element_changed(&element);
                     }
                 }
             }
@@ -185,15 +185,20 @@ fn handle_notification(element_id: &ElementId, notification: &str, ax_element: &
                     if let Ok(mut element) = ElementRegistry::get(element_id) {
                         element.label = Some(label);
                         let _ = ElementRegistry::update(element_id, element.clone());
-                        crate::events::emit_element_updated(&element, &["label".to_string()]);
+                        crate::events::emit_element_changed(&element);
                     }
                 }
             }
         }
 
         AXNotification::UIElementDestroyed => {
-            ElementRegistry::remove_element(element_id);
-            crate::events::emit_element_destroyed(element_id);
+            // Get element before removing (for event data)
+            if let Ok(element) = ElementRegistry::get(element_id) {
+                ElementRegistry::remove_element(element_id);
+                crate::events::emit_element_removed(&element);
+            } else {
+                ElementRegistry::remove_element(element_id);
+            }
         }
 
         _ => {}
@@ -338,14 +343,14 @@ pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResu
 
     ElementRegistry::set_children(parent_id, child_ids.clone())?;
 
-    // Emit element:discovered for each new child
+    // Emit element:added for each new child
     for child in &children {
-        crate::events::emit_element_discovered(child);
+        crate::events::emit_element_added(child);
     }
 
-    // Emit element:updated for the parent so client knows it now has children
+    // Emit element:changed for the parent so client knows it now has children
     if let Ok(updated_parent) = ElementRegistry::get(parent_id) {
-        crate::events::emit_element_updated(&updated_parent, &["children".to_string()]);
+        crate::events::emit_element_changed(&updated_parent);
     }
 
     Ok(children)
@@ -517,14 +522,10 @@ fn get_element_bounds(element: &AXUIElement) -> Option<Bounds> {
         .and_then(|s| extract_size(&s))?;
 
     Some(Bounds {
-        position: Position {
-            x: position.0,
-            y: position.1,
-        },
-        size: Size {
-            width: size.0,
-            height: size.1,
-        },
+        x: position.0,
+        y: position.1,
+        w: size.0,
+        h: size.1,
     })
 }
 
@@ -725,10 +726,7 @@ fn get_window_id_for_element(element: &AXUIElement) -> Option<String> {
                 // Found the window - try to match it to a tracked window by bounds
                 if let Some(bounds) = get_element_bounds(&current) {
                     if let Some(window_id) = WindowManager::find_window_id_by_bounds(
-                        bounds.position.x,
-                        bounds.position.y,
-                        bounds.size.width,
-                        bounds.size.height,
+                        bounds.x, bounds.y, bounds.w, bounds.h,
                     ) {
                         return Some(window_id.0);
                     }

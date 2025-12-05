@@ -27,8 +27,9 @@ function renderWindows(windows: ReadonlyArray<AXWindow>) {
     html += property("app_name", window.app_name);
     html += property("focused", window.focused);
 
-    html += property("position", `(${window.x}, ${window.y})`);
-    html += property("size", `${window.w} × ${window.h}`);
+    const { x, y, w, h } = window.bounds;
+    html += property("position", `(${x}, ${y})`);
+    html += property("size", `${w} × ${h}`);
 
     html += `</div>`;
   });
@@ -44,10 +45,12 @@ async function init() {
 
     const updateWindows = () => renderWindows([...axio.windows.values()]);
 
-    axio.on("sync:snapshot", updateWindows);
-    axio.on("window:opened", updateWindows);
-    axio.on("window:closed", updateWindows);
-    axio.on("window:updated", updateWindows);
+    // Use new event names
+    axio.on("window:added", updateWindows);
+    axio.on("window:changed", updateWindows);
+    axio.on("window:removed", updateWindows);
+    axio.on("focus:changed", updateWindows);
+    axio.on("active:changed", updateWindows);
 
     if (axio.windows.size > 0) {
       renderWindows([...axio.windows.values()]);

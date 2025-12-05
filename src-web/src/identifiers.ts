@@ -49,10 +49,10 @@ class WindowOverlay {
       const updateWindows = () =>
         this.updateWindowRectangles([...this.axio.windows.values()]);
 
-      this.axio.on("sync:snapshot", updateWindows);
-      this.axio.on("window:opened", updateWindows);
-      this.axio.on("window:closed", updateWindows);
-      this.axio.on("window:updated", updateWindows);
+      this.axio.on("sync:init", updateWindows);
+      this.axio.on("window:added", updateWindows);
+      this.axio.on("window:removed", updateWindows);
+      this.axio.on("window:changed", updateWindows);
 
       // Connect to websocket
       await this.axio.connect();
@@ -65,7 +65,7 @@ class WindowOverlay {
 
   private updateWindowRectangles(windows: AXWindow[]) {
     // Filter out very small windows
-    const visibleWindows = windows.filter((w) => w.w >= 50 && w.h >= 50);
+    const visibleWindows = windows.filter((w) => w.bounds.w >= 50 && w.bounds.h >= 50);
 
     // Keep track of current window IDs
     const currentWindowIds = new Set(visibleWindows.map((w) => w.id));
@@ -120,8 +120,8 @@ class WindowOverlay {
 
     // Position the label
     labelElement.style.position = "absolute";
-    labelElement.style.left = `${window.x}px`;
-    labelElement.style.top = `${window.y - 24}px`;
+    labelElement.style.left = `${window.bounds.x}px`;
+    labelElement.style.top = `${window.bounds.y - 24}px`;
 
     // Ensure label is visible by default (visibility will be adjusted later if needed)
     labelElement.style.display = "block";
@@ -142,10 +142,10 @@ class WindowOverlay {
     // Create unified borders for each group and update label visibility
     overlappingGroups.forEach((group, index) => {
       const rectangles = group.map((w) => ({
-        x: w.x,
-        y: w.y,
-        w: w.w,
-        h: w.h,
+        x: w.bounds.x,
+        y: w.bounds.y,
+        w: w.bounds.w,
+        h: w.bounds.h,
       }));
       const unionPolygon = this.computeRectangleUnion(rectangles);
       const borderStyle = this.getBorderStyleForGroup(group);
@@ -175,8 +175,8 @@ class WindowOverlay {
       if (!labelElement) continue;
 
       // Check if the label position is inside the polygon
-      const labelX = window.x;
-      const labelY = window.y - 24; // Label is positioned above the window
+      const labelX = window.bounds.x;
+      const labelY = window.bounds.y - 24; // Label is positioned above the window
       const isInside = this.isPointInPolygon({ x: labelX, y: labelY }, polygon);
 
       // Show label if: it's outside the polygon OR the window is focused
@@ -243,11 +243,15 @@ class WindowOverlay {
   }
 
   private doWindowsOverlap(a: AXWindow, b: AXWindow): boolean {
+    const ax = a.bounds.x, ay = a.bounds.y;
+    const aw = a.bounds.w, ah = a.bounds.h;
+    const bx = b.bounds.x, by = b.bounds.y;
+    const bw = b.bounds.w, bh = b.bounds.h;
     return !(
-      a.x + a.w <= b.x ||
-      b.x + b.w <= a.x ||
-      a.y + a.h <= b.y ||
-      b.y + b.h <= a.y
+      ax + aw <= bx ||
+      bx + bw <= ax ||
+      ay + ah <= by ||
+      by + bh <= ay
     );
   }
 

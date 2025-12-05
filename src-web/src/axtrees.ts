@@ -1,3 +1,8 @@
+/**
+ * AXTree Overlay - Accessibility tree viewer
+ * Uses the new AXIO architecture: elements are primary, trees are views.
+ */
+
 import { AXIO, AXElement } from "@axio/client";
 
 class AXTreeOverlay {
@@ -18,29 +23,22 @@ class AXTreeOverlay {
 
   private async init() {
     // Simple event handlers - just re-render when things change
-    this.axio.on("window:active", () => this.render());
-    this.axio.on("element:discovered", (el) => {
+    this.axio.on("active:changed", () => this.render());
+    this.axio.on("focus:changed", () => this.render());
+    this.axio.on("window:added", () => this.render());
+    this.axio.on("window:changed", () => this.render());
+    this.axio.on("window:removed", () => this.render());
+
+    this.axio.on("element:added", ({ element }) => {
       // Auto-watch textboxes for value changes
-      if (el.role === "textbox" || el.role === "searchbox") {
-        console.log("👁️ Auto-watching textbox:", el.label ?? el.id);
-        this.axio
-          .watch(el.id)
-          .catch((err) => console.error("Watch failed:", err));
+      if (element.role === "textbox" || element.role === "searchbox") {
+        this.axio.watch(element.id, () => this.render());
       }
       this.render();
     });
-    this.axio.on("element:updated", ({ element, changed }) => {
-      console.log(
-        "📝 element:updated",
-        element.role,
-        element.label,
-        "changed:",
-        changed
-      );
-      this.render();
-    });
-    this.axio.on("sync:snapshot", () => this.render());
-    this.axio.on("window:updated", () => this.render());
+
+    this.axio.on("element:changed", () => this.render());
+    this.axio.on("element:removed", () => this.render());
 
     // Mouse tracking for clickthrough
     this.axio.on("mouse:position", ({ x, y }) => {
@@ -68,8 +66,8 @@ class AXTreeOverlay {
       return;
     }
 
-    // Get window's children
-    const children = this.axio.getChildren(win);
+    // Get root elements for this window
+    const rootElements = this.axio.getRootElements(win.id);
 
     // Create tree container if needed
     if (!this.treeEl) {
@@ -79,15 +77,15 @@ class AXTreeOverlay {
       this.attachHandlers();
     }
 
-    // Always update position (even if no children yet)
+    // Always update position (using bounds)
     Object.assign(this.treeEl.style, {
-      left: `${win.x + win.w + 10}px`,
-      top: `${win.y}px`,
-      height: `${win.h}px`,
+      left: `${win.bounds.x + win.bounds.w + 10}px`,
+      top: `${win.bounds.y}px`,
+      height: `${win.bounds.h}px`,
     });
 
-    // Only render content if we have children
-    if (children.length === 0) {
+    // Only render content if we have elements
+    if (rootElements.length === 0) {
       this.treeEl.innerHTML = `<div class="tree-loading">Loading...</div>`;
       return;
     }
@@ -99,7 +97,7 @@ class AXTreeOverlay {
         <span class="legend-item"><span class="tree-label">label</span></span>
         <span class="legend-item"><span class="tree-value">value</span></span>
       </div>
-      <div class="tree-content">${this.renderNodes(children)}</div>
+      <div class="tree-content">${this.renderNodes(rootElements)}</div>
     `;
   }
 
@@ -273,8 +271,7 @@ class AXTreeOverlay {
         try {
           const el = await this.axio.refresh(node.dataset.id);
           if (el.bounds) {
-            const { x, y } = el.bounds.position;
-            const { width: w, height: h } = el.bounds.size;
+            const { x, y, w, h } = el.bounds;
             this.showOutline(x, y, w, h);
           }
         } catch {

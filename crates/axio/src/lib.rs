@@ -4,8 +4,8 @@
 
 mod types;
 pub use types::{
-    AXElement, AXRole, AXValue, AXWindow, AxioError, AxioResult, Bounds, ElementId, Position,
-    ServerEvent, Size, Snapshot, WindowId,
+    AXElement, AXRole, AXValue, AXWindow, AxioError, AxioResult, Bounds, ElementId, ServerEvent,
+    SyncInit, WindowId,
 };
 
 pub mod events;

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use ts_rs::TS;
 
-// Branded ID types for type safety
+// === Branded ID types ===
 
 #[derive(Branded, TS)]
 #[branded(serde)]
@@ -19,8 +19,9 @@ impl Borrow<str> for ElementId {
     }
 }
 
-#[derive(Branded)]
+#[derive(Branded, TS)]
 #[branded(serde)]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub struct WindowId(pub String);
 
 impl Borrow<str> for WindowId {
@@ -29,7 +30,7 @@ impl Borrow<str> for WindowId {
     }
 }
 
-// Error types
+// === Error types ===
 
 #[derive(Debug, thiserror::Error)]
 pub enum AxioError {
@@ -54,7 +55,7 @@ pub enum AxioError {
 
 pub type AxioResult<T> = Result<T, AxioError>;
 
-// Value and geometry types
+// === Value and geometry types ===
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 #[serde(tag = "type", content = "value")]
@@ -68,26 +69,14 @@ pub enum AXValue {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, TS)]
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
-pub struct Position {
+pub struct Bounds {
     pub x: f64,
     pub y: f64,
+    pub w: f64,
+    pub h: f64,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, TS)]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
-pub struct Size {
-    pub width: f64,
-    pub height: f64,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, TS)]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
-pub struct Bounds {
-    pub position: Position,
-    pub size: Size,
-}
-
-// ARIA role subset
+// === ARIA role subset ===
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, TS)]
 #[serde(rename_all = "lowercase")]
@@ -123,16 +112,32 @@ pub enum AXRole {
     Unknown,
 }
 
+// === Core types ===
+
+/// Window info from x-win + accessibility.
+/// Note: Windows don't have children - elements reference windows via window_id.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+pub struct AXWindow {
+    pub id: String,
+    pub title: String,
+    pub app_name: String,
+    pub bounds: Bounds,
+    pub focused: bool,
+    pub process_id: u32,
+}
+
 /// The unified element type - stored in registry and returned from API.
 /// Flat structure: children are IDs, not nested. Trees derived client-side.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub struct AXElement {
     pub id: ElementId,
+    /// Window this element belongs to
     pub window_id: String,
-    /// null = no parent (root element)
+    /// None = root element of window
     pub parent_id: Option<ElementId>,
-    /// Child element IDs. null = not yet discovered, [] = no children
+    /// Child element IDs. None = not yet fetched, Some([]) = no children
     pub children: Option<Vec<ElementId>>,
     pub role: AXRole,
     pub subrole: Option<String>,
@@ -145,65 +150,51 @@ pub struct AXElement {
     pub enabled: Option<bool>,
 }
 
-/// Window info from x-win + accessibility.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
-pub struct AXWindow {
-    pub id: String,
-    pub title: String,
-    pub app_name: String,
-    pub x: i32,
-    pub y: i32,
-    pub w: i32,
-    pub h: i32,
-    pub focused: bool,
-    pub process_id: u32,
-    /// Top-level element IDs. null = not yet discovered, [] = empty
-    pub children: Option<Vec<ElementId>>,
-}
+// === Events ===
+// Events notify clients when the Registry changes.
+// Any registry change emits an event, regardless of trigger.
 
-// Events
-
-/// Snapshot sent on client connection - full current state
+/// Initial state sent on connection
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
-pub struct Snapshot {
+pub struct SyncInit {
     pub windows: Vec<AXWindow>,
+    pub elements: Vec<AXElement>,
     pub active_window: Option<String>,
+    pub focused_window: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(tag = "event", content = "data")]
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub enum ServerEvent {
-    // Sync
-    #[serde(rename = "sync:snapshot")]
-    Snapshot(Snapshot),
+    // Initial sync (on connection)
+    #[serde(rename = "sync:init")]
+    SyncInit(SyncInit),
 
-    // Window lifecycle
-    #[serde(rename = "window:opened")]
-    WindowOpened(AXWindow),
-    #[serde(rename = "window:closed")]
-    WindowClosed { window_id: String },
-    #[serde(rename = "window:updated")]
-    WindowUpdated(AXWindow),
+    // Window lifecycle (from polling)
+    #[serde(rename = "window:added")]
+    WindowAdded { window: AXWindow },
+    #[serde(rename = "window:changed")]
+    WindowChanged { window: AXWindow },
+    #[serde(rename = "window:removed")]
+    WindowRemoved { window: AXWindow },
 
-    // Focus
-    #[serde(rename = "window:active")]
-    WindowActive { window_id: Option<String> },
+    // Element lifecycle (from RPC, watches)
+    #[serde(rename = "element:added")]
+    ElementAdded { element: AXElement },
+    #[serde(rename = "element:changed")]
+    ElementChanged { element: AXElement },
+    #[serde(rename = "element:removed")]
+    ElementRemoved { element: AXElement },
 
-    // Elements
-    #[serde(rename = "element:discovered")]
-    ElementDiscovered(AXElement),
-    #[serde(rename = "element:updated")]
-    ElementUpdated {
-        element: AXElement,
-        changed: Vec<String>,
-    },
-    #[serde(rename = "element:destroyed")]
-    ElementDestroyed { element_id: ElementId },
+    // Focus (from polling)
+    #[serde(rename = "focus:changed")]
+    FocusChanged { window_id: Option<WindowId> },
+    #[serde(rename = "active:changed")]
+    ActiveChanged { window_id: WindowId },
 
-    // Input
+    // Input tracking
     #[serde(rename = "mouse:position")]
     MousePosition { x: f64, y: f64 },
 }

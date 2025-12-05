@@ -104,17 +104,19 @@ pub fn get_main_screen_dimensions() -> (f64, f64) {
 }
 
 fn window_from_x_win(window: &x_win::WindowInfo, focused: bool) -> AXWindow {
+    use crate::types::Bounds;
     AXWindow {
         id: window.id.to_string(),
         title: window.title.clone(),
         app_name: window.info.name.clone(),
-        x: window.position.x,
-        y: window.position.y,
-        w: window.position.width,
-        h: window.position.height,
+        bounds: Bounds {
+            x: window.position.x as f64,
+            y: window.position.y as f64,
+            w: window.position.width as f64,
+            h: window.position.height as f64,
+        },
         focused,
         process_id: window.info.process_id,
-        children: None,
     }
 }
 
@@ -167,21 +169,21 @@ pub fn get_windows(options: &WindowEnumOptions) -> Option<Vec<AXWindow>> {
         .map(|w| {
             let focused = active_window_id.map_or(false, |id| id == w.id);
             let mut info = window_from_x_win(w, focused);
-            info.x -= offset_x;
-            info.y -= offset_y;
+            info.bounds.x -= offset_x as f64;
+            info.bounds.y -= offset_y as f64;
             info
         })
         .filter(|w| {
             if options.filter_fullscreen {
-                let is_fullscreen = w.x == 0
-                    && w.y == 0
-                    && (w.w as f64) == screen_width
-                    && (w.h as f64) == screen_height;
+                let is_fullscreen = w.bounds.x == 0.0
+                    && w.bounds.y == 0.0
+                    && w.bounds.w == screen_width
+                    && w.bounds.h == screen_height;
                 if is_fullscreen {
                     return false;
                 }
             }
-            if options.filter_offscreen && w.x > (screen_width as i32 + 1) {
+            if options.filter_offscreen && w.bounds.x > screen_width + 1.0 {
                 return false;
             }
             true
@@ -211,6 +213,7 @@ pub fn start_polling(config: PollingConfig) {
     thread::spawn(move || {
         let mut last_windows: HashMap<String, AXWindow> = HashMap::new();
         let mut last_active_id: Option<String> = None;
+        let mut last_focused_id: Option<String> = None;
 
         loop {
             let loop_start = Instant::now();
@@ -229,24 +232,26 @@ pub fn start_polling(config: PollingConfig) {
                 let current_ids: HashSet<&String> = current_map.keys().collect();
                 let last_ids: HashSet<&String> = last_windows.keys().collect();
 
-                // Detect closed windows
-                for closed_id in last_ids.difference(&current_ids) {
-                    crate::events::emit_window_closed(closed_id);
-                }
-
-                // Detect opened windows
-                for opened_id in current_ids.difference(&last_ids) {
-                    if let Some(window) = current_map.get(*opened_id) {
-                        crate::events::emit_window_opened(window);
+                // Detect removed windows (emit before removal, include full data)
+                for removed_id in last_ids.difference(&current_ids) {
+                    if let Some(window) = last_windows.get(*removed_id) {
+                        crate::events::emit_window_removed(window);
                     }
                 }
 
-                // Detect updated windows (position, title, etc changed)
+                // Detect added windows
+                for added_id in current_ids.difference(&last_ids) {
+                    if let Some(window) = current_map.get(*added_id) {
+                        crate::events::emit_window_added(window);
+                    }
+                }
+
+                // Detect changed windows (position, title, etc changed)
                 for id in current_ids.intersection(&last_ids) {
                     let current = current_map.get(*id).unwrap();
                     let last = last_windows.get(*id).unwrap();
                     if current != last {
-                        crate::events::emit_window_updated(current);
+                        crate::events::emit_window_changed(current);
                     }
                 }
 
@@ -254,18 +259,28 @@ pub fn start_polling(config: PollingConfig) {
                 let focused_window = current_windows.iter_mut().find(|w| w.focused);
                 let current_focused_id = focused_window.as_ref().map(|w| w.id.clone());
 
+                // Track focus changes
+                let focus_changed = current_focused_id != last_focused_id;
+                if focus_changed {
+                    let window_id = current_focused_id
+                        .as_ref()
+                        .map(|id| WindowId::new(id.clone()));
+                    crate::events::emit_focus_changed(window_id.as_ref());
+                    last_focused_id = current_focused_id.clone();
+                }
+
                 // Update active_window: if a window has focus, it becomes active
                 // If no window has focus (desktop), active_window is preserved
                 if let Some(ref focused_id) = current_focused_id {
                     let active_changed = last_active_id.as_ref() != Some(focused_id);
                     if active_changed {
                         *ACTIVE_WINDOW.write().unwrap() = Some(focused_id.clone());
-                        crate::events::emit_window_active(Some(focused_id));
+                        let window_id = WindowId::new(focused_id.clone());
+                        crate::events::emit_active_changed(&window_id);
                         last_active_id = Some(focused_id.clone());
 
-                        // Discover children when active window changes
+                        // Discover root elements when active window changes
                         if let Some(focused) = focused_window {
-                            let window_id = WindowId::new(focused.id.clone());
                             if let Ok(root) = crate::platform::macos::get_window_root(&window_id) {
                                 // Hydrate window info from accessibility
                                 if let Some(title) = &root.label {
@@ -275,23 +290,9 @@ pub fn start_polling(config: PollingConfig) {
                                     }
                                 }
 
-                                // Get root's children as the window's top-level elements
-                                if let Ok(children) =
-                                    crate::platform::macos::discover_children(&root.id, 100)
-                                {
-                                    let child_ids: Vec<_> =
-                                        children.iter().map(|c| c.id.clone()).collect();
-                                    for child in &children {
-                                        crate::events::emit_element_discovered(child);
-                                    }
-                                    WindowManager::set_children(&window_id, child_ids.clone());
-                                    focused.children = Some(child_ids);
-                                } else {
-                                    WindowManager::set_children(&window_id, vec![]);
-                                    focused.children = Some(vec![]);
-                                }
-                                // Notify client that window now has children
-                                crate::events::emit_window_updated(focused);
+                                // Discover root's children (emits element:added events)
+                                // Elements track their window via window_id, not vice versa
+                                let _ = crate::platform::macos::discover_children(&root.id, 100);
                             }
                         }
                     }

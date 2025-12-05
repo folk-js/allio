@@ -63,13 +63,11 @@ impl WindowManager {
             let window_id = WindowId::new(window_info.id.clone());
 
             if let Some(existing) = cache.windows.get_mut(&window_id) {
-                // Preserve ax_title and children across polls
+                // Preserve ax_title across polls
                 let preserved_ax_title = existing.ax_title.clone();
-                let preserved_children = existing.info.children.clone();
 
                 existing.info = window_info;
                 existing.ax_title = preserved_ax_title;
-                existing.info.children = preserved_children;
 
                 // Apply ax_title if we have it (higher precedence)
                 if let Some(ref ax_title) = existing.ax_title {
@@ -107,14 +105,6 @@ impl WindowManager {
         }
     }
 
-    /// Set the children IDs for a window
-    pub fn set_children(window_id: &WindowId, children: Vec<crate::types::ElementId>) {
-        let mut cache = WINDOW_CACHE.lock().unwrap();
-        if let Some(managed) = cache.windows.get_mut(window_id) {
-            managed.info.children = Some(children);
-        }
-    }
-
     // TODO: Find better matching strategy. Currently uses bounds-based matching because
     // the private _AXUIElementGetWindow API doesn't work on current macOS versions.
     fn fetch_ax_element_for_window(window: &AXWindow) -> Option<AXUIElement> {
@@ -133,6 +123,10 @@ impl WindowManager {
         }
 
         const MARGIN: i32 = 2;
+        let win_x = window.bounds.x as i32;
+        let win_y = window.bounds.y as i32;
+        let win_w = window.bounds.w as i32;
+        let win_h = window.bounds.h as i32;
 
         for element in window_elements.iter() {
             let position_attr = CFString::new(kAXPositionAttribute);
@@ -150,10 +144,10 @@ impl WindowManager {
                 .and_then(|s| crate::platform::macos::extract_size(&s));
 
             if let (Some((ax_x, ax_y)), Some((ax_w, ax_h))) = (element_pos, element_size) {
-                let pos_ok = (ax_x as i32 - window.x).abs() <= MARGIN
-                    && (ax_y as i32 - window.y).abs() <= MARGIN;
-                let size_ok = (ax_w as i32 - window.w).abs() <= MARGIN
-                    && (ax_h as i32 - window.h).abs() <= MARGIN;
+                let pos_ok =
+                    (ax_x as i32 - win_x).abs() <= MARGIN && (ax_y as i32 - win_y).abs() <= MARGIN;
+                let size_ok =
+                    (ax_w as i32 - win_w).abs() <= MARGIN && (ax_h as i32 - win_h).abs() <= MARGIN;
 
                 if pos_ok && size_ok {
                     return Some(element.clone());
@@ -181,10 +175,9 @@ impl WindowManager {
         const MARGIN: f64 = 2.0;
 
         for (window_id, managed) in cache.windows.iter() {
-            let info = &managed.info;
-            let pos_ok = (info.x as f64 - x).abs() <= MARGIN && (info.y as f64 - y).abs() <= MARGIN;
-            let size_ok =
-                (info.w as f64 - w).abs() <= MARGIN && (info.h as f64 - h).abs() <= MARGIN;
+            let b = &managed.info.bounds;
+            let pos_ok = (b.x - x).abs() <= MARGIN && (b.y - y).abs() <= MARGIN;
+            let size_ok = (b.w - w).abs() <= MARGIN && (b.h - h).abs() <= MARGIN;
 
             if pos_ok && size_ok {
                 return Some(window_id.clone());

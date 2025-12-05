@@ -1,6 +1,6 @@
 //! WebSocket server - thin transport layer over axio.
 
-use axio::{AXElement, AXWindow, ElementId, EventSink, ServerEvent, Snapshot};
+use axio::{AXElement, AXWindow, EventSink, ServerEvent, SyncInit, WindowId};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -46,54 +46,74 @@ impl WebSocketState {
 }
 
 impl EventSink for WebSocketState {
-    fn on_window_opened(&self, window: &AXWindow) {
-        send_event(&self.sender, ServerEvent::WindowOpened(window.clone()));
-    }
-
-    fn on_window_closed(&self, window_id: &str) {
+    fn on_window_added(&self, window: &AXWindow) {
         send_event(
             &self.sender,
-            ServerEvent::WindowClosed {
-                window_id: window_id.to_string(),
+            ServerEvent::WindowAdded {
+                window: window.clone(),
             },
         );
     }
 
-    fn on_window_updated(&self, window: &AXWindow) {
-        send_event(&self.sender, ServerEvent::WindowUpdated(window.clone()));
-    }
-
-    fn on_window_active(&self, window_id: Option<&str>) {
+    fn on_window_changed(&self, window: &AXWindow) {
         send_event(
             &self.sender,
-            ServerEvent::WindowActive {
-                window_id: window_id.map(|s| s.to_string()),
+            ServerEvent::WindowChanged {
+                window: window.clone(),
             },
         );
     }
 
-    fn on_element_discovered(&self, element: &AXElement) {
+    fn on_window_removed(&self, window: &AXWindow) {
         send_event(
             &self.sender,
-            ServerEvent::ElementDiscovered(element.clone()),
+            ServerEvent::WindowRemoved {
+                window: window.clone(),
+            },
         );
     }
 
-    fn on_element_updated(&self, element: &AXElement, changed: &[String]) {
+    fn on_focus_changed(&self, window_id: Option<&WindowId>) {
         send_event(
             &self.sender,
-            ServerEvent::ElementUpdated {
+            ServerEvent::FocusChanged {
+                window_id: window_id.cloned(),
+            },
+        );
+    }
+
+    fn on_active_changed(&self, window_id: &WindowId) {
+        send_event(
+            &self.sender,
+            ServerEvent::ActiveChanged {
+                window_id: window_id.clone(),
+            },
+        );
+    }
+
+    fn on_element_added(&self, element: &AXElement) {
+        send_event(
+            &self.sender,
+            ServerEvent::ElementAdded {
                 element: element.clone(),
-                changed: changed.to_vec(),
             },
         );
     }
 
-    fn on_element_destroyed(&self, element_id: &ElementId) {
+    fn on_element_changed(&self, element: &AXElement) {
         send_event(
             &self.sender,
-            ServerEvent::ElementDestroyed {
-                element_id: element_id.clone(),
+            ServerEvent::ElementChanged {
+                element: element.clone(),
+            },
+        );
+    }
+
+    fn on_element_removed(&self, element: &AXElement) {
+        send_event(
+            &self.sender,
+            ServerEvent::ElementRemoved {
+                element: element.clone(),
             },
         );
     }
@@ -137,13 +157,19 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
 
     println!("[client] connected");
 
-    // Send sync:snapshot with current state
-    let snapshot = Snapshot {
+    // Send initial state as sync:init
+    let active = axio::get_active_window();
+    let init = SyncInit {
         windows: axio::get_current_windows(),
-        active_window: axio::get_active_window(),
+        elements: axio::element_registry::ElementRegistry::get_all(),
+        active_window: active.clone(),
+        focused_window: active, // Assume focused = active on connect
     };
-    if let Ok(msg) = serde_json::to_string(&ServerEvent::Snapshot(snapshot)) {
-        let _ = socket.send(Message::Text(msg)).await;
+    let event = ServerEvent::SyncInit(init);
+    if let Ok(msg) = serde_json::to_string(&event) {
+        if socket.send(Message::Text(msg)).await.is_err() {
+            return;
+        }
     }
 
     loop {
@@ -152,6 +178,11 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         let response = handle_request(&text, &ws_state);
+                        // Drain any pending events before sending RPC response
+                        // This ensures events triggered by RPC are sent first
+                        while let Ok(event) = rx.try_recv() {
+                            let _ = socket.send(Message::Text(event)).await;
+                        }
                         let _ = socket.send(Message::Text(response)).await;
                     }
                     Some(Ok(Message::Close(_))) => {

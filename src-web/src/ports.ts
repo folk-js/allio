@@ -78,15 +78,15 @@ class PortsDemo {
       const updateWindows = () =>
         this.updateWindows([...this.axio.windows.values()]);
 
-      this.axio.on("sync:snapshot", updateWindows);
-      this.axio.on("window:opened", updateWindows);
-      this.axio.on("window:closed", updateWindows);
-      this.axio.on("window:updated", updateWindows);
+      this.axio.on("sync:init", updateWindows);
+      this.axio.on("window:added", updateWindows);
+      this.axio.on("window:removed", updateWindows);
+      this.axio.on("window:changed", updateWindows);
 
-      this.axio.on("element:discovered", (element) =>
+      this.axio.on("element:added", ({ element }) =>
         this.handleElementsUpdate([element])
       );
-      this.axio.on("element:updated", ({ element }) =>
+      this.axio.on("element:changed", ({ element }) =>
         this.handleElementsUpdate([element])
       );
 
@@ -264,10 +264,10 @@ class PortsDemo {
     }
 
     // Update window container position and size
-    windowContainer.style.left = `${window.x}px`;
-    windowContainer.style.top = `${window.y}px`;
-    windowContainer.style.width = `${window.w}px`;
-    windowContainer.style.height = `${window.h}px`;
+    windowContainer.style.left = `${window.bounds.x}px`;
+    windowContainer.style.top = `${window.bounds.y}px`;
+    windowContainer.style.width = `${window.bounds.w}px`;
+    windowContainer.style.height = `${window.bounds.h}px`;
   }
 
   private togglePortCreationMode(
@@ -388,12 +388,8 @@ class PortsDemo {
   private getWindowAtPosition(x: number, y: number): AXWindow | null {
     // Check which window contains the given point
     for (const window of this.windows) {
-      if (
-        x >= window.x &&
-        x <= window.x + window.w &&
-        y >= window.y &&
-        y <= window.y + window.h
-      ) {
+      const b = window.bounds;
+      if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
         return window;
       }
     }
@@ -438,9 +434,7 @@ class PortsDemo {
 
     // Watch the element for value changes
     if (element.id) {
-      this.axio.watch(element.id).catch((err) => {
-        console.error("Failed to watch port element:", err);
-      });
+      this.axio.watch(element.id);
     }
 
     console.log(`✅ Created ${type} port:`, port);
@@ -468,7 +462,7 @@ class PortsDemo {
       totalItemCount * portSize + (totalItemCount - 1) * portSpacing;
 
     // Starting Y position (centered vertically on window)
-    const startY = window.y + (window.h - totalHeight) / 2;
+    const startY = window.bounds.y + (window.bounds.h - totalHeight) / 2;
 
     // Y position for this port (add button first, then each port)
     const portIndex = existingPortsOnEdge.length;
@@ -482,10 +476,10 @@ class PortsDemo {
     let x: number;
     if (type === "input") {
       // Left edge - center of port circle
-      x = window.x;
+      x = window.bounds.x;
     } else {
       // Right edge - center of port circle
-      x = window.x + window.w;
+      x = window.bounds.x + window.bounds.w;
     }
 
     return { x, y: portY };
@@ -778,7 +772,7 @@ class PortsDemo {
       const totalItemCount = portsOnEdge.length + 1; // ports + add button
       const totalHeight =
         totalItemCount * portSize + (totalItemCount - 1) * portSpacing;
-      const startY = window.y + (window.h - totalHeight) / 2;
+      const startY = window.bounds.y + (window.bounds.h - totalHeight) / 2;
 
       // Y position (add button is first, then ports)
       const portY =
@@ -789,7 +783,7 @@ class PortsDemo {
         portSize / 2;
 
       // X position
-      const x = port.type === "input" ? window.x : window.x + window.w;
+      const x = port.type === "input" ? window.bounds.x : window.bounds.x + window.bounds.w;
 
       // Update stored position
       port.x = x;

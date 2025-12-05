@@ -155,6 +155,17 @@ impl ElementRegistry {
         })
     }
 
+    /// Get all elements in registry (for initial sync).
+    pub fn get_all() -> Vec<AXElement> {
+        Self::with(|registry| {
+            registry
+                .windows
+                .values()
+                .flat_map(|w| w.elements.values().map(|s| s.element.clone()))
+                .collect()
+        })
+    }
+
     /// Access stored element (for internal ops like click, write).
     pub fn with_stored<F, R>(element_id: &ElementId, f: F) -> AxioResult<R>
     where
