@@ -13,7 +13,24 @@ use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
+// macOS NSPanel support for non-focus-stealing overlay
+#[cfg(target_os = "macos")]
+use tauri_nspanel::{tauri_panel, PanelLevel, StyleMask, WebviewWindowExt as _};
+
 mod mouse;
+
+// Define panel class for macOS - this creates a non-activating floating panel
+#[cfg(target_os = "macos")]
+tauri_panel! {
+    panel!(AxioPanel {
+        config: {
+            // Panel can become key window (receive keyboard input when needed)
+            can_become_key_window: true,
+            // This is a floating panel (stays above regular windows)
+            is_floating_panel: true
+        }
+    })
+}
 
 use axio::windows::{get_main_screen_dimensions, PollingConfig, WindowEnumOptions};
 use axio_ws::WebSocketState;
@@ -164,8 +181,15 @@ fn build_overlay_tray(
 }
 
 fn main() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
+    let mut builder = tauri::Builder::default().plugin(tauri_plugin_shell::init());
+
+    // Initialize NSPanel plugin on macOS for non-focus-stealing overlay
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.plugin(tauri_nspanel::init());
+    }
+
+    builder
         .manage(AppState::default())
         .setup(|app| {
             // Create broadcast channel for WebSocket events
@@ -208,7 +232,37 @@ fn main() {
                     .set_position(tauri::LogicalPosition::new(0.0, 0.0))
                     .ok();
                 window.set_ignore_cursor_events(false).ok();
-                window.show().ok();
+
+                // On macOS, convert the window to a non-activating NSPanel
+                // This allows the overlay to receive clicks without stealing focus
+                // from the app the user is working with
+                #[cfg(target_os = "macos")]
+                {
+                    let panel = window
+                        .to_panel::<AxioPanel>()
+                        .expect("Failed to convert window to panel");
+
+                    // Set the NonactivatingPanel style mask - this is the key to non-focus-stealing!
+                    // This tells macOS this panel should not activate when clicked
+                    let style = StyleMask::empty().nonactivating_panel();
+                    panel.set_style_mask(style.into());
+
+                    // Set panel to floating level (above regular windows but below screen savers)
+                    panel.set_level(PanelLevel::Floating.into());
+                    // Critical: Only become key window if no other window can (non-activating behavior)
+                    panel.set_becomes_key_only_if_needed(true);
+                    // Don't hide when app deactivates (we want overlay always visible)
+                    panel.set_hides_on_deactivate(false);
+                    // Make it a floating panel programmatically as well
+                    panel.set_floating_panel(true);
+                    // Show the panel
+                    panel.show();
+                }
+
+                #[cfg(not(target_os = "macos"))]
+                {
+                    window.show().ok();
+                }
             }
 
             // Set up global shortcuts

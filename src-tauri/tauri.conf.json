@@ -48,7 +48,8 @@
         "decorations": false,
         "useHttpsScheme": false,
         "skipTaskbar": true,
-        "visible": false
+        "visible": false,
+        "acceptFirstMouse": true
       }
     ],
     "macOSPrivateApi": true
