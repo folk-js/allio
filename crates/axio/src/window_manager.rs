@@ -2,8 +2,8 @@
 
 use accessibility::AXUIElement;
 use once_cell::sync::Lazy;
+use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::Mutex;
 
 use crate::types::{AXWindow, WindowId};
 
@@ -40,7 +40,7 @@ impl WindowManager {
   pub fn update_windows(
     new_windows: Vec<AXWindow>,
   ) -> (Vec<ManagedWindow>, Vec<WindowId>, Vec<WindowId>) {
-    let mut cache = WINDOW_CACHE.lock().unwrap();
+    let mut cache = WINDOW_CACHE.lock();
     let mut added_ids = Vec::new();
     let mut removed_ids = Vec::new();
 
@@ -98,7 +98,7 @@ impl WindowManager {
 
   /// Set the accessibility-derived title for a window (higher precedence than x-win)
   pub fn set_ax_title(window_id: &WindowId, title: String) {
-    let mut cache = WINDOW_CACHE.lock().unwrap();
+    let mut cache = WINDOW_CACHE.lock();
     if let Some(managed) = cache.windows.get_mut(window_id) {
       managed.ax_title = Some(title.clone());
       managed.info.title = title;
@@ -163,14 +163,14 @@ impl WindowManager {
   }
 
   pub fn get_window(window_id: &WindowId) -> Option<ManagedWindow> {
-    let cache = WINDOW_CACHE.lock().unwrap();
+    let cache = WINDOW_CACHE.lock();
     cache.windows.get(window_id).cloned()
   }
 
   /// Find a tracked window by its bounds (position and size).
   /// Used to match an AXWindow element back to its real window ID.
   pub fn find_window_id_by_bounds(x: f64, y: f64, w: f64, h: f64) -> Option<WindowId> {
-    let cache = WINDOW_CACHE.lock().unwrap();
+    let cache = WINDOW_CACHE.lock();
     const MARGIN: f64 = 2.0;
 
     for (window_id, managed) in cache.windows.iter() {
@@ -189,7 +189,7 @@ impl WindowManager {
   /// Returns the frontmost window (lowest z_index) that contains the point.
   /// Since tracked windows exclude our own PID, this naturally skips our overlay.
   pub fn find_window_at_point(x: f64, y: f64) -> Option<ManagedWindow> {
-    let cache = WINDOW_CACHE.lock().unwrap();
+    let cache = WINDOW_CACHE.lock();
 
     // Collect windows containing the point
     let mut candidates: Vec<_> = cache

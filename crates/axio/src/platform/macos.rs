@@ -116,8 +116,8 @@ impl AXNotification {
 use accessibility_sys::{AXObserverCreate, AXObserverGetRunLoopSource, AXObserverRef};
 use core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopSource};
 use once_cell::sync::Lazy;
+use parking_lot::Mutex;
 use std::collections::HashMap as StdHashMap;
-use std::sync::Mutex;
 
 // ============================================================================
 // Observer Context Registry - Safe callback handling
@@ -149,7 +149,6 @@ pub fn register_observer_context(element_id: ElementId) -> *mut ObserverContextH
   let context_id = NEXT_CONTEXT_ID.fetch_add(1, AtomicOrdering::Relaxed);
   OBSERVER_CONTEXT_REGISTRY
     .lock()
-    .unwrap()
     .insert(context_id, element_id);
 
   Box::into_raw(Box::new(ObserverContextHandle { context_id }))
@@ -162,10 +161,7 @@ pub fn unregister_observer_context(handle_ptr: *mut ObserverContextHandle) {
   }
   unsafe {
     let handle = Box::from_raw(handle_ptr);
-    OBSERVER_CONTEXT_REGISTRY
-      .lock()
-      .unwrap()
-      .remove(&handle.context_id);
+    OBSERVER_CONTEXT_REGISTRY.lock().remove(&handle.context_id);
   }
 }
 
@@ -178,7 +174,6 @@ fn lookup_observer_context(handle_ptr: *const ObserverContextHandle) -> Option<E
     let handle = &*handle_ptr;
     OBSERVER_CONTEXT_REGISTRY
       .lock()
-      .unwrap()
       .get(&handle.context_id)
       .cloned()
   }
@@ -186,7 +181,7 @@ fn lookup_observer_context(handle_ptr: *const ObserverContextHandle) -> Option<E
 
 /// Get the count of active observer contexts (for diagnostics)
 pub fn observer_context_count() -> usize {
-  OBSERVER_CONTEXT_REGISTRY.lock().unwrap().len()
+  OBSERVER_CONTEXT_REGISTRY.lock().len()
 }
 
 // Legacy type alias for compatibility
@@ -209,7 +204,7 @@ pub struct AppObserverContextHandle {
 /// Register an app for observation and get a context handle.
 fn register_app_context(pid: u32) -> *mut AppObserverContextHandle {
   let context_id = NEXT_CONTEXT_ID.fetch_add(1, AtomicOrdering::Relaxed);
-  APP_CONTEXT_REGISTRY.lock().unwrap().insert(context_id, pid);
+  APP_CONTEXT_REGISTRY.lock().insert(context_id, pid);
   Box::into_raw(Box::new(AppObserverContextHandle { context_id }))
 }
 
@@ -220,10 +215,7 @@ fn unregister_app_context(handle_ptr: *mut AppObserverContextHandle) {
   }
   unsafe {
     let handle = Box::from_raw(handle_ptr);
-    APP_CONTEXT_REGISTRY
-      .lock()
-      .unwrap()
-      .remove(&handle.context_id);
+    APP_CONTEXT_REGISTRY.lock().remove(&handle.context_id);
   }
 }
 
@@ -234,11 +226,7 @@ fn lookup_app_context(handle_ptr: *const AppObserverContextHandle) -> Option<u32
   }
   unsafe {
     let handle = &*handle_ptr;
-    APP_CONTEXT_REGISTRY
-      .lock()
-      .unwrap()
-      .get(&handle.context_id)
-      .copied()
+    APP_CONTEXT_REGISTRY.lock().get(&handle.context_id).copied()
   }
 }
 
@@ -270,7 +258,7 @@ static APP_OBSERVERS: Lazy<Mutex<StdHashMap<u32, AppState>>> =
 /// Clean up app observers for PIDs that are no longer running.
 /// Called periodically from the polling loop.
 pub fn cleanup_dead_observers(active_pids: &std::collections::HashSet<u32>) -> usize {
-  let mut observers = APP_OBSERVERS.lock().unwrap();
+  let mut observers = APP_OBSERVERS.lock();
   let dead_pids: Vec<u32> = observers
     .keys()
     .filter(|pid| !active_pids.contains(pid))
@@ -300,13 +288,13 @@ pub fn cleanup_dead_observers(active_pids: &std::collections::HashSet<u32>) -> u
 
 /// Get the number of active app observers (for diagnostics).
 pub fn app_observer_count() -> usize {
-  APP_OBSERVERS.lock().unwrap().len()
+  APP_OBSERVERS.lock().len()
 }
 
 /// Ensure app-level observer is set up for a PID (Tier 1).
 /// Called when first element from an app is registered.
 pub fn ensure_app_observer(pid: u32) {
-  let mut observers = APP_OBSERVERS.lock().unwrap();
+  let mut observers = APP_OBSERVERS.lock();
   if observers.contains_key(&pid) {
     return;
   }
@@ -452,7 +440,7 @@ fn handle_app_focus_changed(pid: u32, element_ref: accessibility_sys::AXUIElemen
 
   // Get previous focused element info and update state
   let (previous_element_id, previous_was_watchable) = {
-    let mut observers = APP_OBSERVERS.lock().unwrap();
+    let mut observers = APP_OBSERVERS.lock();
     if let Some(state) = observers.get_mut(&pid) {
       let prev_id = state.focused_element_id.clone();
       let prev_was_watchable = state.focused_is_watchable;

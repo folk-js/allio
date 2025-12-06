@@ -4,10 +4,10 @@ use crate::platform::macos::AXNotification;
 use crate::types::{AXElement, AxioError, AxioResult, ElementId, WindowId};
 use accessibility::AXUIElement;
 use accessibility_sys::AXObserverRef;
-use once_cell::sync::Lazy;
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::Mutex;
+use std::sync::LazyLock;
 
 fn ax_elements_equal(elem1: &AXUIElement, elem2: &AXUIElement) -> bool {
   use accessibility_sys::AXUIElementRef;
@@ -53,7 +53,8 @@ struct WindowState {
   observer: Option<AXObserverRef>,
 }
 
-static ELEMENT_REGISTRY: Lazy<Mutex<Option<ElementRegistry>>> = Lazy::new(|| Mutex::new(None));
+static ELEMENT_REGISTRY: LazyLock<Mutex<ElementRegistry>> =
+  LazyLock::new(|| Mutex::new(ElementRegistry::new()));
 
 pub struct ElementRegistry {
   windows: HashMap<WindowId, WindowState>,
@@ -64,21 +65,19 @@ unsafe impl Send for ElementRegistry {}
 unsafe impl Sync for ElementRegistry {}
 
 impl ElementRegistry {
-  pub fn initialize() {
-    let mut registry = ELEMENT_REGISTRY.lock().unwrap();
-    *registry = Some(ElementRegistry {
+  fn new() -> Self {
+    Self {
       windows: HashMap::new(),
       element_to_window: HashMap::new(),
-    });
+    }
   }
 
   fn with<F, R>(f: F) -> R
   where
     F: FnOnce(&mut ElementRegistry) -> R,
   {
-    let mut guard = ELEMENT_REGISTRY.lock().unwrap();
-    let registry = guard.as_mut().expect("ElementRegistry not initialized");
-    f(registry)
+    let mut guard = ELEMENT_REGISTRY.lock();
+    f(&mut guard)
   }
 
   /// Register element, returning existing if equivalent (stable IDs).

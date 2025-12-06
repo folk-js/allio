@@ -5,8 +5,8 @@ use crate::types::AXWindow;
 use crate::window_manager::WindowManager;
 use crate::WindowId;
 use once_cell::sync::Lazy;
+use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -33,7 +33,7 @@ static BUNDLE_ID_CACHE: Lazy<Mutex<HashMap<u32, Option<String>>>> =
 /// Clean up bundle ID cache entries for PIDs that are no longer active.
 #[cfg(target_os = "macos")]
 fn cleanup_bundle_id_cache(active_pids: &HashSet<u32>) -> usize {
-  let mut cache = BUNDLE_ID_CACHE.lock().unwrap();
+  let mut cache = BUNDLE_ID_CACHE.lock();
   let initial_size = cache.len();
   cache.retain(|pid, _| active_pids.contains(pid));
   initial_size - cache.len()
@@ -46,7 +46,7 @@ fn cleanup_bundle_id_cache(_active_pids: &HashSet<u32>) -> usize {
 
 /// Get the current size of the bundle ID cache (for diagnostics).
 pub fn bundle_id_cache_size() -> usize {
-  BUNDLE_ID_CACHE.lock().unwrap().len()
+  BUNDLE_ID_CACHE.lock().len()
 }
 
 /// Last known window list from polling. Always available immediately.
@@ -57,12 +57,12 @@ static ACTIVE_WINDOW: Lazy<RwLock<Option<String>>> = Lazy::new(|| RwLock::new(No
 
 /// Get the last known window list. Returns immediately without polling.
 pub fn get_current_windows() -> Vec<AXWindow> {
-  CURRENT_WINDOWS.read().unwrap().clone()
+  CURRENT_WINDOWS.read().clone()
 }
 
 /// Get the active window ID (most recent valid focus, preserved when desktop focused)
 pub fn get_active_window() -> Option<String> {
-  ACTIVE_WINDOW.read().unwrap().clone()
+  ACTIVE_WINDOW.read().clone()
 }
 
 #[cfg(target_os = "macos")]
@@ -79,7 +79,7 @@ fn get_bundle_id(pid: u32) -> Option<String> {
   use std::process::Command;
 
   {
-    let cache = BUNDLE_ID_CACHE.lock().unwrap();
+    let cache = BUNDLE_ID_CACHE.lock();
     if let Some(cached) = cache.get(&pid) {
       return cached.clone();
     }
@@ -93,10 +93,7 @@ fn get_bundle_id(pid: u32) -> Option<String> {
     .and_then(|output| String::from_utf8(output.stdout).ok())
     .and_then(|info| parse_bundle_id(&info));
 
-  BUNDLE_ID_CACHE
-    .lock()
-    .unwrap()
-    .insert(pid, bundle_id.clone());
+  BUNDLE_ID_CACHE.lock().insert(pid, bundle_id.clone());
 
   bundle_id
 }
@@ -343,7 +340,7 @@ pub fn start_polling(config: PollingConfig) {
         if let Some(ref focused_id) = current_focused_id {
           let active_changed = last_active_id.as_ref() != Some(focused_id);
           if active_changed {
-            *ACTIVE_WINDOW.write().unwrap() = Some(focused_id.clone());
+            *ACTIVE_WINDOW.write() = Some(focused_id.clone());
             let window_id = WindowId::new(focused_id.clone());
             crate::events::emit_active_changed(&window_id);
             last_active_id = Some(focused_id.clone());
@@ -355,7 +352,7 @@ pub fn start_polling(config: PollingConfig) {
         // we preserve last_active_id - no event emitted, active window stays same
 
         // Update global state
-        *CURRENT_WINDOWS.write().unwrap() = current_windows;
+        *CURRENT_WINDOWS.write() = current_windows;
         last_windows = current_map;
 
         // Periodic cleanup for dead PIDs
