@@ -1,5 +1,3 @@
-//! Trait-based event system decoupled from transport.
-
 use crate::types::{AXElement, AXWindow, ElementId, Point, ServerEvent, TextRange, WindowId};
 
 /// Implement to receive AXIO events.

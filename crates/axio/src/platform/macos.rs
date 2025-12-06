@@ -10,6 +10,7 @@ use core_foundation::base::TCFType;
 use core_foundation::string::CFString;
 use uuid::Uuid;
 
+use super::handles::{ElementHandle, ObserverHandle};
 use crate::types::{
   AXAction, AXElement, AXRole, AXValue, AxioError, AxioResult, Bounds, ElementId, WindowId,
 };
@@ -179,14 +180,6 @@ fn lookup_observer_context(handle_ptr: *const ObserverContextHandle) -> Option<E
   }
 }
 
-/// Get the count of active observer contexts (for diagnostics)
-pub fn observer_context_count() -> usize {
-  OBSERVER_CONTEXT_REGISTRY.lock().len()
-}
-
-// Legacy type alias for compatibility
-pub type ObserverContext = ObserverContextHandle;
-
 // ============================================================================
 // App Observer Context Registry
 // ============================================================================
@@ -229,9 +222,6 @@ fn lookup_app_context(handle_ptr: *const AppObserverContextHandle) -> Option<u32
     APP_CONTEXT_REGISTRY.lock().get(&handle.context_id).copied()
   }
 }
-
-// Legacy alias
-pub type AppObserverContext = AppObserverContextHandle;
 
 // ============================================================================
 // App-Level Observer State (Tier 1)
@@ -284,11 +274,6 @@ pub fn cleanup_dead_observers(active_pids: &std::collections::HashSet<crate::Pro
     }
   }
   count
-}
-
-/// Get the number of active app observers (for diagnostics).
-pub fn app_observer_count() -> usize {
-  APP_OBSERVERS.lock().len()
 }
 
 /// Ensure app-level observer is set up for a PID (Tier 1).
@@ -637,8 +622,8 @@ fn get_window_id_from_ax_element(element: &AXUIElement) -> Option<WindowId> {
   crate::window_registry::find_by_bounds(&bounds)
 }
 
-/// Create an AXObserver for a process and add it to the main run loop.
-pub fn create_observer_for_pid(pid: u32) -> AxioResult<AXObserverRef> {
+/// Create an observer for a process and add it to the main run loop.
+pub fn create_observer_for_pid(pid: u32) -> AxioResult<ObserverHandle> {
   let mut observer_ref: AXObserverRef = std::ptr::null_mut();
 
   let result = unsafe {
@@ -669,7 +654,7 @@ pub fn create_observer_for_pid(pid: u32) -> AxioResult<AXObserverRef> {
     main_run_loop.add_source(&run_loop_source, kCFRunLoopDefaultMode);
   }
 
-  Ok(observer_ref)
+  Ok(ObserverHandle::new(observer_ref))
 }
 
 unsafe extern "C" fn observer_callback(
@@ -878,7 +863,13 @@ pub fn build_element(
   };
 
   // Register (returns existing if duplicate)
-  ElementRegistry::register(element, ax_element.clone(), pid, &platform_role)
+  // Wrap in ElementHandle for opaque storage
+  ElementRegistry::register(
+    element,
+    ElementHandle::new(ax_element.clone()),
+    pid,
+    &platform_role,
+  )
 }
 
 /// Discover and register children of an element. Updates parent's children.
@@ -888,7 +879,7 @@ pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResu
 
   let (ax_element, window_id, pid) = ElementRegistry::with_stored(parent_id, |stored| {
     (
-      stored.ax_element.clone(),
+      stored.handle.inner().clone(),
       stored.element.window_id.clone(),
       stored.pid,
     )
@@ -929,14 +920,14 @@ pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResu
   Ok(children)
 }
 
-/// Refresh an element's attributes from macOS.
+/// Refresh an element's attributes from the platform.
 pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
   use crate::element_registry::ElementRegistry;
 
   let (ax_element, window_id, _pid, parent_id, children, platform_role) =
     ElementRegistry::with_stored(element_id, |stored| {
       (
-        stored.ax_element.clone(),
+        stored.handle.inner().clone(),
         stored.element.window_id.clone(),
         stored.pid,
         stored.element.parent_id.clone(),
@@ -948,7 +939,7 @@ pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
   let role = map_platform_role(&platform_role);
 
   let subrole = if matches!(role, AXRole::Unknown) {
-    Some(platform_role.clone())
+    Some(platform_role.to_string())
   } else {
     ax_element
       .attribute(&AXAttribute::subrole())
@@ -1089,20 +1080,6 @@ fn map_platform_action(action: &str) -> Option<AXAction> {
     "AXRaise" => Some(AXAction::Raise),
     "AXPick" => Some(AXAction::Pick),
     _ => None, // Unknown actions ignored
-  }
-}
-
-/// Convert AXAction to macOS action string for performing actions
-pub fn action_to_macos(action: AXAction) -> &'static str {
-  match action {
-    AXAction::Press => "AXPress",
-    AXAction::ShowMenu => "AXShowMenu",
-    AXAction::Increment => "AXIncrement",
-    AXAction::Decrement => "AXDecrement",
-    AXAction::Confirm => "AXConfirm",
-    AXAction::Cancel => "AXCancel",
-    AXAction::Raise => "AXRaise",
-    AXAction::Pick => "AXPick",
   }
 }
 
@@ -1294,11 +1271,11 @@ pub fn get_window_root(window_id: &WindowId) -> AxioResult<AXElement> {
   let (window, handle) = crate::window_registry::get_with_handle(window_id)
     .ok_or_else(|| AxioError::WindowNotFound(window_id.clone()))?;
 
-  let window_element =
+  let window_handle =
     handle.ok_or_else(|| AxioError::Internal(format!("Window {} has no AX element", window_id)))?;
 
   Ok(build_element(
-    &window_element,
+    window_handle.inner(),
     window_id,
     window.process_id.as_u32(),
     None,
@@ -1577,13 +1554,13 @@ const WRITABLE_ROLES: &[&str] = &[
   "AXSearchField",
 ];
 
-/// Compare two AXUIElement handles for equality using CFEqual.
-pub fn elements_equal(elem1: &AXUIElement, elem2: &AXUIElement) -> bool {
+/// Compare two element handles for equality.
+pub fn elements_equal(elem1: &ElementHandle, elem2: &ElementHandle) -> bool {
   use accessibility_sys::AXUIElementRef;
   use core_foundation::base::CFEqual;
 
-  let ref1 = elem1.as_concrete_TypeRef() as AXUIElementRef;
-  let ref2 = elem2.as_concrete_TypeRef() as AXUIElementRef;
+  let ref1 = elem1.inner().as_concrete_TypeRef() as AXUIElementRef;
+  let ref2 = elem2.inner().as_concrete_TypeRef() as AXUIElementRef;
 
   unsafe { CFEqual(ref1 as _, ref2 as _) != 0 }
 }
@@ -1591,7 +1568,7 @@ pub fn elements_equal(elem1: &AXUIElement, elem2: &AXUIElement) -> bool {
 /// Write a text value to an element.
 /// Only works for text-input roles (AXTextField, AXTextArea, etc.)
 pub fn write_element_value(
-  ax_element: &AXUIElement,
+  handle: &ElementHandle,
   text: &str,
   platform_role: &str,
 ) -> AxioResult<()> {
@@ -1603,7 +1580,8 @@ pub fn write_element_value(
   }
 
   let cf_string = CFString::new(text);
-  ax_element
+  handle
+    .inner()
     .set_attribute(&AXAttribute::value(), cf_string.as_CFType())
     .map_err(|e| AxioError::AccessibilityError(format!("Failed to set value: {:?}", e)))?;
 
@@ -1611,13 +1589,13 @@ pub fn write_element_value(
 }
 
 /// Perform a click (press) action on an element.
-pub fn click_element(ax_element: &AXUIElement) -> AxioResult<()> {
+pub fn click_element(handle: &ElementHandle) -> AxioResult<()> {
   use accessibility_sys::{kAXPressAction, AXUIElementPerformAction};
 
   let action = CFString::new(kAXPressAction);
   let result = unsafe {
     AXUIElementPerformAction(
-      ax_element.as_concrete_TypeRef(),
+      handle.inner().as_concrete_TypeRef(),
       action.as_concrete_TypeRef(),
     )
   };
@@ -1636,9 +1614,9 @@ pub fn click_element(ax_element: &AXUIElement) -> AxioResult<()> {
 /// Returns empty vec if no notifications could be registered.
 pub fn subscribe_element_notifications(
   element_id: &ElementId,
-  ax_element: &AXUIElement,
+  handle: &ElementHandle,
   platform_role: &str,
-  observer: AXObserverRef,
+  observer: ObserverHandle,
 ) -> AxioResult<(*mut ObserverContextHandle, Vec<AXNotification>)> {
   use accessibility_sys::{AXObserverAddNotification, AXUIElementRef};
   use std::ffi::c_void;
@@ -1649,14 +1627,14 @@ pub fn subscribe_element_notifications(
   }
 
   let context_handle = register_observer_context(element_id.clone());
-  let element_ref = ax_element.as_concrete_TypeRef() as AXUIElementRef;
+  let element_ref = handle.inner().as_concrete_TypeRef() as AXUIElementRef;
 
   let mut registered = Vec::new();
   for notification in &notifications {
     let notif_cfstring = CFString::new(notification.as_str());
     let result = unsafe {
       AXObserverAddNotification(
-        observer,
+        observer.inner(),
         element_ref,
         notif_cfstring.as_concrete_TypeRef() as _,
         context_handle as *mut c_void,
@@ -1680,20 +1658,20 @@ pub fn subscribe_element_notifications(
 
 /// Unsubscribe from element notifications.
 pub fn unsubscribe_element_notifications(
-  ax_element: &AXUIElement,
-  observer: AXObserverRef,
+  handle: &ElementHandle,
+  observer: ObserverHandle,
   context_handle: *mut ObserverContextHandle,
   notifications: &[AXNotification],
 ) {
   use accessibility_sys::{AXObserverRemoveNotification, AXUIElementRef};
 
-  let element_ref = ax_element.as_concrete_TypeRef() as AXUIElementRef;
+  let element_ref = handle.inner().as_concrete_TypeRef() as AXUIElementRef;
 
   for notification in notifications {
     let notif_cfstring = CFString::new(notification.as_str());
     unsafe {
       let _ = AXObserverRemoveNotification(
-        observer,
+        observer.inner(),
         element_ref,
         notif_cfstring.as_concrete_TypeRef() as _,
       );
@@ -1705,8 +1683,8 @@ pub fn unsubscribe_element_notifications(
   unregister_observer_context(context_handle);
 }
 
-/// Fetch the AXUIElement handle for a window by matching bounds.
-pub fn fetch_window_handle(window: &crate::AXWindow) -> Option<AXUIElement> {
+/// Fetch an element handle for a window by matching bounds.
+pub fn fetch_window_handle(window: &crate::AXWindow) -> Option<ElementHandle> {
   let window_elements = get_window_elements(window.process_id.as_u32()).ok()?;
 
   if window_elements.is_empty() {
@@ -1738,14 +1716,14 @@ pub fn fetch_window_handle(window: &crate::AXWindow) -> Option<AXUIElement> {
         h: ax_h,
       };
       if window.bounds.matches(&element_bounds, MARGIN) {
-        return Some(element.clone());
+        return Some(ElementHandle::new(element.clone()));
       }
     }
   }
 
   // Fallback: use only element if there's just one
   if window_elements.len() == 1 {
-    return Some(window_elements[0].clone());
+    return Some(ElementHandle::new(window_elements[0].clone()));
   }
 
   None

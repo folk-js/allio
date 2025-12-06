@@ -1,8 +1,3 @@
-//! Typed JSON-RPC for AXIO.
-//!
-//! Request: `{ "id": "...", "method": "element_at", "args": { "x": 100, "y": 200 } }`
-//! Response: `{ "id": "...", "result": {...} }` or `{ "id": "...", "error": "..." }`
-
 use axio::{AXElement, ElementId, WindowId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

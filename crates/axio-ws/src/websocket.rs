@@ -1,5 +1,3 @@
-//! WebSocket server - thin transport layer over axio.
-
 use axio::{EventSink, ServerEvent, SyncInit};
 use axum::{
   extract::{
@@ -106,7 +104,7 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
       focused_element,
       selection,
       depth_order,
-      accessibility_enabled: axio::platform::check_accessibility_permissions(),
+      accessibility_enabled: axio::check_accessibility_permissions(),
     }
   })
   .await;

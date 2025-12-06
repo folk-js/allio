@@ -1,5 +1,3 @@
-//! Public API for AXIO operations.
-
 use crate::element_registry::ElementRegistry;
 use crate::platform;
 use crate::types::{AXElement, AxioResult, ElementId, Selection, WindowId};

@@ -1,4 +1,3 @@
-//! Core types for AXIO. TypeScript types auto-generated via ts-rs.
 //! Regenerate: `npm run typegen` or `cargo test -p axio export_bindings`
 
 use branded::Branded;

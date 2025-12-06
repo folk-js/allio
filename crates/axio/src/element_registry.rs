@@ -1,39 +1,23 @@
-//! Element registry - stores AXElement with platform handles. Windows own elements.
-
-use crate::platform::{self, AXNotification, ObserverContextHandle};
+use crate::platform::{self, AXNotification, ElementHandle, ObserverContextHandle, ObserverHandle};
 use crate::types::{AXElement, AxioError, AxioResult, ElementId, WindowId};
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::LazyLock;
 
-// Platform-specific types (re-exported via crate::platform on macOS)
-#[cfg(target_os = "macos")]
-use accessibility::AXUIElement;
-#[cfg(target_os = "macos")]
-use accessibility_sys::AXObserverRef;
-
-// Placeholder types for non-macOS platforms
-#[cfg(not(target_os = "macos"))]
-type AXUIElement = ();
-#[cfg(not(target_os = "macos"))]
-type AXObserverRef = ();
-
 /// Watch state for an element (notification subscriptions).
 struct WatchState {
-  /// Handle pointer passed to macOS callbacks.
-  /// Points to ObserverContextHandle which only contains an ID.
-  /// The actual element data is in OBSERVER_CONTEXT_REGISTRY.
+  /// Handle pointer passed to platform callbacks.
   context_handle: *mut c_void,
   notifications: Vec<AXNotification>,
 }
 
-/// Internal storage - AXElement plus macOS handle and watch state.
+/// Internal storage - AXElement plus platform handle and watch state.
 pub struct StoredElement {
   /// The element data (what we return)
   pub element: AXElement,
-  /// macOS accessibility handle
-  pub ax_element: AXUIElement,
+  /// Platform element handle (opaque)
+  pub handle: ElementHandle,
   /// Process ID
   pub pid: u32,
   /// Platform role string (for watch notifications)
@@ -42,15 +26,10 @@ pub struct StoredElement {
   watch_state: Option<WatchState>,
 }
 
-// SAFETY: AXUIElement is a CFTypeRef (reference-counted, immutable).
-// All mutable state is behind Mutex.
-unsafe impl Send for StoredElement {}
-unsafe impl Sync for StoredElement {}
-
 /// Per-window state: elements and shared observer.
 struct WindowState {
   elements: HashMap<ElementId, StoredElement>,
-  observer: Option<AXObserverRef>,
+  observer: Option<ObserverHandle>,
 }
 
 static ELEMENT_REGISTRY: LazyLock<Mutex<ElementRegistry>> =
@@ -84,7 +63,7 @@ impl ElementRegistry {
   // TODO: Duplicate check is O(n) per window. Investigate CFHash for O(1).
   pub fn register(
     element: AXElement,
-    ax_element: AXUIElement,
+    handle: ElementHandle,
     pid: u32,
     platform_role: &str,
   ) -> AXElement {
@@ -101,14 +80,14 @@ impl ElementRegistry {
 
       // Return existing if equivalent element found
       for stored in window_state.elements.values() {
-        if platform::elements_equal(&stored.ax_element, &ax_element) {
+        if platform::elements_equal(&stored.handle, &handle) {
           return stored.element.clone();
         }
       }
 
       let stored = StoredElement {
         element: element.clone(),
-        ax_element,
+        handle,
         pid,
         platform_role: platform_role.to_string(),
         watch_state: None,
@@ -338,7 +317,7 @@ impl ElementRegistry {
       let observer = if let Some(obs) = window_state.observer {
         obs
       } else {
-        let obs = crate::platform::macos::create_observer_for_pid(pid)?;
+        let obs = platform::create_observer_for_pid(pid)?;
         window_state.observer = Some(obs);
         obs
       };
@@ -372,21 +351,21 @@ impl ElementRegistry {
 // --- Element operations (delegate to platform) ---
 
 fn write_value(stored: &StoredElement, text: &str) -> AxioResult<()> {
-  platform::write_element_value(&stored.ax_element, text, &stored.platform_role)
+  platform::write_element_value(&stored.handle, text, &stored.platform_role)
 }
 
 fn click_element(stored: &StoredElement) -> AxioResult<()> {
-  platform::click_element(&stored.ax_element)
+  platform::click_element(&stored.handle)
 }
 
-fn watch_element(stored: &mut StoredElement, observer: AXObserverRef) -> AxioResult<()> {
+fn watch_element(stored: &mut StoredElement, observer: ObserverHandle) -> AxioResult<()> {
   if stored.watch_state.is_some() {
     return Ok(());
   }
 
   let (context_handle, notifications) = platform::subscribe_element_notifications(
     &stored.element.id,
-    &stored.ax_element,
+    &stored.handle,
     &stored.platform_role,
     observer,
   )?;
@@ -403,13 +382,13 @@ fn watch_element(stored: &mut StoredElement, observer: AXObserverRef) -> AxioRes
   Ok(())
 }
 
-fn unwatch_element(stored: &mut StoredElement, observer: AXObserverRef) {
+fn unwatch_element(stored: &mut StoredElement, observer: ObserverHandle) {
   let Some(watch_state) = stored.watch_state.take() else {
     return;
   };
 
   platform::unsubscribe_element_notifications(
-    &stored.ax_element,
+    &stored.handle,
     observer,
     watch_state.context_handle as *mut ObserverContextHandle,
     &watch_state.notifications,

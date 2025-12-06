@@ -20,7 +20,8 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 #[cfg(target_os = "macos")]
 use tauri_nspanel::{tauri_panel, ManagerExt as _, PanelLevel, StyleMask, WebviewWindowExt as _};
 
-use axio::windows::{get_main_screen_dimensions, PollingConfig, WindowEnumOptions};
+use axio::get_main_screen_dimensions;
+use axio::windows::{PollingConfig, WindowEnumOptions};
 use axio_ws::WebSocketState;
 
 // ============================================================================

@@ -1,34 +1,17 @@
-//! Window registry - single source of truth for all window state.
-//!
-//! Consolidates:
-//! - Window data (AXWindow)
-//! - Active/focused window tracking
-//! - Depth order (z-index)
-//! - Platform handles - internal
-
+use crate::platform::{self, ElementHandle};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use crate::types::{AXWindow, Bounds, WindowId};
 
-// Platform-specific handle type
-#[cfg(target_os = "macos")]
-use accessibility::AXUIElement;
-#[cfg(not(target_os = "macos"))]
-type AXUIElement = ();
-
 /// Internal storage - window data plus platform handle.
 struct StoredWindow {
   /// Window info (pure data, serializable)
   info: AXWindow,
-  /// Platform handle for accessibility operations
-  handle: Option<AXUIElement>,
+  /// Platform handle for accessibility operations (opaque)
+  handle: Option<ElementHandle>,
 }
-
-// SAFETY: AXUIElement is a CFTypeRef (reference-counted). All access is behind RwLock.
-unsafe impl Send for StoredWindow {}
-unsafe impl Sync for StoredWindow {}
 
 static REGISTRY: LazyLock<RwLock<WindowRegistry>> =
   LazyLock::new(|| RwLock::new(WindowRegistry::new()));
@@ -159,12 +142,12 @@ pub(crate) fn update(new_windows: Vec<AXWindow>) -> UpdateResult {
 
       // Retry fetching handle if missing
       if existing.handle.is_none() {
-        existing.handle = fetch_handle_for_window(&existing.info);
+        existing.handle = platform::fetch_window_handle(&existing.info);
       }
     } else {
       // New window
       added.push(window_id.clone());
-      let handle = fetch_handle_for_window(&window_info);
+      let handle = platform::fetch_window_handle(&window_info);
       registry.windows.insert(
         window_id,
         StoredWindow {
@@ -194,18 +177,10 @@ pub(crate) fn set_active(window_id: Option<WindowId>) {
 }
 
 /// Get window info with handle (for operations that need both).
-pub(crate) fn get_with_handle(window_id: &WindowId) -> Option<(AXWindow, Option<AXUIElement>)> {
+pub(crate) fn get_with_handle(window_id: &WindowId) -> Option<(AXWindow, Option<ElementHandle>)> {
   REGISTRY
     .read()
     .windows
     .get(window_id)
     .map(|s| (s.info.clone(), s.handle.clone()))
-}
-
-// =============================================================================
-// Handle fetching (delegated to platform)
-// =============================================================================
-
-fn fetch_handle_for_window(window: &AXWindow) -> Option<AXUIElement> {
-  crate::platform::fetch_window_handle(window)
 }

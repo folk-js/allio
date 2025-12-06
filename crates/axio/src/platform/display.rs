@@ -1,5 +1,3 @@
-//! Display/screen operations.
-
 #[cfg(target_os = "macos")]
 use core_graphics::display::{
   CGDirectDisplayID, CGDisplayPixelsHigh, CGDisplayPixelsWide, CGMainDisplayID,

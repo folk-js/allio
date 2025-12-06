@@ -1,5 +1,3 @@
-//! Mouse position tracking.
-
 use crate::types::Point;
 
 #[cfg(target_os = "macos")]

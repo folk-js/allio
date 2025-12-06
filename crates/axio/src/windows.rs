@@ -1,6 +1,3 @@
-//! Window enumeration and polling using x-win.
-//! Also handles mouse position tracking in the same polling loop.
-
 use crate::platform;
 use crate::types::AXWindow;
 use crate::WindowId;
@@ -20,9 +17,6 @@ const FILTERED_BUNDLE_IDS: &[&str] = &[
 fn should_filter_bundle_id(bundle_id: Option<&str>) -> bool {
   bundle_id.map_or(false, |id| FILTERED_BUNDLE_IDS.contains(&id))
 }
-
-// Re-export platform functions for public API
-pub use platform::get_main_screen_dimensions;
 
 fn window_from_x_win(window: &x_win::WindowInfo) -> AXWindow {
   use crate::types::{Bounds, ProcessId};
