@@ -257,11 +257,11 @@ static APP_OBSERVERS: Lazy<Mutex<StdHashMap<u32, AppState>>> =
 
 /// Clean up app observers for PIDs that are no longer running.
 /// Called periodically from the polling loop.
-pub fn cleanup_dead_observers(active_pids: &std::collections::HashSet<u32>) -> usize {
+pub fn cleanup_dead_observers(active_pids: &std::collections::HashSet<crate::ProcessId>) -> usize {
   let mut observers = APP_OBSERVERS.lock();
   let dead_pids: Vec<u32> = observers
     .keys()
-    .filter(|pid| !active_pids.contains(pid))
+    .filter(|pid| !active_pids.iter().any(|p| p.as_u32() == **pid))
     .copied()
     .collect();
 
@@ -469,7 +469,7 @@ fn handle_app_focus_changed(pid: u32, element_ref: accessibility_sys::AXUIElemen
 
   // Emit focus:element event
   crate::events::emit_focus_element(
-    &window_id.0,
+    &window_id,
     &element.id,
     &element,
     previous_element_id.as_ref(),
@@ -515,7 +515,7 @@ fn handle_app_selection_changed(pid: u32, element_ref: accessibility_sys::AXUIEl
   };
 
   // Always emit - empty text means selection was cleared
-  crate::events::emit_selection_changed(&window_id.0, &element.id, &selected_text, range.as_ref());
+  crate::events::emit_selection_changed(&window_id, &element.id, &selected_text, range.as_ref());
 }
 
 /// Get selected text range from an element
@@ -864,7 +864,7 @@ pub fn build_element(
 
   let element = AXElement {
     id: ElementId::new(Uuid::new_v4().to_string()),
-    window_id: window_id.0.clone(),
+    window_id: window_id.clone(),
     parent_id: parent_id.cloned(),
     children: None, // Discovered separately
     role,
@@ -891,7 +891,7 @@ pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResu
   let (ax_element, window_id, pid) = ElementRegistry::with_stored(parent_id, |stored| {
     (
       stored.ax_element.clone(),
-      WindowId::new(stored.element.window_id.clone()),
+      stored.element.window_id.clone(),
       stored.pid,
     )
   })?;
@@ -1305,7 +1305,7 @@ pub fn get_window_root(window_id: &WindowId) -> AxioResult<AXElement> {
   Ok(build_element(
     &window_element,
     window_id,
-    managed_window.info.process_id,
+    managed_window.info.process_id.as_u32(),
     None,
   ))
 }
@@ -1316,11 +1316,12 @@ pub fn get_window_root(window_id: &WindowId) -> AxioResult<AXElement> {
 ///
 /// Call this when a window is first discovered to give the accessibility tree
 /// time to populate before querying elements.
-pub fn enable_accessibility_for_pid(pid: u32) {
+pub fn enable_accessibility_for_pid(pid: crate::ProcessId) {
   use core_foundation::boolean::CFBoolean;
   use core_foundation::string::CFString;
 
-  let app_element = AXUIElement::application(pid as i32);
+  let raw_pid = pid.as_u32();
+  let app_element = AXUIElement::application(raw_pid as i32);
   let attr_name = CFString::new("AXManualAccessibility");
 
   // Try to set AXManualAccessibility to true
@@ -1339,12 +1340,12 @@ pub fn enable_accessibility_for_pid(pid: u32) {
     );
 
     if result == kAXErrorSuccess {
-      eprintln!("[axio] ✓ Enabled accessibility for PID {}", pid);
+      eprintln!("[axio] ✓ Enabled accessibility for PID {}", raw_pid);
     } else if result != kAXErrorAttributeUnsupported {
       // Only warn if it's not "attribute unsupported" (which is expected for native apps)
       eprintln!(
         "[axio] ⚠️  Failed to enable accessibility for PID {} (error: {})",
-        pid, result
+        raw_pid, result
       );
     }
     // Silently ignore kAXErrorAttributeUnsupported - it's expected for non-Electron apps
@@ -1370,8 +1371,8 @@ pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
     ))
   })?;
 
-  let window_id = WindowId::new(managed_window.info.id.clone());
-  let pid = managed_window.info.process_id;
+  let window_id = managed_window.info.id.clone();
+  let pid = managed_window.info.process_id.as_u32();
 
   // Create an app element from the window's PID
   // Querying on the app element searches its entire hierarchy (all windows, all children)

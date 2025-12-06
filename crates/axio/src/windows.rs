@@ -36,7 +36,7 @@ fn should_filter_bundle_id(bundle_id: Option<&str>) -> bool {
 static CURRENT_WINDOWS: Lazy<RwLock<Vec<AXWindow>>> = Lazy::new(|| RwLock::new(Vec::new()));
 
 /// Active window ID - the most recent valid focused window (preserved when focus goes to desktop)
-static ACTIVE_WINDOW: Lazy<RwLock<Option<String>>> = Lazy::new(|| RwLock::new(None));
+static ACTIVE_WINDOW: Lazy<RwLock<Option<WindowId>>> = Lazy::new(|| RwLock::new(None));
 
 /// Get the last known window list. Returns immediately without polling.
 pub fn get_current_windows() -> Vec<AXWindow> {
@@ -44,7 +44,7 @@ pub fn get_current_windows() -> Vec<AXWindow> {
 }
 
 /// Get the active window ID (most recent valid focus, preserved when desktop focused)
-pub fn get_active_window() -> Option<String> {
+pub fn get_active_window() -> Option<WindowId> {
   ACTIVE_WINDOW.read().clone()
 }
 
@@ -67,22 +67,23 @@ pub fn get_main_screen_dimensions() -> (f64, f64) {
 // === Mouse Position ===
 
 #[cfg(target_os = "macos")]
-pub fn get_mouse_position() -> Option<(f64, f64)> {
+pub fn get_mouse_position() -> Option<crate::types::Point> {
+  use crate::types::Point;
   let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState).ok()?;
   let event = CGEvent::new(source).ok()?;
   let location = event.location();
-  Some((location.x, location.y))
+  Some(Point::new(location.x, location.y))
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn get_mouse_position() -> Option<(f64, f64)> {
+pub fn get_mouse_position() -> Option<crate::types::Point> {
   None
 }
 
 fn window_from_x_win(window: &x_win::WindowInfo) -> AXWindow {
-  use crate::types::Bounds;
+  use crate::types::{Bounds, ProcessId};
   AXWindow {
-    id: window.id.clone(),
+    id: WindowId::new(window.id.clone()),
     title: window.title.clone(),
     app_name: window.app_name.clone(),
     bounds: Bounds {
@@ -92,15 +93,17 @@ fn window_from_x_win(window: &x_win::WindowInfo) -> AXWindow {
       h: window.h,
     },
     focused: window.focused,
-    process_id: window.process_id,
+    process_id: ProcessId::new(window.process_id),
     z_index: window.z_index,
   }
 }
 
+use crate::types::ProcessId;
+
 #[derive(Clone, Default)]
 pub struct WindowEnumOptions {
   /// PID to exclude. Its window position is used as coordinate offset.
-  pub exclude_pid: Option<u32>,
+  pub exclude_pid: Option<ProcessId>,
   pub filter_fullscreen: bool,
   pub filter_offscreen: bool,
 }
@@ -115,7 +118,10 @@ pub fn get_windows(options: &WindowEnumOptions) -> Option<Vec<AXWindow>> {
   };
 
   let (offset_x, offset_y) = if let Some(exclude_pid) = options.exclude_pid {
-    match all_windows.iter().find(|w| w.process_id == exclude_pid) {
+    match all_windows
+      .iter()
+      .find(|w| w.process_id == exclude_pid.as_u32())
+    {
       Some(overlay_window) => (overlay_window.x, overlay_window.y),
       None => return None,
     }
@@ -129,7 +135,10 @@ pub fn get_windows(options: &WindowEnumOptions) -> Option<Vec<AXWindow>> {
   let filtered: Vec<_> = all_windows
     .iter()
     .filter(|w| {
-      if options.exclude_pid == Some(w.process_id) {
+      if options
+        .exclude_pid
+        .map_or(false, |pid| w.process_id == pid.as_u32())
+      {
         return false;
       }
       if should_filter_bundle_id(w.bundle_id.as_deref()) {
@@ -190,11 +199,13 @@ const CLEANUP_INTERVAL: u64 = 1250;
 /// Runs in background thread, emits events via EventSink.
 /// Handles both window enumeration and mouse position tracking.
 pub fn start_polling(config: PollingConfig) {
+  use crate::types::Point;
+
   thread::spawn(move || {
-    let mut last_windows: HashMap<String, AXWindow> = HashMap::new();
-    let mut last_active_id: Option<String> = None;
-    let mut last_focused_id: Option<String> = None;
-    let mut last_mouse_pos: Option<(f64, f64)> = None;
+    let mut last_windows: HashMap<WindowId, AXWindow> = HashMap::new();
+    let mut last_active_id: Option<WindowId> = None;
+    let mut last_focused_id: Option<WindowId> = None;
+    let mut last_mouse_pos: Option<Point> = None;
     let mut poll_count: u64 = 0;
 
     loop {
@@ -202,14 +213,11 @@ pub fn start_polling(config: PollingConfig) {
       poll_count += 1;
 
       // Mouse position polling (very cheap, ~0.1ms)
-      if let Some((x, y)) = get_mouse_position() {
-        let changed = match last_mouse_pos {
-          Some((lx, ly)) => (x - lx).abs() >= 1.0 || (y - ly).abs() >= 1.0,
-          None => true,
-        };
+      if let Some(pos) = get_mouse_position() {
+        let changed = last_mouse_pos.map_or(true, |last| pos.moved_from(last, 1.0));
         if changed {
-          last_mouse_pos = Some((x, y));
-          crate::events::emit_mouse_position(x, y);
+          last_mouse_pos = Some(pos);
+          crate::events::emit_mouse_position(pos);
         }
       }
 
@@ -220,18 +228,18 @@ pub fn start_polling(config: PollingConfig) {
         // Build current window map from managed windows (preserves children)
         let mut current_windows: Vec<AXWindow> =
           managed_windows.iter().map(|m| m.info.clone()).collect();
-        let current_map: HashMap<String, AXWindow> = current_windows
+        let current_map: HashMap<WindowId, AXWindow> = current_windows
           .iter()
           .map(|w| (w.id.clone(), w.clone()))
           .collect();
-        let current_ids: HashSet<&String> = current_map.keys().collect();
-        let last_ids: HashSet<&String> = last_windows.keys().collect();
+        let current_ids: HashSet<&WindowId> = current_map.keys().collect();
+        let last_ids: HashSet<&WindowId> = last_windows.keys().collect();
 
         // Compute depth_order (window IDs sorted by z_index, front to back)
         let depth_order: Vec<WindowId> = {
           let mut sorted = current_windows.clone();
           sorted.sort_by_key(|w| w.z_index);
-          sorted.into_iter().map(|w| WindowId::new(w.id)).collect()
+          sorted.into_iter().map(|w| w.id).collect()
         };
 
         // Detect removed windows (emit before removal, include full data)
@@ -268,10 +276,7 @@ pub fn start_polling(config: PollingConfig) {
         // Track focus changes
         let focus_changed = current_focused_id != last_focused_id;
         if focus_changed {
-          let window_id = current_focused_id
-            .as_ref()
-            .map(|id| WindowId::new(id.clone()));
-          crate::events::emit_focus_changed(window_id.as_ref());
+          crate::events::emit_focus_changed(current_focused_id.as_ref());
           last_focused_id = current_focused_id.clone();
         }
 
@@ -281,8 +286,7 @@ pub fn start_polling(config: PollingConfig) {
           let active_changed = last_active_id.as_ref() != Some(focused_id);
           if active_changed {
             *ACTIVE_WINDOW.write() = Some(focused_id.clone());
-            let window_id = WindowId::new(focused_id.clone());
-            crate::events::emit_active_changed(&window_id);
+            crate::events::emit_active_changed(focused_id);
             last_active_id = Some(focused_id.clone());
             // Note: Element discovery is now client-initiated via RPC.
             // This keeps the polling loop pure and fast.
@@ -298,7 +302,8 @@ pub fn start_polling(config: PollingConfig) {
         // Periodic cleanup for dead PIDs
         if poll_count % CLEANUP_INTERVAL == 0 {
           // Collect active PIDs from current windows
-          let active_pids: HashSet<u32> = last_windows.values().map(|w| w.process_id).collect();
+          let active_pids: HashSet<ProcessId> =
+            last_windows.values().map(|w| w.process_id).collect();
 
           // Clean up observers for dead PIDs
           #[cfg(target_os = "macos")]

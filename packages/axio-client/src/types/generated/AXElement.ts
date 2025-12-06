@@ -4,6 +4,7 @@ import type { AXRole } from "./AXRole";
 import type { AXValue } from "./AXValue";
 import type { Bounds } from "./Bounds";
 import type { ElementId } from "./ElementId";
+import type { WindowId } from "./WindowId";
 
 /**
  * The unified element type - stored in registry and returned from API.
@@ -13,7 +14,7 @@ export type AXElement = { id: ElementId,
 /**
  * Window this element belongs to
  */
-window_id: string, 
+window_id: WindowId, 
 /**
  * None = root element of window
  */

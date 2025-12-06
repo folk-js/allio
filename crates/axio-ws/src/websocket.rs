@@ -88,15 +88,12 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
 
     // Compute depth_order (window IDs sorted by z_index, front to back)
     windows.sort_by_key(|w| w.z_index);
-    let depth_order: Vec<axio::WindowId> = windows
-      .iter()
-      .map(|w| axio::WindowId::new(w.id.clone()))
-      .collect();
+    let depth_order: Vec<axio::WindowId> = windows.iter().map(|w| w.id.clone()).collect();
 
     // Query focused element and selection for the active window's app
     let (focused_element, selection) = if let Some(ref window_id) = active {
-      if let Some(window) = windows.iter().find(|w| &w.id == window_id) {
-        axio::get_current_focus(window.process_id)
+      if let Some(window) = windows.iter().find(|w| w.id == *window_id) {
+        axio::get_current_focus(window.process_id.as_u32())
       } else {
         (None, None)
       }

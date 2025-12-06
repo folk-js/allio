@@ -15,3 +15,4 @@ export type { ServerEvent } from "./generated/ServerEvent";
 export type { SyncInit } from "./generated/SyncInit";
 export type { TextRange } from "./generated/TextRange";
 export type { WindowId } from "./generated/WindowId";
+export type { ProcessId } from "./generated/ProcessId";

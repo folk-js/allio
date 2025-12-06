@@ -1,6 +1,6 @@
 //! Trait-based event system decoupled from transport.
 
-use crate::types::{AXElement, AXWindow, ElementId, ServerEvent, TextRange, WindowId};
+use crate::types::{AXElement, AXWindow, ElementId, Point, ServerEvent, TextRange, WindowId};
 
 /// Implement to receive AXIO events.
 /// Events notify clients when the Registry changes.
@@ -81,13 +81,13 @@ pub(crate) fn emit_element_removed(element: &AXElement) {
 
 // Element focus (Tier 1)
 pub(crate) fn emit_focus_element(
-  window_id: &str,
+  window_id: &WindowId,
   element_id: &ElementId,
   element: &AXElement,
   previous_element_id: Option<&ElementId>,
 ) {
   sink().emit(ServerEvent::FocusElement {
-    window_id: window_id.to_string(),
+    window_id: window_id.clone(),
     element_id: element_id.clone(),
     element: element.clone(),
     previous_element_id: previous_element_id.cloned(),
@@ -96,13 +96,13 @@ pub(crate) fn emit_focus_element(
 
 // Selection (Tier 1)
 pub(crate) fn emit_selection_changed(
-  window_id: &str,
+  window_id: &WindowId,
   element_id: &ElementId,
   text: &str,
   range: Option<&TextRange>,
 ) {
   sink().emit(ServerEvent::SelectionChanged {
-    window_id: window_id.to_string(),
+    window_id: window_id.clone(),
     element_id: element_id.clone(),
     text: text.to_string(),
     range: range.cloned(),
@@ -110,6 +110,6 @@ pub(crate) fn emit_selection_changed(
 }
 
 // Mouse position
-pub(crate) fn emit_mouse_position(x: f64, y: f64) {
-  sink().emit(ServerEvent::MousePosition { x, y });
+pub(crate) fn emit_mouse_position(pos: Point) {
+  sink().emit(ServerEvent::MousePosition(pos));
 }

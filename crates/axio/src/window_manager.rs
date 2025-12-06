@@ -44,11 +44,10 @@ impl WindowManager {
     let mut added_ids = Vec::new();
     let mut removed_ids = Vec::new();
 
-    let new_ids: std::collections::HashSet<&str> =
-      new_windows.iter().map(|w| w.id.as_str()).collect();
+    let new_ids: std::collections::HashSet<&WindowId> = new_windows.iter().map(|w| &w.id).collect();
 
     for existing_id in cache.windows.keys() {
-      if !new_ids.contains(existing_id.0.as_str()) {
+      if !new_ids.contains(existing_id) {
         removed_ids.push(existing_id.clone());
       }
     }
@@ -60,7 +59,7 @@ impl WindowManager {
 
     let mut result = Vec::new();
     for window_info in new_windows {
-      let window_id = WindowId::new(window_info.id.clone());
+      let window_id = window_info.id.clone();
 
       if let Some(existing) = cache.windows.get_mut(&window_id) {
         // Preserve ax_title across polls
@@ -113,7 +112,7 @@ impl WindowManager {
     use accessibility_sys::{kAXPositionAttribute, kAXSizeAttribute};
     use core_foundation::string::CFString;
 
-    let window_elements = match get_window_elements(window.process_id) {
+    let window_elements = match get_window_elements(window.process_id.as_u32()) {
       Ok(elements) => elements,
       Err(_) => return None,
     };
@@ -189,7 +188,7 @@ impl WindowManager {
     let mut candidates: Vec<_> = cache
       .windows
       .values()
-      .filter(|managed| managed.info.bounds.contains_point(x, y))
+      .filter(|managed| managed.info.bounds.contains(crate::Point::new(x, y)))
       .collect();
 
     // Sort by z_index (lowest = frontmost)

@@ -4,7 +4,7 @@ import type { AXWindow } from "./AXWindow";
 import type { Selection } from "./Selection";
 import type { WindowId } from "./WindowId";
 
-export type SyncInit = { windows: Array<AXWindow>, elements: Array<AXElement>, active_window: string | null, focused_window: string | null, focused_element: AXElement | null, selection: Selection | null, 
+export type SyncInit = { windows: Array<AXWindow>, elements: Array<AXElement>, active_window: WindowId | null, focused_window: WindowId | null, focused_element: AXElement | null, selection: Selection | null, 
 /**
  * Window IDs in z-order (front to back)
  */

@@ -89,7 +89,7 @@ impl ElementRegistry {
     platform_role: &str,
   ) -> AXElement {
     Self::with(|registry| {
-      let window_id = WindowId::new(element.window_id.clone());
+      let window_id = element.window_id.clone();
 
       let window_state = registry
         .windows
