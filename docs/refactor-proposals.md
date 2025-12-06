@@ -33,12 +33,6 @@ Status tracking for architectural improvements.
 - [ ] **12. Element eviction strategy** - Prevent unbounded growth
 - [ ] **13. Better error handling** - Graceful degradation
 
-### Decided Against
-
-- **Full platform module separation** - Adds complexity for cross-platform future that may never come. Keeping platform handles in registries for now.
-
----
-
 ## Phase 1 Details
 
 ### 1. parking_lot Migration

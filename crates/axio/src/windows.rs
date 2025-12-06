@@ -1,42 +1,11 @@
 use crate::platform;
-use crate::types::AXWindow;
+use crate::types::{AXWindow, ProcessId};
 use crate::WindowId;
 use std::collections::HashSet;
 use std::thread;
 use std::time::{Duration, Instant};
 
 pub const DEFAULT_POLLING_INTERVAL_MS: u64 = 8;
-
-const FILTERED_BUNDLE_IDS: &[&str] = &[
-  "com.apple.screencaptureui",
-  "com.apple.screenshot.launcher",
-  "com.apple.ScreenContinuity",
-];
-
-/// Check if a window should be filtered based on its bundle ID.
-fn should_filter_bundle_id(bundle_id: Option<&str>) -> bool {
-  bundle_id.map_or(false, |id| FILTERED_BUNDLE_IDS.contains(&id))
-}
-
-fn window_from_x_win(window: &x_win::WindowInfo) -> AXWindow {
-  use crate::types::{Bounds, ProcessId};
-  AXWindow {
-    id: WindowId::new(window.id.clone()),
-    title: window.title.clone(),
-    app_name: window.app_name.clone(),
-    bounds: Bounds {
-      x: window.x,
-      y: window.y,
-      w: window.w,
-      h: window.h,
-    },
-    focused: window.focused,
-    process_id: ProcessId::new(window.process_id),
-    z_index: window.z_index,
-  }
-}
-
-use crate::types::ProcessId;
 
 #[derive(Clone, Default)]
 pub struct WindowEnumOptions {
@@ -46,21 +15,17 @@ pub struct WindowEnumOptions {
   pub filter_offscreen: bool,
 }
 
-/// Poll x-win for current windows. Returns None if exclude_pid window isn't found.
+/// Poll for current windows. Returns None if exclude_pid window isn't found.
 fn poll_windows(options: &WindowEnumOptions) -> Option<Vec<AXWindow>> {
-  use std::panic;
+  let all_windows = platform::enumerate_windows();
 
-  let all_windows = match panic::catch_unwind(|| x_win::get_open_windows()) {
-    Ok(Ok(windows)) => windows,
-    _ => return Some(Vec::new()),
-  };
-
+  // Find offset from excluded window (e.g., our overlay)
   let (offset_x, offset_y) = if let Some(exclude_pid) = options.exclude_pid {
     match all_windows
       .iter()
-      .find(|w| w.process_id == exclude_pid.as_u32())
+      .find(|w| w.process_id.as_u32() == exclude_pid.as_u32())
     {
-      Some(overlay_window) => (overlay_window.x, overlay_window.y),
+      Some(overlay_window) => (overlay_window.bounds.x, overlay_window.bounds.y),
       None => return None,
     }
   } else {
@@ -69,33 +34,25 @@ fn poll_windows(options: &WindowEnumOptions) -> Option<Vec<AXWindow>> {
 
   let (screen_width, screen_height) = platform::get_main_screen_dimensions();
 
-  // Filter windows first, preserving x-win's z-order (front to back)
-  let filtered: Vec<_> = all_windows
-    .iter()
+  let windows: Vec<AXWindow> = all_windows
+    .into_iter()
     .filter(|w| {
+      // Exclude our own window
       if options
         .exclude_pid
-        .map_or(false, |pid| w.process_id == pid.as_u32())
+        .map_or(false, |pid| w.process_id.as_u32() == pid.as_u32())
       {
-        return false;
-      }
-      if should_filter_bundle_id(w.bundle_id.as_deref()) {
         return false;
       }
       true
     })
-    .collect();
-
-  // Map to AXWindow (z_index already set by x-win, 0 = frontmost)
-  let windows = filtered
-    .iter()
-    .map(|w| {
-      let mut info = window_from_x_win(w);
-      info.bounds.x -= offset_x;
-      info.bounds.y -= offset_y;
-      info
+    .map(|mut w| {
+      w.bounds.x -= offset_x;
+      w.bounds.y -= offset_y;
+      w
     })
     .filter(|w| {
+      // Filter fullscreen windows
       if options.filter_fullscreen {
         let is_fullscreen = w.bounds.x == 0.0
           && w.bounds.y == 0.0
@@ -105,6 +62,7 @@ fn poll_windows(options: &WindowEnumOptions) -> Option<Vec<AXWindow>> {
           return false;
         }
       }
+      // Filter offscreen windows
       if options.filter_offscreen && w.bounds.x > screen_width + 1.0 {
         return false;
       }
@@ -130,12 +88,10 @@ impl Default for PollingConfig {
   }
 }
 
-/// How often to run cleanup and diagnostics (in poll cycles).
-/// At 8ms interval, 1250 cycles ≈ 10 seconds.
+/// How often to run cleanup (in poll cycles). At 8ms, 1250 cycles ≈ 10 seconds.
 const CLEANUP_INTERVAL: u64 = 1250;
 
-/// Runs in background thread, emits events via EventSink.
-/// Handles both window enumeration and mouse position tracking.
+/// Start background polling for windows and mouse position.
 pub fn start_polling(config: PollingConfig) {
   use crate::types::Point;
   use crate::window_registry;
@@ -150,7 +106,7 @@ pub fn start_polling(config: PollingConfig) {
       let loop_start = Instant::now();
       poll_count += 1;
 
-      // Mouse position polling (very cheap, ~0.1ms)
+      // Mouse position polling
       if let Some(pos) = platform::get_mouse_position() {
         let changed = last_mouse_pos.map_or(true, |last| pos.moved_from(last, 1.0));
         if changed {
@@ -160,7 +116,6 @@ pub fn start_polling(config: PollingConfig) {
       }
 
       if let Some(raw_windows) = poll_windows(&config.enum_options) {
-        // Update registry - handles add/remove/change detection internally
         let result = window_registry::update(raw_windows);
 
         // Emit events for removed windows
@@ -171,7 +126,6 @@ pub fn start_polling(config: PollingConfig) {
         // Emit events for added windows
         for added_id in &result.added {
           if let Some(window) = window_registry::get_window(added_id) {
-            // Enable accessibility for Electron apps
             platform::enable_accessibility_for_pid(window.process_id);
             crate::events::emit_window_added(&window, &result.depth_order);
           }
@@ -184,29 +138,26 @@ pub fn start_polling(config: PollingConfig) {
           }
         }
 
-        // Get current windows for focus tracking
+        // Focus tracking
         let windows = window_registry::get_windows();
         let focused_window = windows.iter().find(|w| w.focused);
         let current_focused_id = focused_window.map(|w| w.id.clone());
 
-        // Track focus changes
-        let focus_changed = current_focused_id != last_focused_id;
-        if focus_changed {
+        if current_focused_id != last_focused_id {
           crate::events::emit_focus_changed(current_focused_id.as_ref());
           last_focused_id = current_focused_id.clone();
         }
 
-        // Update active window
+        // Active window tracking
         if let Some(ref focused_id) = current_focused_id {
-          let active_changed = last_active_id.as_ref() != Some(focused_id);
-          if active_changed {
+          if last_active_id.as_ref() != Some(focused_id) {
             window_registry::set_active(Some(focused_id.clone()));
             crate::events::emit_active_changed(focused_id);
             last_active_id = Some(focused_id.clone());
           }
         }
 
-        // Periodic cleanup for dead PIDs
+        // Periodic cleanup
         if poll_count % CLEANUP_INTERVAL == 0 {
           let active_pids: HashSet<ProcessId> = windows.iter().map(|w| w.process_id).collect();
           let _observers_cleaned = platform::cleanup_dead_observers(&active_pids);
