@@ -85,10 +85,16 @@ export class AxioPassthrough {
   private handleMouseMove(x: number, y: number) {
     const shouldPassthrough = this.computePassthrough(x, y);
 
-    // Only call setPassthrough if state changed
+    // Only send if state changed (Rust side also dedupes, but this saves a message)
     if (this.lastState !== shouldPassthrough) {
       this.lastState = shouldPassthrough;
-      this.axio.setPassthrough(shouldPassthrough);
+      // Delay 1 frame to allow mouse exit and other events to fire as Rust will set this
+      // window to 'non key' when passthrough is disabled and this interrupts ... something.
+      if (shouldPassthrough) {
+        requestAnimationFrame(() => this.axio.setPassthrough(true));
+      } else {
+        this.axio.setPassthrough(false);
+      }
     }
   }
 

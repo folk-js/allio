@@ -198,36 +198,46 @@ fn main() {
 
             // Create custom RPC handler for app-specific methods (clickthrough)
             let app_handle = app.handle().clone();
+            // Track last passthrough state to avoid redundant AppKit calls
+            let last_passthrough_state = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
             let custom_handler: axio_ws::CustomRpcHandler =
                 std::sync::Arc::new(move |method, args| {
                     // Support both names: "set_passthrough" (preferred) and "set_clickthrough" (deprecated)
                     if method == "set_passthrough" || method == "set_clickthrough" {
                         let enabled = args["enabled"].as_bool().unwrap_or(false);
 
+                        // Only update if state actually changed
+                        let last_state = last_passthrough_state.swap(enabled, std::sync::atomic::Ordering::SeqCst);
+                        if last_state == enabled {
+                            // No change, return immediately
+                            return Some(serde_json::json!({ "result": { "enabled": enabled, "changed": false } }));
+                        }
+
                         // On macOS, use the panel API for better control
                         // IMPORTANT: Panel operations MUST run on the main thread!
+                        // Fire-and-forget: spawn to avoid blocking RPC on main thread latency
                         #[cfg(target_os = "macos")]
                         {
                             let handle = app_handle.clone();
-                            let handle_inner = handle.clone();
-                            let result = handle.run_on_main_thread(move || {
-                                if let Ok(panel) = handle_inner.get_webview_panel("main") {
-                                    panel.set_ignores_mouse_events(enabled);
-                                    if enabled {
-                                        // Passing through: resign key window so the underlying
-                                        // app becomes key again (seamless transition back)
-                                        panel.resign_key_window();
-                                    } else {
-                                        // Capturing: make panel key window so it receives
-                                        // pointer events (works because we're non-activating)
-                                        panel.make_key_window();
+                            std::thread::spawn(move || {
+                                let handle_inner = handle.clone();
+                                let _ = handle.run_on_main_thread(move || {
+                                    if let Ok(panel) = handle_inner.get_webview_panel("main") {
+                                        panel.set_ignores_mouse_events(enabled);
+                                        if enabled {
+                                            // Passing through: resign key window so the underlying
+                                            // app becomes key again (seamless transition back)
+                                            panel.resign_key_window();
+                                        } else {
+                                            // Capturing: make panel key window so it receives
+                                            // pointer events (works because we're non-activating)
+                                            panel.make_key_window();
+                                        }
                                     }
-                                }
+                                });
                             });
-                            return Some(match result {
-                                Ok(()) => serde_json::json!({ "result": { "enabled": enabled } }),
-                                Err(e) => serde_json::json!({ "error": e.to_string() }),
-                            });
+                            // Return immediately - don't wait for main thread
+                            return Some(serde_json::json!({ "result": { "enabled": enabled, "changed": true } }));
                         }
 
                         // On other platforms, use the window API
@@ -263,7 +273,7 @@ fn main() {
                 window
                     .set_position(tauri::LogicalPosition::new(0.0, 0.0))
                     .ok();
-                window.set_ignore_cursor_events(false).ok();
+                window.set_ignore_cursor_events(true).ok(); // Start with passthrough
 
                 // On macOS, convert the window to a non-activating NSPanel
                 // This allows the overlay to receive clicks without stealing focus
@@ -287,6 +297,8 @@ fn main() {
                     panel.set_hides_on_deactivate(false);
                     // Make it a floating panel programmatically as well
                     panel.set_floating_panel(true);
+                    // Start with passthrough enabled (mouse events pass through to underlying apps)
+                    panel.set_ignores_mouse_events(true);
                     // Show the panel
                     panel.show();
                 }
