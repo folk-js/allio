@@ -1554,15 +1554,11 @@ const WRITABLE_ROLES: &[&str] = &[
   "AXSearchField",
 ];
 
-/// Compare two element handles for equality.
-pub fn elements_equal(elem1: &ElementHandle, elem2: &ElementHandle) -> bool {
-  use accessibility_sys::AXUIElementRef;
-  use core_foundation::base::CFEqual;
-
-  let ref1 = elem1.inner().as_concrete_TypeRef() as AXUIElementRef;
-  let ref2 = elem2.inner().as_concrete_TypeRef() as AXUIElementRef;
-
-  unsafe { CFEqual(ref1 as _, ref2 as _) != 0 }
+/// Get hash for element handle (for O(1) dedup lookup).
+/// Core Foundation contract: CFEqual(a,b) implies CFHash(a) == CFHash(b)
+pub fn element_hash(handle: &ElementHandle) -> u64 {
+  use core_foundation::base::CFHash;
+  unsafe { CFHash(handle.inner().as_CFTypeRef()) as u64 }
 }
 
 /// Write a text value to an element.

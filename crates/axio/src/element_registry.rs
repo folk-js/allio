@@ -29,6 +29,8 @@ pub struct StoredElement {
 /// Per-window state: elements and shared observer.
 struct WindowState {
   elements: HashMap<ElementId, StoredElement>,
+  /// Hash -> ElementId for O(1) duplicate detection (CFHash)
+  by_hash: HashMap<u64, ElementId>,
   observer: Option<ObserverHandle>,
 }
 
@@ -60,7 +62,7 @@ impl ElementRegistry {
   }
 
   /// Register element, returning existing if equivalent (stable IDs).
-  // TODO: Duplicate check is O(n) per window. Investigate CFHash for O(1).
+  /// Uses CFHash for O(1) duplicate detection.
   pub fn register(
     element: AXElement,
     handle: ElementHandle,
@@ -75,16 +77,19 @@ impl ElementRegistry {
         .entry(window_id.clone())
         .or_insert_with(|| WindowState {
           elements: HashMap::new(),
+          by_hash: HashMap::new(),
           observer: None,
         });
 
-      // Return existing if equivalent element found
-      for stored in window_state.elements.values() {
-        if platform::elements_equal(&stored.handle, &handle) {
+      // O(1) duplicate check via CFHash
+      let hash = platform::element_hash(&handle);
+      if let Some(existing_id) = window_state.by_hash.get(&hash) {
+        if let Some(stored) = window_state.elements.get(existing_id) {
           return stored.element.clone();
         }
       }
 
+      // Store element
       let stored = StoredElement {
         element: element.clone(),
         handle,
@@ -93,6 +98,7 @@ impl ElementRegistry {
         watch_state: None,
       };
 
+      window_state.by_hash.insert(hash, element.id.clone());
       window_state.elements.insert(element.id.clone(), stored);
       registry
         .element_to_window
@@ -262,6 +268,10 @@ impl ElementRegistry {
       };
 
       if let Some(mut stored) = window_state.elements.remove(element_id) {
+        // Remove from hash index
+        let hash = platform::element_hash(&stored.handle);
+        window_state.by_hash.remove(&hash);
+
         if let Some(observer) = window_state.observer {
           unwatch_element(&mut stored, observer);
         }
