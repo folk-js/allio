@@ -1,23 +1,23 @@
-//! Element registry - stores AXElement with macOS handles. Windows own elements.
+//! Element registry - stores AXElement with platform handles. Windows own elements.
 
-use crate::platform::macos::AXNotification;
+use crate::platform::{self, AXNotification, ObserverContextHandle};
 use crate::types::{AXElement, AxioError, AxioResult, ElementId, WindowId};
-use accessibility::AXUIElement;
-use accessibility_sys::AXObserverRef;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::LazyLock;
 
-fn ax_elements_equal(elem1: &AXUIElement, elem2: &AXUIElement) -> bool {
-  use accessibility_sys::AXUIElementRef;
-  use core_foundation::base::{CFEqual, TCFType};
+// Platform-specific types (re-exported via crate::platform on macOS)
+#[cfg(target_os = "macos")]
+use accessibility::AXUIElement;
+#[cfg(target_os = "macos")]
+use accessibility_sys::AXObserverRef;
 
-  let ref1 = elem1.as_concrete_TypeRef() as AXUIElementRef;
-  let ref2 = elem2.as_concrete_TypeRef() as AXUIElementRef;
-
-  unsafe { CFEqual(ref1 as _, ref2 as _) != 0 }
-}
+// Placeholder types for non-macOS platforms
+#[cfg(not(target_os = "macos"))]
+type AXUIElement = ();
+#[cfg(not(target_os = "macos"))]
+type AXObserverRef = ();
 
 /// Watch state for an element (notification subscriptions).
 struct WatchState {
@@ -101,7 +101,7 @@ impl ElementRegistry {
 
       // Return existing if equivalent element found
       for stored in window_state.elements.values() {
-        if ax_elements_equal(&stored.ax_element, &ax_element) {
+        if platform::elements_equal(&stored.ax_element, &ax_element) {
           return stored.element.clone();
         }
       }
@@ -369,136 +369,49 @@ impl ElementRegistry {
   }
 }
 
-// --- Element operations ---
+// --- Element operations (delegate to platform) ---
 
 fn write_value(stored: &StoredElement, text: &str) -> AxioResult<()> {
-  use accessibility::AXAttribute;
-  use core_foundation::base::TCFType;
-  use core_foundation::string::CFString;
-
-  const WRITABLE_ROLES: &[&str] = &[
-    "AXTextField",
-    "AXTextArea",
-    "AXComboBox",
-    "AXSecureTextField",
-    "AXSearchField",
-  ];
-
-  if !WRITABLE_ROLES.contains(&stored.platform_role.as_str()) {
-    return Err(AxioError::NotSupported(format!(
-      "Element with role '{}' is not writable",
-      stored.platform_role
-    )));
-  }
-
-  let cf_string = CFString::new(text);
-  stored
-    .ax_element
-    .set_attribute(&AXAttribute::value(), cf_string.as_CFType())
-    .map_err(|e| AxioError::AccessibilityError(format!("Failed to set value: {:?}", e)))?;
-
-  Ok(())
+  platform::write_element_value(&stored.ax_element, text, &stored.platform_role)
 }
 
 fn click_element(stored: &StoredElement) -> AxioResult<()> {
-  use accessibility_sys::{kAXPressAction, AXUIElementPerformAction};
-  use core_foundation::base::TCFType;
-  use core_foundation::string::CFString;
-
-  let action = CFString::new(kAXPressAction);
-  let result = unsafe {
-    AXUIElementPerformAction(
-      stored.ax_element.as_concrete_TypeRef(),
-      action.as_concrete_TypeRef(),
-    )
-  };
-
-  if result == 0 {
-    Ok(())
-  } else {
-    Err(AxioError::AccessibilityError(format!(
-      "AXUIElementPerformAction failed with code {}",
-      result
-    )))
-  }
+  platform::click_element(&stored.ax_element)
 }
 
 fn watch_element(stored: &mut StoredElement, observer: AXObserverRef) -> AxioResult<()> {
-  use accessibility_sys::{AXObserverAddNotification, AXUIElementRef};
-  use core_foundation::base::TCFType;
-  use core_foundation::string::CFString;
-
   if stored.watch_state.is_some() {
     return Ok(());
   }
 
-  let notifications = AXNotification::for_role(&stored.platform_role);
+  let (context_handle, notifications) = platform::subscribe_element_notifications(
+    &stored.element.id,
+    &stored.ax_element,
+    &stored.platform_role,
+    observer,
+  )?;
+
   if notifications.is_empty() {
     return Ok(());
   }
 
-  // Register in the context registry - returns a handle pointer
-  let context_handle = crate::platform::macos::register_observer_context(stored.element.id.clone());
-  let element_ref = stored.ax_element.as_concrete_TypeRef() as AXUIElementRef;
-
-  let mut registered = Vec::new();
-  for notification in &notifications {
-    let notif_cfstring = CFString::new(notification.as_str());
-    let result = unsafe {
-      AXObserverAddNotification(
-        observer,
-        element_ref,
-        notif_cfstring.as_concrete_TypeRef() as _,
-        context_handle as *mut c_void,
-      )
-    };
-    if result == 0 {
-      registered.push(*notification);
-    }
-  }
-
-  if registered.is_empty() {
-    // Unregister from context registry
-    crate::platform::macos::unregister_observer_context(context_handle);
-    return Err(AxioError::ObserverError(format!(
-      "Failed to register notifications for element {} (role: {})",
-      stored.element.id, stored.platform_role
-    )));
-  }
-
   stored.watch_state = Some(WatchState {
     context_handle: context_handle as *mut c_void,
-    notifications: registered,
+    notifications,
   });
 
   Ok(())
 }
 
 fn unwatch_element(stored: &mut StoredElement, observer: AXObserverRef) {
-  use accessibility_sys::{AXObserverRemoveNotification, AXUIElementRef};
-  use core_foundation::base::TCFType;
-  use core_foundation::string::CFString;
-
   let Some(watch_state) = stored.watch_state.take() else {
     return;
   };
 
-  let element_ref = stored.ax_element.as_concrete_TypeRef() as AXUIElementRef;
-
-  for notification in &watch_state.notifications {
-    let notif_cfstring = CFString::new(notification.as_str());
-    unsafe {
-      let _ = AXObserverRemoveNotification(
-        observer,
-        element_ref,
-        notif_cfstring.as_concrete_TypeRef() as _,
-      );
-    }
-  }
-
-  // Unregister from context registry.
-  // If a callback is in-flight, it will safely fail the lookup and return early.
-  crate::platform::macos::unregister_observer_context(
-    watch_state.context_handle as *mut crate::platform::macos::ObserverContextHandle,
+  platform::unsubscribe_element_notifications(
+    &stored.ax_element,
+    observer,
+    watch_state.context_handle as *mut ObserverContextHandle,
+    &watch_state.notifications,
   );
 }

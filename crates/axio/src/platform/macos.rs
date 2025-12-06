@@ -1564,6 +1564,193 @@ pub fn extract_value(cf_value: &impl TCFType, role: Option<&str>) -> Option<AXVa
   }
 }
 
+// ============================================================================
+// Element Operations (write, click, watch, unwatch)
+// ============================================================================
+
+/// Roles that support writing text values.
+const WRITABLE_ROLES: &[&str] = &[
+  "AXTextField",
+  "AXTextArea",
+  "AXComboBox",
+  "AXSecureTextField",
+  "AXSearchField",
+];
+
+/// Compare two AXUIElement handles for equality using CFEqual.
+pub fn elements_equal(elem1: &AXUIElement, elem2: &AXUIElement) -> bool {
+  use accessibility_sys::AXUIElementRef;
+  use core_foundation::base::CFEqual;
+
+  let ref1 = elem1.as_concrete_TypeRef() as AXUIElementRef;
+  let ref2 = elem2.as_concrete_TypeRef() as AXUIElementRef;
+
+  unsafe { CFEqual(ref1 as _, ref2 as _) != 0 }
+}
+
+/// Write a text value to an element.
+/// Only works for text-input roles (AXTextField, AXTextArea, etc.)
+pub fn write_element_value(
+  ax_element: &AXUIElement,
+  text: &str,
+  platform_role: &str,
+) -> AxioResult<()> {
+  if !WRITABLE_ROLES.contains(&platform_role) {
+    return Err(AxioError::NotSupported(format!(
+      "Element with role '{}' is not writable",
+      platform_role
+    )));
+  }
+
+  let cf_string = CFString::new(text);
+  ax_element
+    .set_attribute(&AXAttribute::value(), cf_string.as_CFType())
+    .map_err(|e| AxioError::AccessibilityError(format!("Failed to set value: {:?}", e)))?;
+
+  Ok(())
+}
+
+/// Perform a click (press) action on an element.
+pub fn click_element(ax_element: &AXUIElement) -> AxioResult<()> {
+  use accessibility_sys::{kAXPressAction, AXUIElementPerformAction};
+
+  let action = CFString::new(kAXPressAction);
+  let result = unsafe {
+    AXUIElementPerformAction(
+      ax_element.as_concrete_TypeRef(),
+      action.as_concrete_TypeRef(),
+    )
+  };
+
+  if result == 0 {
+    Ok(())
+  } else {
+    Err(AxioError::AccessibilityError(format!(
+      "AXUIElementPerformAction failed with code {}",
+      result
+    )))
+  }
+}
+
+/// Register notifications for an element and return the subscribed notifications.
+/// Returns empty vec if no notifications could be registered.
+pub fn subscribe_element_notifications(
+  element_id: &ElementId,
+  ax_element: &AXUIElement,
+  platform_role: &str,
+  observer: AXObserverRef,
+) -> AxioResult<(*mut ObserverContextHandle, Vec<AXNotification>)> {
+  use accessibility_sys::{AXObserverAddNotification, AXUIElementRef};
+  use std::ffi::c_void;
+
+  let notifications = AXNotification::for_role(platform_role);
+  if notifications.is_empty() {
+    return Ok((std::ptr::null_mut(), Vec::new()));
+  }
+
+  let context_handle = register_observer_context(element_id.clone());
+  let element_ref = ax_element.as_concrete_TypeRef() as AXUIElementRef;
+
+  let mut registered = Vec::new();
+  for notification in &notifications {
+    let notif_cfstring = CFString::new(notification.as_str());
+    let result = unsafe {
+      AXObserverAddNotification(
+        observer,
+        element_ref,
+        notif_cfstring.as_concrete_TypeRef() as _,
+        context_handle as *mut c_void,
+      )
+    };
+    if result == 0 {
+      registered.push(*notification);
+    }
+  }
+
+  if registered.is_empty() {
+    unregister_observer_context(context_handle);
+    return Err(AxioError::ObserverError(format!(
+      "Failed to register notifications for element (role: {})",
+      platform_role
+    )));
+  }
+
+  Ok((context_handle, registered))
+}
+
+/// Unsubscribe from element notifications.
+pub fn unsubscribe_element_notifications(
+  ax_element: &AXUIElement,
+  observer: AXObserverRef,
+  context_handle: *mut ObserverContextHandle,
+  notifications: &[AXNotification],
+) {
+  use accessibility_sys::{AXObserverRemoveNotification, AXUIElementRef};
+
+  let element_ref = ax_element.as_concrete_TypeRef() as AXUIElementRef;
+
+  for notification in notifications {
+    let notif_cfstring = CFString::new(notification.as_str());
+    unsafe {
+      let _ = AXObserverRemoveNotification(
+        observer,
+        element_ref,
+        notif_cfstring.as_concrete_TypeRef() as _,
+      );
+    }
+  }
+
+  // Unregister from context registry.
+  // If a callback is in-flight, it will safely fail the lookup and return early.
+  unregister_observer_context(context_handle);
+}
+
+/// Fetch the AXUIElement handle for a window by matching bounds.
+pub fn fetch_window_handle(window: &crate::AXWindow) -> Option<AXUIElement> {
+  let window_elements = get_window_elements(window.process_id.as_u32()).ok()?;
+
+  if window_elements.is_empty() {
+    return None;
+  }
+
+  const MARGIN: f64 = 2.0;
+
+  for element in window_elements.iter() {
+    let position_attr = CFString::new(kAXPositionAttribute);
+    let ax_position_attr = AXAttribute::new(&position_attr);
+    let element_pos = element
+      .attribute(&ax_position_attr)
+      .ok()
+      .and_then(|p| extract_position(&p));
+
+    let size_attr = CFString::new(kAXSizeAttribute);
+    let ax_size_attr = AXAttribute::new(&size_attr);
+    let element_size = element
+      .attribute(&ax_size_attr)
+      .ok()
+      .and_then(|s| extract_size(&s));
+
+    if let (Some((ax_x, ax_y)), Some((ax_w, ax_h))) = (element_pos, element_size) {
+      let element_bounds = Bounds {
+        x: ax_x,
+        y: ax_y,
+        w: ax_w,
+        h: ax_h,
+      };
+      if window.bounds.matches(&element_bounds, MARGIN) {
+        return Some(element.clone());
+      }
+    }
+  }
+
+  // Fallback: use only element if there's just one
+  if window_elements.len() == 1 {
+    return Some(window_elements[0].clone());
+  }
+
+  None
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;

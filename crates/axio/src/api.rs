@@ -1,11 +1,12 @@
 //! Public API for AXIO operations.
 
 use crate::element_registry::ElementRegistry;
+use crate::platform;
 use crate::types::{AXElement, AxioResult, ElementId, Selection, WindowId};
 
 /// Discover element at screen coordinates.
 pub fn element_at(x: f64, y: f64) -> AxioResult<AXElement> {
-  crate::platform::get_element_at_position(x, y)
+  platform::get_element_at_position(x, y)
 }
 
 /// Get cached element by ID.
@@ -20,18 +21,18 @@ pub fn get_many(element_ids: &[ElementId]) -> Vec<AXElement> {
 
 /// Discover children of element (registers them, updates parent's children).
 pub fn children(element_id: &ElementId, max_children: usize) -> AxioResult<Vec<AXElement>> {
-  crate::platform::macos::discover_children(element_id, max_children)
+  platform::discover_children(element_id, max_children)
 }
 
-/// Refresh element from macOS (re-fetch attributes).
+/// Refresh element from platform (re-fetch attributes).
 pub fn refresh(element_id: &ElementId) -> AxioResult<AXElement> {
-  crate::platform::macos::refresh_element(element_id)
+  platform::refresh_element(element_id)
 }
 
 /// Get the root element for a window.
 /// This is the accessibility element representing the window itself.
 pub fn window_root(window_id: &WindowId) -> AxioResult<AXElement> {
-  crate::platform::macos::get_window_root(window_id)
+  platform::get_window_root(window_id)
 }
 
 /// Write text to an element.
@@ -57,11 +58,11 @@ pub fn unwatch(element_id: &ElementId) {
 /// Initialize the AXIO system.
 pub fn initialize() {
   // Check accessibility permissions and warn if not granted
-  crate::platform::verify_accessibility_permissions();
+  platform::verify_accessibility_permissions();
 }
 
 /// Get currently focused element and selection for a given PID.
 /// Returns (focused_element, selection).
 pub fn get_current_focus(pid: u32) -> (Option<AXElement>, Option<Selection>) {
-  crate::platform::macos::get_current_focus(pid)
+  platform::get_current_focus(pid)
 }

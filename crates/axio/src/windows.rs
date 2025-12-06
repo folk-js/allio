@@ -1,20 +1,12 @@
 //! Window enumeration and polling using x-win.
 //! Also handles mouse position tracking in the same polling loop.
 
+use crate::platform;
 use crate::types::AXWindow;
 use crate::WindowId;
 use std::collections::HashSet;
 use std::thread;
 use std::time::{Duration, Instant};
-
-#[cfg(target_os = "macos")]
-use core_graphics::display::{
-  CGDirectDisplayID, CGDisplayPixelsHigh, CGDisplayPixelsWide, CGMainDisplayID,
-};
-#[cfg(target_os = "macos")]
-use core_graphics::event::CGEvent;
-#[cfg(target_os = "macos")]
-use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
 pub const DEFAULT_POLLING_INTERVAL_MS: u64 = 8;
 
@@ -29,37 +21,8 @@ fn should_filter_bundle_id(bundle_id: Option<&str>) -> bool {
   bundle_id.map_or(false, |id| FILTERED_BUNDLE_IDS.contains(&id))
 }
 
-#[cfg(target_os = "macos")]
-pub fn get_main_screen_dimensions() -> (f64, f64) {
-  unsafe {
-    let display_id: CGDirectDisplayID = CGMainDisplayID();
-    (
-      CGDisplayPixelsWide(display_id) as f64,
-      CGDisplayPixelsHigh(display_id) as f64,
-    )
-  }
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn get_main_screen_dimensions() -> (f64, f64) {
-  (1920.0, 1080.0)
-}
-
-// === Mouse Position ===
-
-#[cfg(target_os = "macos")]
-pub fn get_mouse_position() -> Option<crate::types::Point> {
-  use crate::types::Point;
-  let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState).ok()?;
-  let event = CGEvent::new(source).ok()?;
-  let location = event.location();
-  Some(Point::new(location.x, location.y))
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn get_mouse_position() -> Option<crate::types::Point> {
-  None
-}
+// Re-export platform functions for public API
+pub use platform::get_main_screen_dimensions;
 
 fn window_from_x_win(window: &x_win::WindowInfo) -> AXWindow {
   use crate::types::{Bounds, ProcessId};
@@ -110,7 +73,7 @@ fn poll_windows(options: &WindowEnumOptions) -> Option<Vec<AXWindow>> {
     (0.0, 0.0)
   };
 
-  let (screen_width, screen_height) = get_main_screen_dimensions();
+  let (screen_width, screen_height) = platform::get_main_screen_dimensions();
 
   // Filter windows first, preserving x-win's z-order (front to back)
   let filtered: Vec<_> = all_windows
@@ -194,7 +157,7 @@ pub fn start_polling(config: PollingConfig) {
       poll_count += 1;
 
       // Mouse position polling (very cheap, ~0.1ms)
-      if let Some(pos) = get_mouse_position() {
+      if let Some(pos) = platform::get_mouse_position() {
         let changed = last_mouse_pos.map_or(true, |last| pos.moved_from(last, 1.0));
         if changed {
           last_mouse_pos = Some(pos);
@@ -215,7 +178,7 @@ pub fn start_polling(config: PollingConfig) {
         for added_id in &result.added {
           if let Some(window) = window_registry::get_window(added_id) {
             // Enable accessibility for Electron apps
-            crate::platform::macos::enable_accessibility_for_pid(window.process_id);
+            platform::enable_accessibility_for_pid(window.process_id);
             crate::events::emit_window_added(&window, &result.depth_order);
           }
         }
@@ -252,9 +215,7 @@ pub fn start_polling(config: PollingConfig) {
         // Periodic cleanup for dead PIDs
         if poll_count % CLEANUP_INTERVAL == 0 {
           let active_pids: HashSet<ProcessId> = windows.iter().map(|w| w.process_id).collect();
-
-          #[cfg(target_os = "macos")]
-          let _observers_cleaned = crate::platform::macos::cleanup_dead_observers(&active_pids);
+          let _observers_cleaned = platform::cleanup_dead_observers(&active_pids);
         }
       }
 

@@ -4,14 +4,19 @@
 //! - Window data (AXWindow)
 //! - Active/focused window tracking
 //! - Depth order (z-index)
-//! - Platform handles (AXUIElement) - internal
+//! - Platform handles - internal
 
-use accessibility::AXUIElement;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use crate::types::{AXWindow, Bounds, WindowId};
+
+// Platform-specific handle type
+#[cfg(target_os = "macos")]
+use accessibility::AXUIElement;
+#[cfg(not(target_os = "macos"))]
+type AXUIElement = ();
 
 /// Internal storage - window data plus platform handle.
 struct StoredWindow {
@@ -198,55 +203,9 @@ pub(crate) fn get_with_handle(window_id: &WindowId) -> Option<(AXWindow, Option<
 }
 
 // =============================================================================
-// Handle fetching (platform-specific)
+// Handle fetching (delegated to platform)
 // =============================================================================
 
 fn fetch_handle_for_window(window: &AXWindow) -> Option<AXUIElement> {
-  use crate::platform::get_window_elements;
-  use accessibility::AXAttribute;
-  use accessibility_sys::{kAXPositionAttribute, kAXSizeAttribute};
-  use core_foundation::string::CFString;
-
-  let window_elements = get_window_elements(window.process_id.as_u32()).ok()?;
-
-  if window_elements.is_empty() {
-    return None;
-  }
-
-  const MARGIN: f64 = 2.0;
-
-  for element in window_elements.iter() {
-    let position_attr = CFString::new(kAXPositionAttribute);
-    let ax_position_attr = AXAttribute::new(&position_attr);
-    let element_pos = element
-      .attribute(&ax_position_attr)
-      .ok()
-      .and_then(|p| crate::platform::macos::extract_position(&p));
-
-    let size_attr = CFString::new(kAXSizeAttribute);
-    let ax_size_attr = AXAttribute::new(&size_attr);
-    let element_size = element
-      .attribute(&ax_size_attr)
-      .ok()
-      .and_then(|s| crate::platform::macos::extract_size(&s));
-
-    if let (Some((ax_x, ax_y)), Some((ax_w, ax_h))) = (element_pos, element_size) {
-      let element_bounds = Bounds {
-        x: ax_x,
-        y: ax_y,
-        w: ax_w,
-        h: ax_h,
-      };
-      if window.bounds.matches(&element_bounds, MARGIN) {
-        return Some(element.clone());
-      }
-    }
-  }
-
-  // Fallback: use only element if there's just one
-  if window_elements.len() == 1 {
-    return Some(window_elements[0].clone());
-  }
-
-  None
+  crate::platform::fetch_window_handle(window)
 }
