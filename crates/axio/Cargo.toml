@@ -17,10 +17,14 @@ thiserror = "1.0"
 ts-rs = "10"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-core-graphics = "0.23"
 objc2 = "0.6.3"
 objc2-core-foundation = "0.3.2"
-objc2-core-graphics = "0.3.2"
+objc2-core-graphics = { version = "0.3.2", features = [
+  "CGDirectDisplay",
+  "CGEventTypes",
+  "CGEventSource",
+  "CGEvent",
+] }
 objc2-foundation = { version = "0.3.2", features = ["NSString"] }
 objc2-app-kit = { version = "0.3.2", features = ["NSRunningApplication"] }
 objc2-application-services = { version = "0.3.2", features = [

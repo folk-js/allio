@@ -7,36 +7,35 @@
  * Uses objc2-application-services for modern, safe FFI bindings.
  */
 use objc2_application_services::{
-  AXError, AXIsProcessTrusted, AXObserver, AXObserverCallback, AXUIElement,
+  AXError, AXIsProcessTrusted, AXObserver, AXObserverCallback, AXUIElement, AXValue as AXValueRef,
+  AXValueType,
 };
 use objc2_core_foundation::{
-  CFArray, CFBoolean, CFHash, CFNumber, CFRange, CFRetained, CFRunLoop, CFString, CFType, CFTypeID,
-  ConcreteType,
+  kCFRunLoopDefaultMode, CFArray, CFBoolean, CFHash, CFNumber, CFRange, CFRetained, CFRunLoop,
+  CFString, CFType,
 };
 use std::ffi::c_void;
 use std::ptr::NonNull;
 use uuid::Uuid;
-
-// CFRunLoop mode constant
-extern "C" {
-  static kCFRunLoopDefaultMode: &'static CFString;
-}
 
 use super::handles::{ElementHandle, ObserverHandle};
 use crate::types::{
   AXAction, AXElement, AXRole, AXValue, AxioError, AxioResult, Bounds, ElementId, WindowId,
 };
 
-// ============================================================================
-// Core Foundation Helpers
-// ============================================================================
-
-/// Get CFTypeID for a CFType reference
-unsafe fn cf_get_type_id(cf_ref: &CFType) -> CFTypeID {
-  extern "C-unwind" {
-    fn CFGetTypeID(cf: &CFType) -> CFTypeID;
+/// Fetch a raw CFType attribute from an AXUIElement.
+/// This is the core primitive - all other attribute helpers build on this.
+fn get_raw_attribute(element: &AXUIElement, attr_name: &CFString) -> Option<CFRetained<CFType>> {
+  unsafe {
+    let mut value: *const CFType = std::ptr::null();
+    let result = element.copy_attribute_value(attr_name, NonNull::new(&mut value)?);
+    if result != AXError::Success || value.is_null() {
+      return None;
+    }
+    Some(CFRetained::from_raw(NonNull::new_unchecked(
+      value as *mut _,
+    )))
   }
-  CFGetTypeID(cf_ref)
 }
 
 // ============================================================================
@@ -248,7 +247,7 @@ pub fn cleanup_dead_observers(active_pids: &std::collections::HashSet<crate::Pro
       unsafe {
         let run_loop_source = state.observer.run_loop_source();
         if let Some(main_run_loop) = CFRunLoop::main() {
-          main_run_loop.remove_source(Some(&run_loop_source), Some(kCFRunLoopDefaultMode));
+          main_run_loop.remove_source(Some(&run_loop_source), kCFRunLoopDefaultMode);
         }
       }
       unregister_app_context(state.context_handle);
@@ -315,7 +314,7 @@ fn create_app_observer(
   unsafe {
     let run_loop_source = observer.run_loop_source();
     if let Some(main_run_loop) = CFRunLoop::main() {
-      main_run_loop.add_source(Some(&run_loop_source), Some(kCFRunLoopDefaultMode));
+      main_run_loop.add_source(Some(&run_loop_source), kCFRunLoopDefaultMode);
     }
   }
 
@@ -446,33 +445,20 @@ fn handle_app_selection_changed(pid: u32, element: CFRetained<AXUIElement>) {
 }
 
 fn get_selected_text_range(element: &AXUIElement) -> Option<crate::types::TextRange> {
+  let attr_name = CFString::from_static_str("AXSelectedTextRange");
+  let value = get_raw_attribute(element, &attr_name)?;
+
+  let ax_value = value.downcast_ref::<AXValueRef>()?;
+
   unsafe {
-    let attr_name = CFString::from_static_str("AXSelectedTextRange");
-    let mut value: *const CFType = std::ptr::null();
-
-    let result = element.copy_attribute_value(&attr_name, NonNull::new(&mut value)?);
-    if result != AXError::Success || value.is_null() {
-      return None;
-    }
-
-    let value_retained = CFRetained::<CFType>::from_raw(NonNull::new_unchecked(value as *mut _));
-
     let mut range = CFRange {
       location: 0,
       length: 0,
     };
-
-    extern "C" {
-      fn AXValueGetValue(value: *const c_void, value_type: i32, value_ptr: *mut c_void) -> bool;
-    }
-
-    let success = AXValueGetValue(
-      CFRetained::as_ptr(&value_retained).as_ptr() as *const c_void,
-      4, // kAXValueTypeCFRange
-      &mut range as *mut CFRange as *mut c_void,
-    );
-
-    if success {
+    if ax_value.value(
+      AXValueType::CFRange,
+      NonNull::new(&mut range as *mut _ as *mut c_void)?,
+    ) {
       Some(crate::types::TextRange {
         start: range.location as u32,
         length: range.length as u32,
@@ -491,20 +477,16 @@ pub fn get_current_focus(
   Option<crate::types::Selection>,
 ) {
   let app_element = unsafe { AXUIElement::new_application(pid as i32) };
+  let attr_name = CFString::from_static_str("AXFocusedUIElement");
+
+  let Some(value) = get_raw_attribute(&app_element, &attr_name) else {
+    return (None, None);
+  };
 
   let focused_element = unsafe {
-    let attr_name = CFString::from_static_str("AXFocusedUIElement");
-    let mut value: *const CFType = std::ptr::null();
-
-    let Some(value_ptr) = NonNull::new(&mut value) else {
-      return (None, None);
-    };
-    let result = app_element.copy_attribute_value(&attr_name, value_ptr);
-    if result != AXError::Success || value.is_null() {
-      return (None, None);
-    }
-
-    CFRetained::<AXUIElement>::from_raw(NonNull::new_unchecked(value as *mut AXUIElement))
+    let ptr = CFRetained::as_ptr(&value).as_ptr() as *mut AXUIElement;
+    std::mem::forget(value);
+    CFRetained::<AXUIElement>::from_raw(NonNull::new_unchecked(ptr))
   };
 
   let window_id = match get_window_id_from_ax_element(&focused_element) {
@@ -536,16 +518,13 @@ fn get_element_selected_text(
 }
 
 fn get_window_id_from_ax_element(element: &AXUIElement) -> Option<WindowId> {
+  let attr_name = CFString::from_static_str("AXWindow");
+  let value = get_raw_attribute(element, &attr_name)?;
+
   let window_element = unsafe {
-    let attr_name = CFString::from_static_str("AXWindow");
-    let mut value: *const CFType = std::ptr::null();
-
-    let result = element.copy_attribute_value(&attr_name, NonNull::new(&mut value)?);
-    if result != AXError::Success || value.is_null() {
-      return None;
-    }
-
-    CFRetained::<AXUIElement>::from_raw(NonNull::new_unchecked(value as *mut AXUIElement))
+    let ptr = CFRetained::as_ptr(&value).as_ptr() as *mut AXUIElement;
+    std::mem::forget(value);
+    CFRetained::<AXUIElement>::from_raw(NonNull::new_unchecked(ptr))
   };
 
   let bounds = get_element_bounds(&window_element)?;
@@ -580,7 +559,7 @@ pub fn create_observer_for_pid(pid: u32) -> AxioResult<ObserverHandle> {
   unsafe {
     let run_loop_source = observer.run_loop_source();
     if let Some(main_run_loop) = CFRunLoop::main() {
-      main_run_loop.add_source(Some(&run_loop_source), Some(kCFRunLoopDefaultMode));
+      main_run_loop.add_source(Some(&run_loop_source), kCFRunLoopDefaultMode);
     }
   }
 
@@ -664,55 +643,20 @@ fn handle_notification(element_id: &ElementId, notification: &str, ax_element: &
 // ============================================================================
 
 fn get_string_attribute(element: &AXUIElement, attr_name: &str) -> Option<String> {
-  unsafe {
-    let attr = CFString::from_str(attr_name);
-    let mut value: *const CFType = std::ptr::null();
-
-    let result = element.copy_attribute_value(&attr, NonNull::new(&mut value)?);
-    if result != AXError::Success || value.is_null() {
-      return None;
-    }
-
-    let value_retained = CFRetained::<CFType>::from_raw(NonNull::new_unchecked(value as *mut _));
-
-    // Check if it's a CFString
-    let type_id = cf_get_type_id(&value_retained);
-    if type_id == CFString::type_id() {
-      let cf_string =
-        CFRetained::<CFString>::from_raw(NonNull::new_unchecked(value as *mut CFString));
-      let s = cf_string.to_string();
-      if s.is_empty() {
-        None
-      } else {
-        Some(s)
-      }
-    } else {
-      None
-    }
+  let attr = CFString::from_str(attr_name);
+  let value = get_raw_attribute(element, &attr)?;
+  let s = value.downcast_ref::<CFString>()?.to_string();
+  if s.is_empty() {
+    None
+  } else {
+    Some(s)
   }
 }
 
 fn get_bool_attribute(element: &AXUIElement, attr_name: &str) -> Option<bool> {
-  unsafe {
-    let attr = CFString::from_str(attr_name);
-    let mut value: *const CFType = std::ptr::null();
-
-    let result = element.copy_attribute_value(&attr, NonNull::new(&mut value)?);
-    if result != AXError::Success || value.is_null() {
-      return None;
-    }
-
-    let value_retained = CFRetained::<CFType>::from_raw(NonNull::new_unchecked(value as *mut _));
-
-    let type_id = cf_get_type_id(&value_retained);
-    if type_id == CFBoolean::type_id() {
-      let cf_bool =
-        CFRetained::<CFBoolean>::from_raw(NonNull::new_unchecked(value as *mut CFBoolean));
-      Some(cf_bool.as_bool())
-    } else {
-      None
-    }
-  }
+  let attr = CFString::from_str(attr_name);
+  let value = get_raw_attribute(element, &attr)?;
+  Some(value.downcast_ref::<CFBoolean>()?.as_bool())
 }
 
 fn get_typed_attribute(
@@ -720,18 +664,9 @@ fn get_typed_attribute(
   attr_name: &str,
   role: Option<&str>,
 ) -> Option<AXValue> {
-  unsafe {
-    let attr = CFString::from_str(attr_name);
-    let mut value: *const CFType = std::ptr::null();
-
-    let result = element.copy_attribute_value(&attr, NonNull::new(&mut value)?);
-    if result != AXError::Success || value.is_null() {
-      return None;
-    }
-
-    let value_retained = CFRetained::<CFType>::from_raw(NonNull::new_unchecked(value as *mut _));
-    extract_value(&value_retained, role)
-  }
+  let attr = CFString::from_str(attr_name);
+  let value = get_raw_attribute(element, &attr)?;
+  extract_value(&value, role)
 }
 
 // ============================================================================
@@ -840,18 +775,14 @@ pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResu
 }
 
 fn get_children_array(element: &AXUIElement) -> Option<CFRetained<CFArray<AXUIElement>>> {
+  let attr = CFString::from_static_str("AXChildren");
+  let value = get_raw_attribute(element, &attr)?;
+
   unsafe {
-    let attr = CFString::from_static_str("AXChildren");
-    let mut value: *const CFType = std::ptr::null();
-
-    let result = element.copy_attribute_value(&attr, NonNull::new(&mut value)?);
-    if result != AXError::Success || value.is_null() {
-      return None;
-    }
-
-    Some(CFRetained::from_raw(NonNull::new_unchecked(
-      value as *mut CFArray<AXUIElement>,
-    )))
+    let ptr = CFRetained::as_ptr(&value).as_ptr() as *mut CFArray<AXUIElement>;
+    // Transfer ownership - don't let `value` release the reference
+    std::mem::forget(value);
+    Some(CFRetained::from_raw(NonNull::new_unchecked(ptr)))
   }
 }
 
@@ -1010,15 +941,6 @@ struct CGSize {
   height: f64,
 }
 
-const K_AX_VALUE_TYPE_CG_POINT: i32 = 1;
-const K_AX_VALUE_TYPE_CG_SIZE: i32 = 2;
-
-#[link(name = "ApplicationServices", kind = "framework")]
-extern "C" {
-  fn AXValueGetType(value: *const c_void) -> i32;
-  fn AXValueGetValue(value: *const c_void, value_type: i32, value_ptr: *mut c_void) -> bool;
-}
-
 fn get_element_bounds(element: &AXUIElement) -> Option<Bounds> {
   let position = get_position_attribute(element)?;
   let size = get_size_attribute(element)?;
@@ -1032,30 +954,19 @@ fn get_element_bounds(element: &AXUIElement) -> Option<Bounds> {
 }
 
 fn get_position_attribute(element: &AXUIElement) -> Option<(f64, f64)> {
+  let attr = CFString::from_static_str("AXPosition");
+  let value = get_raw_attribute(element, &attr)?;
+  let ax_value = value.downcast_ref::<AXValueRef>()?;
+
   unsafe {
-    let attr = CFString::from_static_str("AXPosition");
-    let mut value: *const CFType = std::ptr::null();
-
-    let result = element.copy_attribute_value(&attr, NonNull::new(&mut value)?);
-    if result != AXError::Success || value.is_null() {
+    if ax_value.r#type() != AXValueType::CGPoint {
       return None;
     }
-
-    let _value_retained = CFRetained::<CFType>::from_raw(NonNull::new_unchecked(value as *mut _));
-
-    let value_type = AXValueGetType(value as *const c_void);
-    if value_type != K_AX_VALUE_TYPE_CG_POINT {
-      return None;
-    }
-
     let mut point = CGPoint { x: 0.0, y: 0.0 };
-    let success = AXValueGetValue(
-      value as *const c_void,
-      K_AX_VALUE_TYPE_CG_POINT,
-      &mut point as *mut CGPoint as *mut c_void,
-    );
-
-    if success {
+    if ax_value.value(
+      AXValueType::CGPoint,
+      NonNull::new(&mut point as *mut _ as *mut c_void)?,
+    ) {
       Some((point.x, point.y))
     } else {
       None
@@ -1064,33 +975,22 @@ fn get_position_attribute(element: &AXUIElement) -> Option<(f64, f64)> {
 }
 
 fn get_size_attribute(element: &AXUIElement) -> Option<(f64, f64)> {
+  let attr = CFString::from_static_str("AXSize");
+  let value = get_raw_attribute(element, &attr)?;
+  let ax_value = value.downcast_ref::<AXValueRef>()?;
+
   unsafe {
-    let attr = CFString::from_static_str("AXSize");
-    let mut value: *const CFType = std::ptr::null();
-
-    let result = element.copy_attribute_value(&attr, NonNull::new(&mut value)?);
-    if result != AXError::Success || value.is_null() {
+    if ax_value.r#type() != AXValueType::CGSize {
       return None;
     }
-
-    let _value_retained = CFRetained::<CFType>::from_raw(NonNull::new_unchecked(value as *mut _));
-
-    let value_type = AXValueGetType(value as *const c_void);
-    if value_type != K_AX_VALUE_TYPE_CG_SIZE {
-      return None;
-    }
-
     let mut size = CGSize {
       width: 0.0,
       height: 0.0,
     };
-    let success = AXValueGetValue(
-      value as *const c_void,
-      K_AX_VALUE_TYPE_CG_SIZE,
-      &mut size as *mut CGSize as *mut c_void,
-    );
-
-    if success {
+    if ax_value.value(
+      AXValueType::CGSize,
+      NonNull::new(&mut size as *mut _ as *mut c_void)?,
+    ) {
       Some((size.width, size.height))
     } else {
       None
@@ -1208,54 +1108,46 @@ pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
 // ============================================================================
 
 fn extract_value(cf_value: &CFType, role: Option<&str>) -> Option<AXValue> {
-  unsafe {
-    let type_id = cf_get_type_id(cf_value);
+  // Try CFString
+  if let Some(cf_string) = cf_value.downcast_ref::<CFString>() {
+    let s = cf_string.to_string();
+    return if s.is_empty() {
+      None
+    } else {
+      Some(AXValue::String(s))
+    };
+  }
 
-    // Try CFString
-    if type_id == CFString::type_id() {
-      let cf_string = &*(cf_value as *const CFType as *const CFString);
-      let s = cf_string.to_string();
-      return if s.is_empty() {
-        None
-      } else {
-        Some(AXValue::String(s))
-      };
-    }
-
-    // Try CFNumber
-    if type_id == CFNumber::type_id() {
-      let cf_number = &*(cf_value as *const CFType as *const CFNumber);
-
-      // For toggle-like elements, convert 0/1 integers to booleans
-      if let Some(r) = role {
-        if r == "AXToggle"
-          || r == "AXCheckBox"
-          || r == "AXRadioButton"
-          || r.contains("Toggle")
-          || r.contains("CheckBox")
-          || r.contains("RadioButton")
-        {
-          if let Some(int_val) = cf_number.as_i64() {
-            return Some(AXValue::Boolean(int_val != 0));
-          }
+  // Try CFNumber
+  if let Some(cf_number) = cf_value.downcast_ref::<CFNumber>() {
+    // For toggle-like elements, convert 0/1 integers to booleans
+    if let Some(r) = role {
+      if r == "AXToggle"
+        || r == "AXCheckBox"
+        || r == "AXRadioButton"
+        || r.contains("Toggle")
+        || r.contains("CheckBox")
+        || r.contains("RadioButton")
+      {
+        if let Some(int_val) = cf_number.as_i64() {
+          return Some(AXValue::Boolean(int_val != 0));
         }
       }
-
-      if let Some(int_val) = cf_number.as_i64() {
-        return Some(AXValue::Integer(int_val));
-      } else if let Some(float_val) = cf_number.as_f64() {
-        return Some(AXValue::Float(float_val));
-      }
     }
 
-    // Try CFBoolean
-    if type_id == CFBoolean::type_id() {
-      let cf_bool = &*(cf_value as *const CFType as *const CFBoolean);
-      return Some(AXValue::Boolean(cf_bool.as_bool()));
+    if let Some(int_val) = cf_number.as_i64() {
+      return Some(AXValue::Integer(int_val));
+    } else if let Some(float_val) = cf_number.as_f64() {
+      return Some(AXValue::Float(float_val));
     }
-
-    None
   }
+
+  // Try CFBoolean
+  if let Some(cf_bool) = cf_value.downcast_ref::<CFBoolean>() {
+    return Some(AXValue::Boolean(cf_bool.as_bool()));
+  }
+
+  None
 }
 
 // ============================================================================

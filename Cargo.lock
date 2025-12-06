@@ -142,7 +142,6 @@ name = "axio"
 version = "0.1.0"
 dependencies = [
  "branded",
- "core-graphics 0.23.2",
  "objc2 0.6.3",
  "objc2-app-kit",
  "objc2-application-services",
