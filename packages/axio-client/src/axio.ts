@@ -237,10 +237,13 @@ export class AXIO extends EventEmitter<AxioEvents> {
     return this.rawCall("unwatch", { element_id }) as Promise<void>;
   }
 
-  /** Set clickthrough mode (for overlay apps) */
-  async setClickthrough(enabled: boolean): Promise<void> {
-    // Always tell server - state may have changed via global shortcut
-    await this.rawCall("set_clickthrough", { enabled });
+  /**
+   * Set passthrough mode (for overlay apps).
+   * When enabled (true), clicks pass through to underlying apps.
+   * When disabled (false), the overlay captures clicks AND becomes key window for pointer events.
+   */
+  async setPassthrough(enabled: boolean): Promise<void> {
+    await this.rawCall("set_passthrough", { enabled });
     this.clickthrough = enabled;
   }
 

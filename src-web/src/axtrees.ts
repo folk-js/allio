@@ -3,7 +3,7 @@
  * Uses the new AXIO architecture: elements are primary, trees are views.
  */
 
-import { AXIO, AXElement } from "@axio/client";
+import { AXIO, AXElement, AxioPassthrough } from "@axio/client";
 
 class AXTreeOverlay {
   private container: HTMLElement;
@@ -17,6 +17,8 @@ class AXTreeOverlay {
   constructor() {
     this.container = document.getElementById("windowContainer")!;
     this.axio = new AXIO();
+    // Declarative passthrough: axio-opaque elements capture, rest passes through
+    new AxioPassthrough(this.axio);
     this.init();
   }
 
@@ -40,12 +42,8 @@ class AXTreeOverlay {
       ] as const
     ).forEach((e) => this.axio.on(e, render));
 
-    // Mouse tracking for clickthrough - transparent unless over tree
-    this.axio.on("mouse:position", ({ x, y }) => {
-      const el = document.elementFromPoint(x, y);
-      const overTree = el && this.treeEl?.contains(el);
-      this.axio.setClickthrough(!overTree);
-    });
+    // Clickthrough is now handled declaratively by PointerPassthroughManager
+    // (tree element is marked with axio-opaque attribute)
 
     await this.axio.connect();
   }
@@ -67,6 +65,7 @@ class AXTreeOverlay {
     if (!this.treeEl) {
       this.treeEl = document.createElement("div");
       this.treeEl.className = "accessibility-tree";
+      this.treeEl.setAttribute("ax-io", "opaque"); // Capture pointer events on tree
       this.container.appendChild(this.treeEl);
       this.attachHandlers();
     }

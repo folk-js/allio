@@ -1,11 +1,11 @@
 /**
- * Occlusion Manager - CSS-driven window occlusion for overlay UIs
+ * AxioOcclusion - CSS-driven window occlusion for overlay UIs
  *
  * Creates shared SVG clipPath definitions based on window z-order.
  * Elements just reference their layer's clipPath for hardware-accelerated clipping.
  *
  * Usage:
- *   const occlusion = new OcclusionManager(axio);
+ *   const occlusion = new AxioOcclusion(axio);
  *   // For positioned elements (window containers):
  *   container.style.clipPath = occlusion.getClipPath(windowId);
  *   // For absolute-positioned elements (SVG paths):
@@ -16,7 +16,7 @@ import type { AXIO, AXWindow, WindowId } from "./index";
 
 type Rect = { x: number; y: number; w: number; h: number };
 
-export class OcclusionManager {
+export class AxioOcclusion {
   private axio: AXIO;
   private svgDefs: SVGDefsElement;
   private svg: SVGSVGElement;

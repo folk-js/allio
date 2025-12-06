@@ -1,4 +1,4 @@
-import { AXIO } from "@axio/client";
+import { AXIO, AxioPassthrough } from "@axio/client";
 import {
   collisionFragmentShader,
   collisionVertexShader,
@@ -483,9 +483,7 @@ export class FolkSand extends HTMLElement {
     // Scale coordinates relative to canvas size
     this.#pointer.x = (x / rect.width) * this.#canvas.width;
     this.#pointer.y = (y / rect.height) * this.#canvas.height;
-
-    // Dynamic clickthrough: transparent over windows, solid elsewhere
-    this.#updateClickthrough(event.clientX, event.clientY);
+    // Note: Clickthrough is handled globally via mouse:position event
   };
 
   #handlePointerDown = (event: PointerEvent) => {
@@ -907,10 +905,9 @@ export class FolkSand extends HTMLElement {
       this.#axio.on("window:removed", handleWindowUpdate);
       this.#axio.on("window:changed", handleWindowUpdate);
 
-      // Set up global mouse position handler for clickthrough (works even when unfocused)
-      this.#axio.on("mouse:position", ({ x, y }) => {
-        this.#updateClickthrough(x, y);
-      });
+      // Use "outside" mode: capture events in empty space (for drawing sand),
+      // pass through when over windows (so clicks reach underlying apps)
+      new AxioPassthrough(this.#axio, { mode: "outside" });
 
       await this.#axio.connect();
 
@@ -1020,24 +1017,6 @@ export class FolkSand extends HTMLElement {
     // Recollect and update all shape data when any shape changes
     this.#collectShapeData();
     this.#updateCollisionTexture();
-  }
-
-  /**
-   * Check if a screen point (clientX, clientY) is inside any window
-   */
-  #isPointInWindow(x: number, y: number): boolean {
-    for (const win of this.#axio.windows.values()) {
-      const b = win.bounds;
-      if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /** Clickthrough when over a window, solid when in empty space */
-  #updateClickthrough(clientX: number, clientY: number) {
-    this.#axio.setClickthrough(this.#isPointInWindow(clientX, clientY));
   }
 }
 

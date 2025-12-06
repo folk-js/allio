@@ -1,4 +1,10 @@
-import { AXIO, AXElement, AXWindow, OcclusionManager } from "@axio/client";
+import {
+  AXIO,
+  AXElement,
+  AXWindow,
+  AxioOcclusion,
+  AxioPassthrough,
+} from "@axio/client";
 
 type PortType = "input" | "output";
 
@@ -31,7 +37,8 @@ class PortsDemo {
   private svg: SVGElement;
   private menuBar: HTMLElement;
   private axio: AXIO;
-  private occlusion: OcclusionManager;
+  private occlusion: AxioOcclusion;
+  private passthrough: AxioPassthrough;
 
   private ports = new Map<string, Port>();
   private connections: Connection[] = [];
@@ -61,7 +68,9 @@ class PortsDemo {
     this.svg = document.getElementById("connections") as unknown as SVGElement;
     this.menuBar = document.getElementById("menuBar")!;
     this.axio = new AXIO();
-    this.occlusion = new OcclusionManager(this.axio);
+    this.occlusion = new AxioOcclusion(this.axio);
+    // Declarative passthrough: axio-opaque elements capture, rest passes through
+    this.passthrough = new AxioPassthrough(this.axio);
     this.createHoverOverlay();
     this.init();
   }
@@ -327,19 +336,18 @@ class PortsDemo {
       this.handleElementUpdate(element)
     );
 
-    // Mouse tracking for clickthrough, drag connections, and port hover
+    // Mouse tracking for drag connections and port hover
+    // (Passthrough is handled declaratively by AxioPassthrough)
     this.axio.on("mouse:position", ({ x, y }) => {
       // Update temp connection line if dragging
       if (this.connectingFrom && this.tempLine) {
         this.updateTempLine(x, y);
       }
 
-      // Detect element under cursor
+      // Port hover detection
       const el = document.elementFromPoint(x, y);
-      const overInteractive = el?.closest(".port, #menuBar");
       const portEl = el?.closest(".port") as HTMLElement | null;
 
-      // Port hover detection
       if (portEl) {
         // Find which port this element belongs to
         const portId = [...this.portElements.entries()].find(
@@ -352,17 +360,6 @@ class PortsDemo {
         }
       } else if (this.hoveredPort) {
         this.onPortHoverLeave();
-      }
-
-      // Clickthrough logic:
-      // - In creation mode: disabled (so we receive clicks, we enable briefly during elementAt)
-      // - Not in creation mode: clickthrough unless over a port or menu
-      if (this.creationMode) {
-        // In creation mode, disable clickthrough so we receive clicks
-        this.axio.setClickthrough(false);
-      } else {
-        // Otherwise, clickthrough unless over interactive elements
-        this.axio.setClickthrough(!overInteractive);
       }
     });
 
@@ -392,9 +389,10 @@ class PortsDemo {
 
   private toggleCreationMode() {
     this.creationMode = !this.creationMode;
+    // In creation mode, capture all clicks for port creation
+    // Otherwise, use auto mode (axio-opaque elements capture, rest passes through)
+    this.passthrough.mode = this.creationMode ? "opaque" : "auto";
     this.updateMenuBar();
-    // In creation mode, clickthrough stays disabled so we receive clicks
-    // We temporarily enable it only during elementAt calls
   }
 
   private updateMenuBar() {
@@ -548,6 +546,7 @@ class PortsDemo {
   private createPortElement(port: Port) {
     const el = document.createElement("div");
     el.className = `port ${port.type}`;
+    el.setAttribute("ax-io", "opaque"); // Capture pointer events on ports
     const displayText =
       port.element.label ||
       (port.element.value ? String(port.element.value.value) : null) ||

@@ -15,7 +15,7 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 
 // macOS NSPanel support for non-focus-stealing overlay
 #[cfg(target_os = "macos")]
-use tauri_nspanel::{tauri_panel, PanelLevel, StyleMask, WebviewWindowExt as _};
+use tauri_nspanel::{tauri_panel, ManagerExt as _, PanelLevel, StyleMask, WebviewWindowExt as _};
 
 mod mouse;
 
@@ -200,18 +200,50 @@ fn main() {
             let app_handle = app.handle().clone();
             let custom_handler: axio_ws::CustomRpcHandler =
                 std::sync::Arc::new(move |method, args| {
-                    if method == "set_clickthrough" {
+                    // Support both names: "set_passthrough" (preferred) and "set_clickthrough" (deprecated)
+                    if method == "set_passthrough" || method == "set_clickthrough" {
                         let enabled = args["enabled"].as_bool().unwrap_or(false);
-                        let result = match app_handle.get_webview_window("main") {
-                            Some(window) => window
-                                .set_ignore_cursor_events(enabled)
-                                .map_err(|e| e.to_string()),
-                            None => Err("Main window not found".to_string()),
-                        };
-                        return Some(match result {
-                            Ok(_) => serde_json::json!({ "result": { "enabled": enabled } }),
-                            Err(e) => serde_json::json!({ "error": e }),
-                        });
+
+                        // On macOS, use the panel API for better control
+                        // IMPORTANT: Panel operations MUST run on the main thread!
+                        #[cfg(target_os = "macos")]
+                        {
+                            let handle = app_handle.clone();
+                            let handle_inner = handle.clone();
+                            let result = handle.run_on_main_thread(move || {
+                                if let Ok(panel) = handle_inner.get_webview_panel("main") {
+                                    panel.set_ignores_mouse_events(enabled);
+                                    if enabled {
+                                        // Passing through: resign key window so the underlying
+                                        // app becomes key again (seamless transition back)
+                                        panel.resign_key_window();
+                                    } else {
+                                        // Capturing: make panel key window so it receives
+                                        // pointer events (works because we're non-activating)
+                                        panel.make_key_window();
+                                    }
+                                }
+                            });
+                            return Some(match result {
+                                Ok(()) => serde_json::json!({ "result": { "enabled": enabled } }),
+                                Err(e) => serde_json::json!({ "error": e.to_string() }),
+                            });
+                        }
+
+                        // On other platforms, use the window API
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            let result = match app_handle.get_webview_window("main") {
+                                Some(window) => window
+                                    .set_ignore_cursor_events(enabled)
+                                    .map_err(|e| e.to_string()),
+                                None => Err("Main window not found".to_string()),
+                            };
+                            return Some(match result {
+                                Ok(_) => serde_json::json!({ "result": { "enabled": enabled } }),
+                                Err(e) => serde_json::json!({ "error": e }),
+                            });
+                        }
                     }
                     None // Not handled, fall through to axio::rpc
                 });

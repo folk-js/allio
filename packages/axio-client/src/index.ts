@@ -3,4 +3,6 @@
 
 export * from "./types";
 export { AXIO } from "./axio";
-export { OcclusionManager } from "./occlusion";
+export { AxioOcclusion } from "./occlusion";
+export { AxioPassthrough } from "./passthrough";
+export type { PassthroughMode } from "./passthrough";
