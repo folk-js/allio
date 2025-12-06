@@ -2,11 +2,7 @@
 
 use std::ffi::c_void;
 
-use crate::common::{
-  api::{empty_entity, Api},
-  result::Result,
-  x_win_struct::window_info::WindowInfo,
-};
+use crate::common::{api::Api, result::Result, x_win_struct::window_info::WindowInfo};
 use objc2_app_kit::NSRunningApplication;
 use objc2_core_foundation::{
   CFArray, CFBoolean, CFDictionary, CFNumber, CFNumberType, CFRetained, CFString, CGRect,
@@ -19,29 +15,15 @@ use objc2_core_graphics::{
 pub struct MacosAPI {}
 
 impl Api for MacosAPI {
-  fn get_active_window(&self) -> Result<WindowInfo> {
-    let windows: Vec<WindowInfo> = get_windows_informations(true)?;
-    let active_window = if !windows.is_empty() {
-      windows.first().cloned().unwrap_or_else(empty_entity)
-    } else {
-      empty_entity()
-    };
-    Ok(active_window)
-  }
-
   fn get_open_windows(&self) -> Result<Vec<WindowInfo>> {
-    get_windows_informations(false)
+    // IMPORTANT: Wrap in autorelease pool to prevent memory leaks.
+    // Objective-C methods like runningApplicationWithProcessIdentifier: return
+    // autoreleased objects that accumulate without a pool drain.
+    objc2::rc::autoreleasepool(|_pool| get_windows_inner())
   }
 }
 
-fn get_windows_informations(only_active: bool) -> Result<Vec<WindowInfo>> {
-  // IMPORTANT: Wrap in autorelease pool to prevent memory leaks.
-  // Objective-C methods like runningApplicationWithProcessIdentifier: return
-  // autoreleased objects that accumulate without a pool drain.
-  objc2::rc::autoreleasepool(|_pool| get_windows_informations_inner(only_active))
-}
-
-fn get_windows_informations_inner(only_active: bool) -> Result<Vec<WindowInfo>> {
+fn get_windows_inner() -> Result<Vec<WindowInfo>> {
   let mut windows: Vec<WindowInfo> = Vec::new();
 
   let option = CGWindowListOption::OptionOnScreenOnly
@@ -89,36 +71,29 @@ fn get_windows_informations_inner(only_active: bool) -> Result<Vec<WindowInfo>> 
       Err(_) => continue,
     };
 
-    let is_not_active = !app.isActive();
-
-    if only_active && is_not_active {
-      continue;
-    }
-
     let bundle_identifier = get_bundle_identifier(app);
-
     if bundle_identifier.eq("com.apple.dock") {
       continue;
     }
 
+    let focused = app.isActive();
     let app_name = get_cf_string_value(&window_cf_dictionary, "kCGWindowOwnerName");
     let title = get_cf_string_value(&window_cf_dictionary, "kCGWindowName");
     let id = get_cf_number_value(&window_cf_dictionary, "kCGWindowNumber");
+    let z_index = windows.len() as u32;
 
     windows.push(WindowInfo {
-      id: id as u32,
+      id: id.to_string(),
       title,
+      app_name,
+      x: bounds.origin.x,
+      y: bounds.origin.y,
+      w: bounds.size.width,
+      h: bounds.size.height,
+      focused,
       process_id: process_id as u32,
-      process_name: app_name,
-      x: bounds.origin.x as i32,
-      y: bounds.origin.y as i32,
-      width: bounds.size.width as i32,
-      height: bounds.size.height as i32,
+      z_index,
     });
-
-    if only_active && is_not_active {
-      break;
-    }
   }
 
   Ok(windows)
@@ -197,8 +172,8 @@ fn get_running_application_from_pid(process_id: u32) -> Result<&'static NSRunnin
   let process_id = process_id as i64;
   let app: *mut NSRunningApplication = unsafe {
     objc2::msg_send![
-      objc2::class!(NSRunningApplication),
-      runningApplicationWithProcessIdentifier: process_id as i32
+        objc2::class!(NSRunningApplication),
+        runningApplicationWithProcessIdentifier: process_id as i32
     ]
   };
   if app.is_null() {

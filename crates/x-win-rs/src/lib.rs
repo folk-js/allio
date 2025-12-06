@@ -29,20 +29,11 @@ pub use common::{
   x_win_struct::window_info::WindowInfo,
 };
 
-/// Retrieve information the about currently active window.
-/// Return `WindowInfo` containing details about a specific active window.
-pub fn get_active_window() -> Result<WindowInfo> {
-  let api = init_platform_api();
-  let active_window = api.get_active_window()?;
-  Ok(active_window)
-}
-
-/// Retrieve information about the currently open windows.
-/// Return `Vec<WindowInfo>` each containing details about a specific open window.
+/// Retrieve information about open windows.
+/// Each `WindowInfo` includes a `focused` field indicating if it's the active window.
 pub fn get_open_windows() -> Result<Vec<WindowInfo>> {
   let api = init_platform_api();
-  let open_windows = api.get_open_windows()?;
-  Ok(open_windows)
+  api.get_open_windows()
 }
 
 #[cfg(test)]
@@ -51,29 +42,17 @@ mod tests {
 
   #[test]
   fn test_empty_entity() -> Result<()> {
-    let window_info = empty_entity();
-    assert_eq!(window_info.id, 0);
-    assert_eq!(window_info.title, String::from(""));
-    Ok(())
-  }
-
-  #[cfg(all(feature = "macos_permission", target_os = "macos"))]
-  #[test]
-  #[ignore = "Not working on ci/cd"]
-  fn test_check_screen_record_permission() -> Result<()> {
-    use macos::permission::check_screen_record_permission;
-    let value = check_screen_record_permission();
-    assert_eq!(value, true);
-    Ok(())
-  }
-
-  #[cfg(all(feature = "macos_permission", target_os = "macos"))]
-  #[test]
-  #[ignore = "Not working on ci/cd"]
-  fn test_request_screen_record_permission() -> Result<()> {
-    use macos::permission::request_screen_record_permission;
-    let value = request_screen_record_permission();
-    assert_eq!(value, true);
+    let w = empty_entity();
+    assert!(w.id.is_empty());
+    assert!(w.title.is_empty());
+    assert!(w.app_name.is_empty());
+    assert_eq!(w.x, 0.0);
+    assert_eq!(w.y, 0.0);
+    assert_eq!(w.w, 0.0);
+    assert_eq!(w.h, 0.0);
+    assert!(!w.focused);
+    assert_eq!(w.process_id, 0);
+    assert_eq!(w.z_index, 0);
     Ok(())
   }
 }

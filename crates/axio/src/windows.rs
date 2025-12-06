@@ -103,21 +103,21 @@ pub fn get_main_screen_dimensions() -> (f64, f64) {
     (1920.0, 1080.0)
 }
 
-fn window_from_x_win(window: &x_win::WindowInfo, focused: bool, z_index: u32) -> AXWindow {
+fn window_from_x_win(window: &x_win::WindowInfo) -> AXWindow {
     use crate::types::Bounds;
     AXWindow {
-        id: window.id.to_string(),
+        id: window.id.clone(),
         title: window.title.clone(),
-        app_name: window.info.name.clone(),
+        app_name: window.app_name.clone(),
         bounds: Bounds {
-            x: window.position.x as f64,
-            y: window.position.y as f64,
-            w: window.position.width as f64,
-            h: window.position.height as f64,
+            x: window.x,
+            y: window.y,
+            w: window.w,
+            h: window.h,
         },
-        focused,
-        process_id: window.info.process_id,
-        z_index,
+        focused: window.focused,
+        process_id: window.process_id,
+        z_index: window.z_index,
     }
 }
 
@@ -133,25 +133,18 @@ pub struct WindowEnumOptions {
 pub fn get_windows(options: &WindowEnumOptions) -> Option<Vec<AXWindow>> {
     use std::panic;
 
-    let all_windows_result = panic::catch_unwind(|| x_win::get_open_windows());
-    let active_window_result = panic::catch_unwind(|| x_win::get_active_window());
-
-    let (all_windows, active_window_id) = match (all_windows_result, active_window_result) {
-        (Ok(Ok(windows)), Ok(Ok(active))) => (windows, Some(active.id)),
-        (Ok(Ok(windows)), _) => (windows, None),
+    let all_windows = match panic::catch_unwind(|| x_win::get_open_windows()) {
+        Ok(Ok(windows)) => windows,
         _ => return Some(Vec::new()),
     };
 
     let (offset_x, offset_y) = if let Some(exclude_pid) = options.exclude_pid {
-        match all_windows
-            .iter()
-            .find(|w| w.info.process_id == exclude_pid)
-        {
-            Some(overlay_window) => (overlay_window.position.x, overlay_window.position.y),
+        match all_windows.iter().find(|w| w.process_id == exclude_pid) {
+            Some(overlay_window) => (overlay_window.x, overlay_window.y),
             None => return None,
         }
     } else {
-        (0, 0)
+        (0.0, 0.0)
     };
 
     let (screen_width, screen_height) = get_main_screen_dimensions();
@@ -160,25 +153,23 @@ pub fn get_windows(options: &WindowEnumOptions) -> Option<Vec<AXWindow>> {
     let filtered: Vec<_> = all_windows
         .iter()
         .filter(|w| {
-            if options.exclude_pid == Some(w.info.process_id) {
+            if options.exclude_pid == Some(w.process_id) {
                 return false;
             }
-            if should_filter_process(w.info.process_id) {
+            if should_filter_process(w.process_id) {
                 return false;
             }
             true
         })
         .collect();
 
-    // Map to AXWindow with z_index (0 = frontmost)
+    // Map to AXWindow (z_index already set by x-win, 0 = frontmost)
     let windows = filtered
         .iter()
-        .enumerate()
-        .map(|(z_index, w)| {
-            let focused = active_window_id.map_or(false, |id| id == w.id);
-            let mut info = window_from_x_win(w, focused, z_index as u32);
-            info.bounds.x -= offset_x as f64;
-            info.bounds.y -= offset_y as f64;
+        .map(|w| {
+            let mut info = window_from_x_win(w);
+            info.bounds.x -= offset_x;
+            info.bounds.y -= offset_y;
             info
         })
         .filter(|w| {
