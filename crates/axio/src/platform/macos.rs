@@ -624,8 +624,6 @@ fn get_element_selected_text(
 
 /// Get window ID from an AX element by looking at its window attribute
 fn get_window_id_from_ax_element(element: &AXUIElement) -> Option<WindowId> {
-  use crate::window_manager::WindowManager;
-
   // Try to get the window attribute
   let window_element = element
     .attribute(&AXAttribute::new(&CFString::new("AXWindow")))
@@ -636,7 +634,7 @@ fn get_window_id_from_ax_element(element: &AXUIElement) -> Option<WindowId> {
   let bounds = get_element_bounds(&window_ax)?;
 
   // Find matching window by bounds
-  WindowManager::find_window_id_by_bounds(&bounds)
+  crate::window_registry::find_by_bounds(&bounds)
 }
 
 /// Create an AXObserver for a process and add it to the main run loop.
@@ -1293,19 +1291,16 @@ pub fn get_window_elements(pid: u32) -> AxioResult<Vec<AXUIElement>> {
 
 /// Get the root element for a window.
 pub fn get_window_root(window_id: &WindowId) -> AxioResult<AXElement> {
-  use crate::window_manager::WindowManager;
-
-  let managed_window = WindowManager::get_window(window_id)
+  let (window, handle) = crate::window_registry::get_with_handle(window_id)
     .ok_or_else(|| AxioError::WindowNotFound(window_id.clone()))?;
 
-  let window_element = managed_window
-    .ax_element
-    .ok_or_else(|| AxioError::Internal(format!("Window {} has no AX element", window_id)))?;
+  let window_element =
+    handle.ok_or_else(|| AxioError::Internal(format!("Window {} has no AX element", window_id)))?;
 
   Ok(build_element(
     &window_element,
     window_id,
-    managed_window.info.process_id.as_u32(),
+    window.process_id.as_u32(),
     None,
   ))
 }
@@ -1357,22 +1352,21 @@ pub fn enable_accessibility_for_pid(pid: crate::ProcessId) {
 /// Uses AXUIElementCopyElementAtPosition as a starting point, then searches deeper
 /// to find the most specific/interactive element at that position.
 pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
-  use crate::window_manager::WindowManager;
   use accessibility_sys::AXUIElementRef;
   use core_foundation::base::TCFType;
   use std::ptr;
 
   // Find which tracked window contains this point
   // Tracked windows already exclude our own PID, so we naturally skip our overlay
-  let managed_window = WindowManager::find_window_at_point(x, y).ok_or_else(|| {
+  let window = crate::window_registry::find_at_point(x, y).ok_or_else(|| {
     AxioError::AccessibilityError(format!(
       "No tracked window found at position ({}, {})",
       x, y
     ))
   })?;
 
-  let window_id = managed_window.info.id.clone();
-  let pid = managed_window.info.process_id.as_u32();
+  let window_id = window.id.clone();
+  let pid = window.process_id.as_u32();
 
   // Create an app element from the window's PID
   // Querying on the app element searches its entire hierarchy (all windows, all children)

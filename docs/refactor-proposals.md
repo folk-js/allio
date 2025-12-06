@@ -17,22 +17,21 @@ Status tracking for architectural improvements.
 
 ### Phase 2: Prep Work (makes Phase 3 easier)
 
-- [ ] **5. Consistent ID types** - Use `WindowId` everywhere (not `String`)
+- [x] **5. Consistent ID types** - Use `WindowId`, `ProcessId`, `Point` everywhere
 - [ ] **6. Extract pure data from platform handles** - Separate `AXElement` data from `AXUIElement` handles
-- [ ] **7. Hydrate title in `window_root`** - Fix dead `set_ax_title` code
 
 ### Phase 3: Registry Restructuring
 
-- [ ] **8. Create `WindowRegistry`** - Pure data, owns `active` and `depth_order`
-- [ ] **9. Refactor `ElementRegistry`** - Remove platform types, add `by_window` index
-- [ ] **10. Consolidate platform handles** - Platform module owns all native handles
+- [ ] **7. Create `WindowRegistry`** - Pure data, owns `active` and `depth_order`
+- [ ] **8. Refactor `ElementRegistry`** - Remove platform types, add `by_window` index
+- [ ] **9. Consolidate platform handles** - Platform module owns all native handles
 
 ### Phase 4: Polish & Experiments
 
-- [ ] **11. Merge x-win into windowing** - Inline x-win functionality directly into axio
-- [ ] **12. CFHash for element dedup** - Try O(1) lookup (might not work)
-- [ ] **13. Element eviction strategy** - Prevent unbounded growth
-- [ ] **14. Better error handling** - Graceful degradation
+- [ ] **10. Merge x-win into windowing** - Inline x-win functionality directly into axio
+- [ ] **11. CFHash for element dedup** - Try O(1) lookup (might not work)
+- [ ] **12. Element eviction strategy** - Prevent unbounded growth
+- [ ] **13. Better error handling** - Graceful degradation
 
 ---
 

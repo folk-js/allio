@@ -40,9 +40,9 @@ pub(crate) fn emit_window_changed(window: &AXWindow, depth_order: &[WindowId]) {
   });
 }
 
-pub(crate) fn emit_window_removed(window: &AXWindow, depth_order: &[WindowId]) {
+pub(crate) fn emit_window_removed(window_id: &WindowId, depth_order: &[WindowId]) {
   sink().emit(ServerEvent::WindowRemoved {
-    window: window.clone(),
+    window_id: window_id.clone(),
     depth_order: depth_order.to_vec(),
   });
 }

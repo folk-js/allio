@@ -335,11 +335,11 @@ export class AXIO extends EventEmitter<AxioEvents> {
       }
 
       case "window:removed": {
-        const { window, depth_order } = event.data;
-        this.windows.delete(window.id);
+        const { window_id, depth_order } = event.data;
+        this.windows.delete(window_id);
         this.depthOrder = depth_order;
         for (const [id, el] of this.elements) {
-          if (el.window_id === window.id) {
+          if (el.window_id === window_id) {
             this.elements.delete(id);
           }
         }

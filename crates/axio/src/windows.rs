@@ -2,11 +2,8 @@
 //! Also handles mouse position tracking in the same polling loop.
 
 use crate::types::AXWindow;
-use crate::window_manager::WindowManager;
 use crate::WindowId;
-use once_cell::sync::Lazy;
-use parking_lot::RwLock;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -30,22 +27,6 @@ const FILTERED_BUNDLE_IDS: &[&str] = &[
 /// Check if a window should be filtered based on its bundle ID.
 fn should_filter_bundle_id(bundle_id: Option<&str>) -> bool {
   bundle_id.map_or(false, |id| FILTERED_BUNDLE_IDS.contains(&id))
-}
-
-/// Last known window list from polling. Always available immediately.
-static CURRENT_WINDOWS: Lazy<RwLock<Vec<AXWindow>>> = Lazy::new(|| RwLock::new(Vec::new()));
-
-/// Active window ID - the most recent valid focused window (preserved when focus goes to desktop)
-static ACTIVE_WINDOW: Lazy<RwLock<Option<WindowId>>> = Lazy::new(|| RwLock::new(None));
-
-/// Get the last known window list. Returns immediately without polling.
-pub fn get_current_windows() -> Vec<AXWindow> {
-  CURRENT_WINDOWS.read().clone()
-}
-
-/// Get the active window ID (most recent valid focus, preserved when desktop focused)
-pub fn get_active_window() -> Option<WindowId> {
-  ACTIVE_WINDOW.read().clone()
 }
 
 #[cfg(target_os = "macos")]
@@ -108,8 +89,8 @@ pub struct WindowEnumOptions {
   pub filter_offscreen: bool,
 }
 
-/// Returns None if exclude_pid is set but that window isn't found.
-pub fn get_windows(options: &WindowEnumOptions) -> Option<Vec<AXWindow>> {
+/// Poll x-win for current windows. Returns None if exclude_pid window isn't found.
+fn poll_windows(options: &WindowEnumOptions) -> Option<Vec<AXWindow>> {
   use std::panic;
 
   let all_windows = match panic::catch_unwind(|| x_win::get_open_windows()) {
@@ -200,9 +181,9 @@ const CLEANUP_INTERVAL: u64 = 1250;
 /// Handles both window enumeration and mouse position tracking.
 pub fn start_polling(config: PollingConfig) {
   use crate::types::Point;
+  use crate::window_registry;
 
   thread::spawn(move || {
-    let mut last_windows: HashMap<WindowId, AXWindow> = HashMap::new();
     let mut last_active_id: Option<WindowId> = None;
     let mut last_focused_id: Option<WindowId> = None;
     let mut last_mouse_pos: Option<Point> = None;
@@ -221,57 +202,35 @@ pub fn start_polling(config: PollingConfig) {
         }
       }
 
-      if let Some(raw_windows) = get_windows(&config.enum_options) {
-        // Update WindowManager - returns windows with preserved children/title
-        let (managed_windows, _, _) = WindowManager::update_windows(raw_windows);
+      if let Some(raw_windows) = poll_windows(&config.enum_options) {
+        // Update registry - handles add/remove/change detection internally
+        let result = window_registry::update(raw_windows);
 
-        // Build current window map from managed windows (preserves children)
-        let mut current_windows: Vec<AXWindow> =
-          managed_windows.iter().map(|m| m.info.clone()).collect();
-        let current_map: HashMap<WindowId, AXWindow> = current_windows
-          .iter()
-          .map(|w| (w.id.clone(), w.clone()))
-          .collect();
-        let current_ids: HashSet<&WindowId> = current_map.keys().collect();
-        let last_ids: HashSet<&WindowId> = last_windows.keys().collect();
-
-        // Compute depth_order (window IDs sorted by z_index, front to back)
-        let depth_order: Vec<WindowId> = {
-          let mut sorted = current_windows.clone();
-          sorted.sort_by_key(|w| w.z_index);
-          sorted.into_iter().map(|w| w.id).collect()
-        };
-
-        // Detect removed windows (emit before removal, include full data)
-        for removed_id in last_ids.difference(&current_ids) {
-          if let Some(window) = last_windows.get(*removed_id) {
-            crate::events::emit_window_removed(window, &depth_order);
-          }
+        // Emit events for removed windows
+        for removed_id in &result.removed {
+          crate::events::emit_window_removed(removed_id, &result.depth_order);
         }
 
-        // Detect added windows
-        for added_id in current_ids.difference(&last_ids) {
-          if let Some(window) = current_map.get(*added_id) {
-            // Enable accessibility for Electron apps (Signal, Discord, etc.)
-            // This must be done when the window is first discovered to give the
-            // accessibility tree time to populate before we try to query elements
+        // Emit events for added windows
+        for added_id in &result.added {
+          if let Some(window) = window_registry::get_window(added_id) {
+            // Enable accessibility for Electron apps
             crate::platform::macos::enable_accessibility_for_pid(window.process_id);
-            crate::events::emit_window_added(window, &depth_order);
+            crate::events::emit_window_added(&window, &result.depth_order);
           }
         }
 
-        // Detect changed windows (position, title, etc changed)
-        for id in current_ids.intersection(&last_ids) {
-          let current = current_map.get(*id).unwrap();
-          let last = last_windows.get(*id).unwrap();
-          if current != last {
-            crate::events::emit_window_changed(current, &depth_order);
+        // Emit events for changed windows
+        for changed_id in &result.changed {
+          if let Some(window) = window_registry::get_window(changed_id) {
+            crate::events::emit_window_changed(&window, &result.depth_order);
           }
         }
 
-        // Find focused window and update active_window
-        let focused_window = current_windows.iter_mut().find(|w| w.focused);
-        let current_focused_id = focused_window.as_ref().map(|w| w.id.clone());
+        // Get current windows for focus tracking
+        let windows = window_registry::get_windows();
+        let focused_window = windows.iter().find(|w| w.focused);
+        let current_focused_id = focused_window.map(|w| w.id.clone());
 
         // Track focus changes
         let focus_changed = current_focused_id != last_focused_id;
@@ -280,32 +239,20 @@ pub fn start_polling(config: PollingConfig) {
           last_focused_id = current_focused_id.clone();
         }
 
-        // Update active_window: if a window has focus, it becomes active
-        // If no window has focus (desktop), active_window is preserved
+        // Update active window
         if let Some(ref focused_id) = current_focused_id {
           let active_changed = last_active_id.as_ref() != Some(focused_id);
           if active_changed {
-            *ACTIVE_WINDOW.write() = Some(focused_id.clone());
+            window_registry::set_active(Some(focused_id.clone()));
             crate::events::emit_active_changed(focused_id);
             last_active_id = Some(focused_id.clone());
-            // Note: Element discovery is now client-initiated via RPC.
-            // This keeps the polling loop pure and fast.
           }
         }
-        // Note: when focus goes to desktop (current_focused_id is None),
-        // we preserve last_active_id - no event emitted, active window stays same
-
-        // Update global state
-        *CURRENT_WINDOWS.write() = current_windows;
-        last_windows = current_map;
 
         // Periodic cleanup for dead PIDs
         if poll_count % CLEANUP_INTERVAL == 0 {
-          // Collect active PIDs from current windows
-          let active_pids: HashSet<ProcessId> =
-            last_windows.values().map(|w| w.process_id).collect();
+          let active_pids: HashSet<ProcessId> = windows.iter().map(|w| w.process_id).collect();
 
-          // Clean up observers for dead PIDs
           #[cfg(target_os = "macos")]
           let _observers_cleaned = crate::platform::macos::cleanup_dead_observers(&active_pids);
         }

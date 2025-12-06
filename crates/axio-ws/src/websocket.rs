@@ -83,16 +83,13 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
 
   // Send initial state as sync:init (run on blocking thread pool)
   let init_result = tokio::task::spawn_blocking(|| {
-    let active = axio::get_active_window();
-    let mut windows = axio::get_current_windows();
-
-    // Compute depth_order (window IDs sorted by z_index, front to back)
-    windows.sort_by_key(|w| w.z_index);
-    let depth_order: Vec<axio::WindowId> = windows.iter().map(|w| w.id.clone()).collect();
+    let active = axio::get_active();
+    let windows = axio::get_windows();
+    let depth_order = axio::get_depth_order();
 
     // Query focused element and selection for the active window's app
     let (focused_element, selection) = if let Some(ref window_id) = active {
-      if let Some(window) = windows.iter().find(|w| w.id == *window_id) {
+      if let Some(window) = axio::get_window(window_id) {
         axio::get_current_focus(window.process_id.as_u32())
       } else {
         (None, None)

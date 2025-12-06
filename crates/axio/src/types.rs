@@ -401,7 +401,7 @@ pub enum ServerEvent {
   },
   #[serde(rename = "window:removed")]
   WindowRemoved {
-    window: AXWindow,
+    window_id: WindowId,
     depth_order: Vec<WindowId>,
   },
 
