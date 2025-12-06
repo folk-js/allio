@@ -6,7 +6,10 @@
  *
  * Usage:
  *   const occlusion = new OcclusionManager(axio);
+ *   // For positioned elements (window containers):
  *   container.style.clipPath = occlusion.getClipPath(windowId);
+ *   // For absolute-positioned elements (SVG paths):
+ *   path.style.clipPath = occlusion.getAbsoluteClipPath(windowId);
  */
 
 import type { AXIO, AXWindow, WindowId } from "./index";
@@ -18,6 +21,7 @@ export class OcclusionManager {
   private svgDefs: SVGDefsElement;
   private svg: SVGSVGElement;
   private clipPaths = new Map<string, SVGClipPathElement>();
+  private absoluteClipPaths = new Map<string, SVGClipPathElement>();
 
   constructor(axio: AXIO) {
     this.axio = axio;
@@ -44,9 +48,16 @@ export class OcclusionManager {
     this.update();
   }
 
-  /** Get the CSS clip-path value for a window */
+  /** Get the CSS clip-path value for a positioned window container */
   getClipPath(windowId: WindowId): string {
     const clipPath = this.clipPaths.get(windowId);
+    if (!clipPath) return "";
+    return `url(#${clipPath.id})`;
+  }
+
+  /** Get the CSS clip-path value for absolute-positioned elements (SVG, etc) */
+  getAbsoluteClipPath(windowId: WindowId): string {
+    const clipPath = this.absoluteClipPaths.get(windowId);
     if (!clipPath) return "";
     return `url(#${clipPath.id})`;
   }
@@ -70,12 +81,19 @@ export class OcclusionManager {
         this.clipPaths.delete(id);
       }
     }
+    for (const [id, clipPath] of this.absoluteClipPaths) {
+      if (!currentIds.has(id)) {
+        clipPath.remove();
+        this.absoluteClipPaths.delete(id);
+      }
+    }
 
     // Update/create clipPaths for each window
     for (let i = 0; i < windows.length; i++) {
       const window = windows[i];
       const windowsInFront = windows.slice(0, i);
       this.updateClipPath(window, windowsInFront);
+      this.updateAbsoluteClipPath(window, windowsInFront);
     }
   }
 
@@ -86,7 +104,7 @@ export class OcclusionManager {
       .filter((w): w is AXWindow => !!w);
   }
 
-  /** Update or create clipPath for a specific window */
+  /** Update or create clipPath for a positioned window container (window-relative coords) */
   private updateClipPath(window: AXWindow, windowsInFront: AXWindow[]) {
     let clipPath = this.clipPaths.get(window.id);
 
@@ -96,6 +114,7 @@ export class OcclusionManager {
         "clipPath"
       );
       clipPath.id = `occlusion-${window.id}`;
+      clipPath.setAttribute("clipPathUnits", "userSpaceOnUse");
       this.svgDefs.appendChild(clipPath);
       this.clipPaths.set(window.id, clipPath);
     }
@@ -117,7 +136,7 @@ export class OcclusionManager {
       return;
     }
 
-    // Build path with holes for windows in front
+    // Build path with holes for windows in front (window-relative coordinates)
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
 
     // Convert to window-relative coordinates
@@ -135,8 +154,78 @@ export class OcclusionManager {
     // Build path string
     const pathParts: string[] = [];
 
+    // Outer boundary (clockwise) - huge rect for overflow
+    pathParts.push(
+      "M -10000 -10000 L 10000 -10000 L 10000 10000 L -10000 10000 Z"
+    );
+
+    // Each union rect as counter-clockwise hole
+    for (const rect of unionRects) {
+      const { x, y, w, h } = rect;
+      pathParts.push(
+        `M ${x} ${y} L ${x} ${y + h} L ${x + w} ${y + h} L ${x + w} ${y} Z`
+      );
+    }
+
+    path.setAttribute("d", pathParts.join(" "));
+    path.setAttribute("clip-rule", "evenodd");
+    clipPath.appendChild(path);
+  }
+
+  /** Update or create absolute clipPath for SVG elements (viewport coords) */
+  private updateAbsoluteClipPath(window: AXWindow, windowsInFront: AXWindow[]) {
+    let clipPath = this.absoluteClipPaths.get(window.id);
+
+    if (!clipPath) {
+      clipPath = document.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "clipPath"
+      );
+      clipPath.id = `occlusion-abs-${window.id}`;
+      clipPath.setAttribute("clipPathUnits", "userSpaceOnUse");
+      this.svgDefs.appendChild(clipPath);
+      this.absoluteClipPaths.set(window.id, clipPath);
+    }
+
+    // Clear existing content
+    clipPath.innerHTML = "";
+
+    // If frontmost window, no clipping needed - use a huge rect
+    if (windowsInFront.length === 0) {
+      const rect = document.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "rect"
+      );
+      rect.setAttribute("x", "-10000");
+      rect.setAttribute("y", "-10000");
+      rect.setAttribute("width", "20000");
+      rect.setAttribute("height", "20000");
+      clipPath.appendChild(rect);
+      return;
+    }
+
+    // Build path with holes for windows in front (ABSOLUTE viewport coordinates)
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+
+    // Use absolute coordinates (no offset subtraction)
+    const rects = windowsInFront.map((fw) => ({
+      x: fw.bounds.x,
+      y: fw.bounds.y,
+      w: fw.bounds.w,
+      h: fw.bounds.h,
+    }));
+
+    // Compute union to handle overlapping windows
+    const unionRects =
+      rects.length === 1 ? rects : this.computeRectUnion(rects);
+
+    // Build path string
+    const pathParts: string[] = [];
+
     // Outer boundary (clockwise) - huge rect
-    pathParts.push("M -5000 -5000 L 5000 -5000 L 5000 5000 L -5000 5000 Z");
+    pathParts.push(
+      "M -10000 -10000 L 20000 -10000 L 20000 20000 L -10000 20000 Z"
+    );
 
     // Each union rect as counter-clockwise hole
     for (const rect of unionRects) {
@@ -236,5 +325,6 @@ export class OcclusionManager {
   destroy() {
     this.svg.remove();
     this.clipPaths.clear();
+    this.absoluteClipPaths.clear();
   }
 }
