@@ -25,6 +25,25 @@ const FILTERED_BUNDLE_IDS: &[&str] = &[
 static BUNDLE_ID_CACHE: Lazy<Mutex<HashMap<u32, Option<String>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+/// Clean up bundle ID cache entries for PIDs that are no longer active.
+#[cfg(target_os = "macos")]
+fn cleanup_bundle_id_cache(active_pids: &HashSet<u32>) -> usize {
+    let mut cache = BUNDLE_ID_CACHE.lock().unwrap();
+    let initial_size = cache.len();
+    cache.retain(|pid, _| active_pids.contains(pid));
+    initial_size - cache.len()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn cleanup_bundle_id_cache(_active_pids: &HashSet<u32>) -> usize {
+    0
+}
+
+/// Get the current size of the bundle ID cache (for diagnostics).
+pub fn bundle_id_cache_size() -> usize {
+    BUNDLE_ID_CACHE.lock().unwrap().len()
+}
+
 /// Last known window list from polling. Always available immediately.
 static CURRENT_WINDOWS: Lazy<RwLock<Vec<AXWindow>>> = Lazy::new(|| RwLock::new(Vec::new()));
 
@@ -207,15 +226,21 @@ impl Default for PollingConfig {
     }
 }
 
+/// How often to run cleanup and diagnostics (in poll cycles).
+/// At 8ms interval, 1250 cycles ≈ 10 seconds.
+const CLEANUP_INTERVAL: u64 = 1250;
+
 /// Runs in background thread, emits events via EventSink.
 pub fn start_polling(config: PollingConfig) {
     thread::spawn(move || {
         let mut last_windows: HashMap<String, AXWindow> = HashMap::new();
         let mut last_active_id: Option<String> = None;
         let mut last_focused_id: Option<String> = None;
+        let mut poll_count: u64 = 0;
 
         loop {
             let loop_start = Instant::now();
+            poll_count += 1;
 
             if let Some(raw_windows) = get_windows(&config.enum_options) {
                 // Update WindowManager - returns windows with preserved children/title
@@ -313,6 +338,20 @@ pub fn start_polling(config: PollingConfig) {
                 // Update global state
                 *CURRENT_WINDOWS.write().unwrap() = current_windows;
                 last_windows = current_map;
+
+                // Periodic cleanup for dead PIDs
+                if poll_count % CLEANUP_INTERVAL == 0 {
+                    // Collect active PIDs from current windows
+                    let active_pids: HashSet<u32> =
+                        last_windows.values().map(|w| w.process_id).collect();
+
+                    // Clean up caches for dead PIDs
+                    let _bundle_cleaned = cleanup_bundle_id_cache(&active_pids);
+
+                    #[cfg(target_os = "macos")]
+                    let _observers_cleaned =
+                        crate::platform::macos::cleanup_dead_observers(&active_pids);
+                }
             }
 
             let elapsed = loop_start.elapsed();

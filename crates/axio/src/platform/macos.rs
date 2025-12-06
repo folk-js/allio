@@ -119,19 +119,131 @@ use once_cell::sync::Lazy;
 use std::collections::HashMap as StdHashMap;
 use std::sync::Mutex;
 
-/// Context passed to per-element AX observer callbacks
-#[derive(Clone)]
+// ============================================================================
+// Observer Context Registry - Safe callback handling
+// ============================================================================
+//
+// Instead of passing actual data (ElementId) to macOS callbacks, we pass only
+// a numeric ID. The callback looks up the ID in a thread-safe registry.
+// If the ID is found, we use the data; if not, the element was cleaned up.
+// This avoids all use-after-free issues with macOS callbacks.
+
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+/// Next available context ID
+static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Registry mapping context IDs to element IDs
+static OBSERVER_CONTEXT_REGISTRY: Lazy<Mutex<StdHashMap<u64, ElementId>>> =
+    Lazy::new(|| Mutex::new(StdHashMap::new()));
+
+/// Handle passed to macOS callbacks - contains only an ID, no heap data
 #[repr(C)]
-pub struct ObserverContext {
-    pub element_id: ElementId,
+pub struct ObserverContextHandle {
+    context_id: u64,
 }
 
-/// Context passed to app-level observer callbacks (Tier 1)
-#[derive(Clone)]
-#[repr(C)]
-pub struct AppObserverContext {
-    pub pid: u32,
+/// Register an element for observation and get a context handle.
+/// Returns a boxed handle that can be passed to macOS.
+pub fn register_observer_context(element_id: ElementId) -> *mut ObserverContextHandle {
+    let context_id = NEXT_CONTEXT_ID.fetch_add(1, AtomicOrdering::Relaxed);
+    OBSERVER_CONTEXT_REGISTRY
+        .lock()
+        .unwrap()
+        .insert(context_id, element_id);
+
+    Box::into_raw(Box::new(ObserverContextHandle { context_id }))
 }
+
+/// Unregister an element's observer context. Called during cleanup.
+pub fn unregister_observer_context(handle_ptr: *mut ObserverContextHandle) {
+    if handle_ptr.is_null() {
+        return;
+    }
+    unsafe {
+        let handle = Box::from_raw(handle_ptr);
+        OBSERVER_CONTEXT_REGISTRY
+            .lock()
+            .unwrap()
+            .remove(&handle.context_id);
+    }
+}
+
+/// Look up element ID from context handle. Returns None if element was cleaned up.
+fn lookup_observer_context(handle_ptr: *const ObserverContextHandle) -> Option<ElementId> {
+    if handle_ptr.is_null() {
+        return None;
+    }
+    unsafe {
+        let handle = &*handle_ptr;
+        OBSERVER_CONTEXT_REGISTRY
+            .lock()
+            .unwrap()
+            .get(&handle.context_id)
+            .cloned()
+    }
+}
+
+/// Get the count of active observer contexts (for diagnostics)
+pub fn observer_context_count() -> usize {
+    OBSERVER_CONTEXT_REGISTRY.lock().unwrap().len()
+}
+
+// Legacy type alias for compatibility
+pub type ObserverContext = ObserverContextHandle;
+
+// ============================================================================
+// App Observer Context Registry
+// ============================================================================
+
+/// Registry mapping app context IDs to PIDs
+static APP_CONTEXT_REGISTRY: Lazy<Mutex<StdHashMap<u64, u32>>> =
+    Lazy::new(|| Mutex::new(StdHashMap::new()));
+
+/// Handle passed to app-level macOS callbacks - contains only an ID
+#[repr(C)]
+pub struct AppObserverContextHandle {
+    context_id: u64,
+}
+
+/// Register an app for observation and get a context handle.
+fn register_app_context(pid: u32) -> *mut AppObserverContextHandle {
+    let context_id = NEXT_CONTEXT_ID.fetch_add(1, AtomicOrdering::Relaxed);
+    APP_CONTEXT_REGISTRY.lock().unwrap().insert(context_id, pid);
+    Box::into_raw(Box::new(AppObserverContextHandle { context_id }))
+}
+
+/// Unregister an app's observer context.
+fn unregister_app_context(handle_ptr: *mut AppObserverContextHandle) {
+    if handle_ptr.is_null() {
+        return;
+    }
+    unsafe {
+        let handle = Box::from_raw(handle_ptr);
+        APP_CONTEXT_REGISTRY
+            .lock()
+            .unwrap()
+            .remove(&handle.context_id);
+    }
+}
+
+/// Look up PID from app context handle. Returns None if app was cleaned up.
+fn lookup_app_context(handle_ptr: *const AppObserverContextHandle) -> Option<u32> {
+    if handle_ptr.is_null() {
+        return None;
+    }
+    unsafe {
+        let handle = &*handle_ptr;
+        APP_CONTEXT_REGISTRY
+            .lock()
+            .unwrap()
+            .get(&handle.context_id)
+            .copied()
+    }
+}
+
+// Legacy alias
+pub type AppObserverContext = AppObserverContextHandle;
 
 // ============================================================================
 // App-Level Observer State (Tier 1)
@@ -141,6 +253,8 @@ pub struct AppObserverContext {
 struct AppState {
     #[allow(dead_code)] // Kept alive to maintain observer subscription
     observer: AXObserverRef,
+    /// Handle pointer for cleanup
+    context_handle: *mut AppObserverContextHandle,
     focused_element_id: Option<ElementId>,
     /// For Tier 2: track if focused element should be auto-watched
     focused_is_watchable: bool,
@@ -153,6 +267,43 @@ unsafe impl Sync for AppState {}
 static APP_OBSERVERS: Lazy<Mutex<StdHashMap<u32, AppState>>> =
     Lazy::new(|| Mutex::new(StdHashMap::new()));
 
+/// Clean up app observers for PIDs that are no longer running.
+/// Called periodically from the polling loop.
+pub fn cleanup_dead_observers(active_pids: &std::collections::HashSet<u32>) -> usize {
+    let mut observers = APP_OBSERVERS.lock().unwrap();
+    let dead_pids: Vec<u32> = observers
+        .keys()
+        .filter(|pid| !active_pids.contains(pid))
+        .copied()
+        .collect();
+
+    let count = dead_pids.len();
+    for pid in dead_pids {
+        if let Some(state) = observers.remove(&pid) {
+            // Remove observer from run loop
+            unsafe {
+                let run_loop_source_ref = AXObserverGetRunLoopSource(state.observer);
+                if !run_loop_source_ref.is_null() {
+                    let run_loop_source =
+                        CFRunLoopSource::wrap_under_get_rule(run_loop_source_ref as *mut _);
+                    let main_run_loop = CFRunLoop::get_main();
+                    main_run_loop.remove_source(&run_loop_source, kCFRunLoopDefaultMode);
+                }
+            }
+
+            // Unregister from context registry.
+            // If a callback is in-flight, it will safely fail the lookup and return early.
+            unregister_app_context(state.context_handle);
+        }
+    }
+    count
+}
+
+/// Get the number of active app observers (for diagnostics).
+pub fn app_observer_count() -> usize {
+    APP_OBSERVERS.lock().unwrap().len()
+}
+
 /// Ensure app-level observer is set up for a PID (Tier 1).
 /// Called when first element from an app is registered.
 pub fn ensure_app_observer(pid: u32) {
@@ -162,11 +313,12 @@ pub fn ensure_app_observer(pid: u32) {
     }
 
     match create_app_observer(pid) {
-        Ok(observer) => {
+        Ok((observer, context_handle)) => {
             observers.insert(
                 pid,
                 AppState {
                     observer,
+                    context_handle,
                     focused_element_id: None,
                     focused_is_watchable: false,
                 },
@@ -181,8 +333,9 @@ pub fn ensure_app_observer(pid: u32) {
     }
 }
 
-/// Create an app-level observer for Tier 1 notifications
-fn create_app_observer(pid: u32) -> AxioResult<AXObserverRef> {
+/// Create an app-level observer for Tier 1 notifications.
+/// Returns (observer, context_handle) for storage in AppState.
+fn create_app_observer(pid: u32) -> AxioResult<(AXObserverRef, *mut AppObserverContextHandle)> {
     use accessibility_sys::AXObserverAddNotification;
 
     let mut observer_ref: AXObserverRef = std::ptr::null_mut();
@@ -211,9 +364,8 @@ fn create_app_observer(pid: u32) -> AxioResult<AXObserverRef> {
     // Subscribe to app-level notifications on the application element
     let app_element = AXUIElement::application(pid as i32);
 
-    // Create context for this app (leaked intentionally - lives for app lifetime)
-    let context = Box::new(AppObserverContext { pid });
-    let context_ptr = Box::into_raw(context) as *mut std::ffi::c_void;
+    // Register in context registry - returns a handle pointer
+    let context_handle = register_app_context(pid);
 
     // Subscribe to focus changes
     let focus_notif = CFString::new("AXFocusedUIElementChanged");
@@ -222,7 +374,7 @@ fn create_app_observer(pid: u32) -> AxioResult<AXObserverRef> {
             observer_ref,
             app_element.as_concrete_TypeRef(),
             focus_notif.as_concrete_TypeRef() as _,
-            context_ptr,
+            context_handle as *mut std::ffi::c_void,
         );
     }
 
@@ -233,11 +385,11 @@ fn create_app_observer(pid: u32) -> AxioResult<AXObserverRef> {
             observer_ref,
             app_element.as_concrete_TypeRef(),
             selection_notif.as_concrete_TypeRef() as _,
-            context_ptr,
+            context_handle as *mut std::ffi::c_void,
         );
     }
 
-    Ok(observer_ref)
+    Ok((observer_ref, context_handle))
 }
 
 /// Callback for app-level notifications (Tier 1)
@@ -251,16 +403,21 @@ unsafe extern "C" fn app_observer_callback(
         return;
     }
 
-    let context = &*(refcon as *const AppObserverContext);
+    // Look up PID from the registry.
+    // If not found, the app was already cleaned up - just return.
+    let Some(pid) = lookup_app_context(refcon as *const AppObserverContextHandle) else {
+        return;
+    };
+
     let notif_cfstring = CFString::wrap_under_get_rule(notification);
     let notification_name = notif_cfstring.to_string();
 
     match notification_name.as_str() {
         "AXFocusedUIElementChanged" => {
-            handle_app_focus_changed(context.pid, element);
+            handle_app_focus_changed(pid, element);
         }
         "AXSelectedTextChanged" => {
-            handle_app_selection_changed(context.pid, element);
+            handle_app_selection_changed(pid, element);
         }
         _ => {}
     }
@@ -542,20 +699,24 @@ unsafe extern "C" fn observer_callback(
     notification: core_foundation::string::CFStringRef,
     refcon: *mut std::ffi::c_void,
 ) {
-    // Catch any panics to prevent crashes - Electron apps can send notifications
-    // for elements that are no longer valid maybe???
+    // Catch any panics to prevent crashes
     let result = std::panic::catch_unwind(|| {
-        assert!(
-            !refcon.is_null(),
-            "AXObserver callback received null refcon"
-        );
+        if refcon.is_null() {
+            return;
+        }
 
-        let context = &*(refcon as *const ObserverContext);
+        // Look up the element ID from the registry.
+        // If not found, the element was already cleaned up - just return.
+        let Some(element_id) = lookup_observer_context(refcon as *const ObserverContextHandle)
+        else {
+            return;
+        };
+
         let notif_cfstring = CFString::wrap_under_get_rule(notification);
         let notification_name = notif_cfstring.to_string();
         let changed_element = AXUIElement::wrap_under_get_rule(_element);
 
-        handle_notification(&context.element_id, &notification_name, &changed_element);
+        handle_notification(&element_id, &notification_name, &changed_element);
     });
 
     if result.is_err() {

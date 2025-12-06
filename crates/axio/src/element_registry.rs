@@ -1,6 +1,6 @@
 //! Element registry - stores AXElement with macOS handles. Windows own elements.
 
-use crate::platform::macos::{AXNotification, ObserverContext};
+use crate::platform::macos::AXNotification;
 use crate::types::{AXElement, AxioError, AxioResult, ElementId, WindowId};
 use accessibility::AXUIElement;
 use accessibility_sys::AXObserverRef;
@@ -21,7 +21,10 @@ fn ax_elements_equal(elem1: &AXUIElement, elem2: &AXUIElement) -> bool {
 
 /// Watch state for an element (notification subscriptions).
 struct WatchState {
-    observer_context: *mut c_void,
+    /// Handle pointer passed to macOS callbacks.
+    /// Points to ObserverContextHandle which only contains an ID.
+    /// The actual element data is in OBSERVER_CONTEXT_REGISTRY.
+    context_handle: *mut c_void,
     notifications: Vec<AXNotification>,
 }
 
@@ -391,10 +394,9 @@ fn watch_element(stored: &mut StoredElement, observer: AXObserverRef) -> AxioRes
         return Ok(());
     }
 
-    let context = Box::new(ObserverContext {
-        element_id: stored.element.id.clone(),
-    });
-    let context_ptr = Box::into_raw(context) as *mut c_void;
+    // Register in the context registry - returns a handle pointer
+    let context_handle =
+        crate::platform::macos::register_observer_context(stored.element.id.clone());
     let element_ref = stored.ax_element.as_concrete_TypeRef() as AXUIElementRef;
 
     let mut registered = Vec::new();
@@ -405,7 +407,7 @@ fn watch_element(stored: &mut StoredElement, observer: AXObserverRef) -> AxioRes
                 observer,
                 element_ref,
                 notif_cfstring.as_concrete_TypeRef() as _,
-                context_ptr,
+                context_handle as *mut c_void,
             )
         };
         if result == 0 {
@@ -414,9 +416,8 @@ fn watch_element(stored: &mut StoredElement, observer: AXObserverRef) -> AxioRes
     }
 
     if registered.is_empty() {
-        unsafe {
-            let _ = Box::from_raw(context_ptr);
-        }
+        // Unregister from context registry
+        crate::platform::macos::unregister_observer_context(context_handle);
         return Err(AxioError::ObserverError(format!(
             "Failed to register notifications for element {} (role: {})",
             stored.element.id, stored.platform_role
@@ -424,7 +425,7 @@ fn watch_element(stored: &mut StoredElement, observer: AXObserverRef) -> AxioRes
     }
 
     stored.watch_state = Some(WatchState {
-        observer_context: context_ptr,
+        context_handle: context_handle as *mut c_void,
         notifications: registered,
     });
 
@@ -453,7 +454,9 @@ fn unwatch_element(stored: &mut StoredElement, observer: AXObserverRef) {
         }
     }
 
-    unsafe {
-        let _ = Box::from_raw(watch_state.observer_context);
-    }
+    // Unregister from context registry.
+    // If a callback is in-flight, it will safely fail the lookup and return early.
+    crate::platform::macos::unregister_observer_context(
+        watch_state.context_handle as *mut crate::platform::macos::ObserverContextHandle,
+    );
 }
