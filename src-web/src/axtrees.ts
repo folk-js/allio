@@ -25,11 +25,16 @@ class AXTreeOverlay {
   private async init() {
     const render = () => this.render();
 
+    // Fetch root elements when active window changes
+    this.axio.on("active:changed", async (data) => {
+      await this.fetchWindowRoot(data.window_id);
+      render();
+    });
+
     // Re-render on window/element changes
     // Note: Tier 2 auto-watches text elements on focus, so element:changed fires automatically
     (
       [
-        "active:changed",
         "focus:changed",
         "focus:element", // Tier 1: element focus changes
         "selection:changed", // Tier 1: text selection changes
@@ -46,6 +51,25 @@ class AXTreeOverlay {
     // (tree element is marked with axio-opaque attribute)
 
     await this.axio.connect();
+
+    // Fetch root for initial active window (if any)
+    if (this.axio.activeWindow) {
+      await this.fetchWindowRoot(this.axio.activeWindow);
+      render();
+    }
+  }
+
+  /** Fetch root element and its immediate children for a window */
+  private async fetchWindowRoot(windowId: string): Promise<void> {
+    try {
+      const root = await this.axio.windowRoot(windowId);
+      // Also fetch immediate children so tree is usable
+      if (root) {
+        await this.axio.children(root.id);
+      }
+    } catch (err) {
+      console.error("Failed to fetch window root:", err);
+    }
   }
 
   private render() {

@@ -23,8 +23,6 @@ use tauri_nspanel::{tauri_panel, ManagerExt as _, PanelLevel, StyleMask, Webview
 use axio::windows::{get_main_screen_dimensions, PollingConfig, WindowEnumOptions};
 use axio_ws::WebSocketState;
 
-mod mouse;
-
 // ============================================================================
 // macOS Panel Configuration
 // ============================================================================
@@ -528,9 +526,7 @@ fn main() {
         }
       }
 
-      // Start services
-      mouse::start_mouse_tracking(ws_state.clone());
-
+      // Start polling (handles windows + mouse position in one loop)
       axio::start_polling(PollingConfig {
         enum_options: WindowEnumOptions {
           exclude_pid: Some(std::process::id()),

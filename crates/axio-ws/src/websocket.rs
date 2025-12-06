@@ -81,39 +81,47 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
 
   println!("[client] connected");
 
-  // Send initial state as sync:init
-  let active = axio::get_active_window();
-  let mut windows = axio::get_current_windows();
+  // Send initial state as sync:init (run on blocking thread pool)
+  let init_result = tokio::task::spawn_blocking(|| {
+    let active = axio::get_active_window();
+    let mut windows = axio::get_current_windows();
 
-  // Compute depth_order (window IDs sorted by z_index, front to back)
-  windows.sort_by_key(|w| w.z_index);
-  let depth_order: Vec<axio::WindowId> = windows
-    .iter()
-    .map(|w| axio::WindowId::new(w.id.clone()))
-    .collect();
+    // Compute depth_order (window IDs sorted by z_index, front to back)
+    windows.sort_by_key(|w| w.z_index);
+    let depth_order: Vec<axio::WindowId> = windows
+      .iter()
+      .map(|w| axio::WindowId::new(w.id.clone()))
+      .collect();
 
-  // Query focused element and selection for the active window's app
-  let (focused_element, selection) = if let Some(ref window_id) = active {
-    // Find the window to get its PID
-    if let Some(window) = windows.iter().find(|w| &w.id == window_id) {
-      axio::get_current_focus(window.process_id)
+    // Query focused element and selection for the active window's app
+    let (focused_element, selection) = if let Some(ref window_id) = active {
+      if let Some(window) = windows.iter().find(|w| &w.id == window_id) {
+        axio::get_current_focus(window.process_id)
+      } else {
+        (None, None)
+      }
     } else {
       (None, None)
+    };
+
+    SyncInit {
+      windows,
+      elements: axio::element_registry::ElementRegistry::get_all(),
+      active_window: active.clone(),
+      focused_window: active,
+      focused_element,
+      selection,
+      depth_order,
+      accessibility_enabled: axio::platform::check_accessibility_permissions(),
     }
-  } else {
-    (None, None)
+  })
+  .await;
+
+  let init = match init_result {
+    Ok(init) => init,
+    Err(_) => return,
   };
 
-  let init = SyncInit {
-    windows,
-    elements: axio::element_registry::ElementRegistry::get_all(),
-    active_window: active.clone(),
-    focused_window: active, // Assume focused = active on connect
-    focused_element,
-    selection,
-    depth_order,
-    accessibility_enabled: axio::platform::check_accessibility_permissions(),
-  };
   let event = ServerEvent::SyncInit(init);
   if let Ok(msg) = serde_json::to_string(&event) {
     if socket.send(Message::Text(msg)).await.is_err() {
@@ -126,7 +134,7 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
         msg = socket.recv() => {
             match msg {
                 Some(Ok(Message::Text(text))) => {
-                    let response = handle_request(&text, &ws_state);
+                    let response = handle_request_async(&text, &ws_state).await;
                     // Drain any pending events before sending RPC response
                     // This ensures events triggered by RPC are sent first
                     while let Ok(event_json) = rx.try_recv() {
@@ -165,7 +173,7 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
   }
 }
 
-fn handle_request(request: &str, ws_state: &WebSocketState) -> String {
+async fn handle_request_async(request: &str, ws_state: &WebSocketState) -> String {
   let parsed: Result<Value, _> = serde_json::from_str(request);
 
   let req = match parsed {
@@ -174,20 +182,26 @@ fn handle_request(request: &str, ws_state: &WebSocketState) -> String {
   };
 
   let id = req.get("id").cloned().unwrap_or(Value::Null);
-  let method = req["method"].as_str().unwrap_or("");
-  let args = req.get("args").unwrap_or(&Value::Null);
+  let method = req["method"].as_str().unwrap_or("").to_string();
+  let args = req.get("args").cloned().unwrap_or(Value::Null);
 
-  // Try custom handler first
+  // Try custom handler first (runs on current thread - fast, may need main thread access)
   if let Some(ref handler) = ws_state.custom_handler {
-    if let Some(result) = handler(method, args) {
+    if let Some(result) = handler(&method, &args) {
       let mut response = result;
       response["id"] = id;
       return response.to_string();
     }
   }
 
-  // Fall through to axio RPC
-  let mut response = crate::rpc::dispatch_json(method, args);
+  // Axio RPC - run on blocking thread pool (AX API calls are slow IPC)
+  let dispatch_result =
+    tokio::task::spawn_blocking(move || crate::rpc::dispatch_json(&method, &args)).await;
+
+  let mut response = match dispatch_result {
+    Ok(r) => r,
+    Err(_) => json!({ "error": "RPC task panicked" }),
+  };
   response["id"] = id;
   response.to_string()
 }

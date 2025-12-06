@@ -3,7 +3,7 @@
 //! Request: `{ "id": "...", "method": "element_at", "args": { "x": 100, "y": 200 } }`
 //! Response: `{ "id": "...", "result": {...} }` or `{ "id": "...", "error": "..." }`
 
-use axio::{AXElement, ElementId};
+use axio::{AXElement, ElementId, WindowId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use ts_rs::TS;
@@ -17,6 +17,8 @@ pub enum RpcRequest {
   ElementAt { x: f64, y: f64 },
   /// Get cached element by ID
   Get { element_id: ElementId },
+  /// Get root element for a window
+  WindowRoot { window_id: WindowId },
   /// Discover children of element
   Children {
     element_id: ElementId,
@@ -73,6 +75,11 @@ pub fn dispatch(request: RpcRequest) -> Result<RpcResponse, String> {
 
     RpcRequest::Get { element_id } => {
       let element = axio::get(&element_id).map_err(|e| e.to_string())?;
+      Ok(RpcResponse::Element(element))
+    }
+
+    RpcRequest::WindowRoot { window_id } => {
+      let element = axio::window_root(&window_id).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Element(element))
     }
 

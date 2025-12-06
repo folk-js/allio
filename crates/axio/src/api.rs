@@ -1,7 +1,7 @@
 //! Public API for AXIO operations.
 
 use crate::element_registry::ElementRegistry;
-use crate::types::{AXElement, AxioResult, ElementId, Selection};
+use crate::types::{AXElement, AxioResult, ElementId, Selection, WindowId};
 
 /// Discover element at screen coordinates.
 pub fn element_at(x: f64, y: f64) -> AxioResult<AXElement> {
@@ -26,6 +26,12 @@ pub fn children(element_id: &ElementId, max_children: usize) -> AxioResult<Vec<A
 /// Refresh element from macOS (re-fetch attributes).
 pub fn refresh(element_id: &ElementId) -> AxioResult<AXElement> {
   crate::platform::macos::refresh_element(element_id)
+}
+
+/// Get the root element for a window.
+/// This is the accessibility element representing the window itself.
+pub fn window_root(window_id: &WindowId) -> AxioResult<AXElement> {
+  crate::platform::macos::get_window_root(window_id)
 }
 
 /// Write text to an element.

@@ -24,6 +24,7 @@ type RpcArgs<M extends RpcMethod> = Extract<RpcRequest, { method: M }>["args"];
 type RpcReturns = {
   element_at: AXElement;
   get: AXElement;
+  window_root: AXElement;
   children: AXElement[];
   refresh: AXElement;
   write: boolean;
@@ -181,6 +182,9 @@ export class AXIO extends EventEmitter<AxioEvents> {
 
   /** Get element by ID (from registry, fetches if needed) */
   getElement = (element_id: ElementId) => this.call("get", { element_id });
+
+  /** Get root element for a window (fetches from OS if not cached) */
+  windowRoot = (window_id: WindowId) => this.call("window_root", { window_id });
 
   /** Get children of element (fetches from OS) */
   children = (element_id: ElementId, max_children = 1000) =>

@@ -108,3 +108,8 @@ pub(crate) fn emit_selection_changed(
     range: range.cloned(),
   });
 }
+
+// Mouse position
+pub(crate) fn emit_mouse_position(x: f64, y: f64) {
+  sink().emit(ServerEvent::MousePosition { x, y });
+}

@@ -1,4 +1,5 @@
 //! Window enumeration and polling using x-win.
+//! Also handles mouse position tracking in the same polling loop.
 
 use crate::types::AXWindow;
 use crate::window_manager::WindowManager;
@@ -13,6 +14,10 @@ use std::time::{Duration, Instant};
 use core_graphics::display::{
   CGDirectDisplayID, CGDisplayPixelsHigh, CGDisplayPixelsWide, CGMainDisplayID,
 };
+#[cfg(target_os = "macos")]
+use core_graphics::event::CGEvent;
+#[cfg(target_os = "macos")]
+use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
 pub const DEFAULT_POLLING_INTERVAL_MS: u64 = 8;
 
@@ -120,6 +125,21 @@ pub fn get_main_screen_dimensions() -> (f64, f64) {
 #[cfg(not(target_os = "macos"))]
 pub fn get_main_screen_dimensions() -> (f64, f64) {
   (1920.0, 1080.0)
+}
+
+// === Mouse Position ===
+
+#[cfg(target_os = "macos")]
+pub fn get_mouse_position() -> Option<(f64, f64)> {
+  let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState).ok()?;
+  let event = CGEvent::new(source).ok()?;
+  let location = event.location();
+  Some((location.x, location.y))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn get_mouse_position() -> Option<(f64, f64)> {
+  None
 }
 
 fn window_from_x_win(window: &x_win::WindowInfo) -> AXWindow {
@@ -231,16 +251,30 @@ impl Default for PollingConfig {
 const CLEANUP_INTERVAL: u64 = 1250;
 
 /// Runs in background thread, emits events via EventSink.
+/// Handles both window enumeration and mouse position tracking.
 pub fn start_polling(config: PollingConfig) {
   thread::spawn(move || {
     let mut last_windows: HashMap<String, AXWindow> = HashMap::new();
     let mut last_active_id: Option<String> = None;
     let mut last_focused_id: Option<String> = None;
+    let mut last_mouse_pos: Option<(f64, f64)> = None;
     let mut poll_count: u64 = 0;
 
     loop {
       let loop_start = Instant::now();
       poll_count += 1;
+
+      // Mouse position polling (very cheap, ~0.1ms)
+      if let Some((x, y)) = get_mouse_position() {
+        let changed = match last_mouse_pos {
+          Some((lx, ly)) => (x - lx).abs() >= 1.0 || (y - ly).abs() >= 1.0,
+          None => true,
+        };
+        if changed {
+          last_mouse_pos = Some((x, y));
+          crate::events::emit_mouse_position(x, y);
+        }
+      }
 
       if let Some(raw_windows) = get_windows(&config.enum_options) {
         // Update WindowManager - returns windows with preserved children/title
@@ -313,23 +347,8 @@ pub fn start_polling(config: PollingConfig) {
             let window_id = WindowId::new(focused_id.clone());
             crate::events::emit_active_changed(&window_id);
             last_active_id = Some(focused_id.clone());
-
-            // Discover root elements when active window changes
-            if let Some(focused) = focused_window {
-              if let Ok(root) = crate::platform::macos::get_window_root(&window_id) {
-                // Hydrate window info from accessibility
-                if let Some(title) = &root.label {
-                  if !title.is_empty() {
-                    WindowManager::set_ax_title(&window_id, title.clone());
-                    focused.title = title.clone();
-                  }
-                }
-
-                // Discover root's children (emits element:added events)
-                // Elements track their window via window_id, not vice versa
-                let _ = crate::platform::macos::discover_children(&root.id, 100);
-              }
-            }
+            // Note: Element discovery is now client-initiated via RPC.
+            // This keeps the polling loop pure and fast.
           }
         }
         // Note: when focus goes to desktop (current_focused_id is None),
