@@ -2,18 +2,18 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{
-    path::PathBuf,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Mutex,
-    },
-    thread,
+  path::PathBuf,
+  sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+  },
+  thread,
 };
 use tauri::{
-    image::Image,
-    menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
-    tray::TrayIconBuilder,
-    AppHandle, Manager,
+  image::Image,
+  menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
+  tray::TrayIconBuilder,
+  AppHandle, Manager,
 };
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
@@ -45,8 +45,8 @@ tauri_panel! {
 
 #[derive(Default)]
 struct AppState {
-    clickthrough_enabled: AtomicBool,
-    current_overlay: Mutex<String>,
+  clickthrough_enabled: AtomicBool,
+  current_overlay: Mutex<String>,
 }
 
 // ============================================================================
@@ -54,22 +54,23 @@ struct AppState {
 // ============================================================================
 
 fn is_dev_mode() -> bool {
-    let exe_path = std::env::current_exe().unwrap_or_default();
-    let exe_dir = exe_path.parent().unwrap_or(std::path::Path::new(""));
-    exe_dir.ends_with("debug") || exe_dir.ends_with("release")
+  let exe_path = std::env::current_exe().unwrap_or_default();
+  let exe_dir = exe_path.parent().unwrap_or(std::path::Path::new(""));
+  exe_dir.ends_with("debug") || exe_dir.ends_with("release")
 }
 
 fn get_main_window(app: &AppHandle) -> Result<tauri::WebviewWindow, &'static str> {
-    app.get_webview_window("main")
-        .ok_or("Main window not found")
+  app
+    .get_webview_window("main")
+    .ok_or("Main window not found")
 }
 
 fn get_overlay_url(filename: &str) -> String {
-    if is_dev_mode() {
-        format!("http://localhost:1420/src-web/overlays/{}", filename)
-    } else {
-        format!("tauri://localhost/{}", filename)
-    }
+  if is_dev_mode() {
+    format!("http://localhost:1420/src-web/overlays/{}", filename)
+  } else {
+    format!("tauri://localhost/{}", filename)
+  }
 }
 
 // ============================================================================
@@ -77,45 +78,45 @@ fn get_overlay_url(filename: &str) -> String {
 // ============================================================================
 
 const DEFAULT_OVERLAYS: &[&str] = &[
-    "axtrees.html",
-    "identifiers.html",
-    "ports.html",
-    "sand.html",
-    "windows-debug.html",
+  "axtrees.html",
+  "identifiers.html",
+  "ports.html",
+  "sand.html",
+  "windows-debug.html",
 ];
 
 fn get_overlay_files() -> Vec<String> {
-    if is_dev_mode() {
-        return DEFAULT_OVERLAYS.iter().map(|s| s.to_string()).collect();
-    }
+  if is_dev_mode() {
+    return DEFAULT_OVERLAYS.iter().map(|s| s.to_string()).collect();
+  }
 
-    let mut overlays: Vec<String> = get_dist_directory()
-        .and_then(|dir| std::fs::read_dir(dir).ok())
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter_map(|e| e.file_name().into_string().ok())
-                .filter(|name| name.ends_with(".html"))
-                .collect()
-        })
-        .unwrap_or_default();
+  let mut overlays: Vec<String> = get_dist_directory()
+    .and_then(|dir| std::fs::read_dir(dir).ok())
+    .map(|entries| {
+      entries
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|name| name.ends_with(".html"))
+        .collect()
+    })
+    .unwrap_or_default();
 
-    if overlays.is_empty() {
-        overlays = DEFAULT_OVERLAYS.iter().map(|s| s.to_string()).collect();
-    }
-    overlays.sort();
-    overlays
+  if overlays.is_empty() {
+    overlays = DEFAULT_OVERLAYS.iter().map(|s| s.to_string()).collect();
+  }
+  overlays.sort();
+  overlays
 }
 
 fn get_dist_directory() -> Option<PathBuf> {
-    let exe_path = std::env::current_exe().ok()?;
-    let exe_dir = exe_path.parent()?;
+  let exe_path = std::env::current_exe().ok()?;
+  let exe_dir = exe_path.parent()?;
 
-    #[cfg(target_os = "macos")]
-    return exe_dir.parent().map(|p| p.join("Resources"));
+  #[cfg(target_os = "macos")]
+  return exe_dir.parent().map(|p| p.join("Resources"));
 
-    #[cfg(not(target_os = "macos"))]
-    return Some(exe_dir.to_path_buf());
+  #[cfg(not(target_os = "macos"))]
+  return Some(exe_dir.to_path_buf());
 }
 
 // ============================================================================
@@ -123,35 +124,35 @@ fn get_dist_directory() -> Option<PathBuf> {
 // ============================================================================
 
 fn get_icon_path(passthrough: bool) -> PathBuf {
-    let icon_name = if passthrough {
-        "32x32-passthrough.png"
-    } else {
-        "32x32.png"
-    };
+  let icon_name = if passthrough {
+    "32x32-passthrough.png"
+  } else {
+    "32x32.png"
+  };
 
-    if is_dev_mode() {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("icons")
-            .join(icon_name)
-    } else {
-        let exe_path = std::env::current_exe().unwrap_or_default();
-        let exe_dir = exe_path.parent().unwrap_or(std::path::Path::new(""));
+  if is_dev_mode() {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+      .join("icons")
+      .join(icon_name)
+  } else {
+    let exe_path = std::env::current_exe().unwrap_or_default();
+    let exe_dir = exe_path.parent().unwrap_or(std::path::Path::new(""));
 
-        #[cfg(target_os = "macos")]
-        let icons_dir = exe_dir
-            .parent()
-            .map(|p| p.join("Resources/icons"))
-            .unwrap_or_default();
+    #[cfg(target_os = "macos")]
+    let icons_dir = exe_dir
+      .parent()
+      .map(|p| p.join("Resources/icons"))
+      .unwrap_or_default();
 
-        #[cfg(not(target_os = "macos"))]
-        let icons_dir = exe_dir.join("icons");
+    #[cfg(not(target_os = "macos"))]
+    let icons_dir = exe_dir.join("icons");
 
-        icons_dir.join(icon_name)
-    }
+    icons_dir.join(icon_name)
+  }
 }
 
 fn get_tray_icon(passthrough: bool) -> Option<Image<'static>> {
-    Image::from_path(get_icon_path(passthrough)).ok()
+  Image::from_path(get_icon_path(passthrough)).ok()
 }
 
 // ============================================================================
@@ -159,120 +160,120 @@ fn get_tray_icon(passthrough: bool) -> Option<Image<'static>> {
 // ============================================================================
 
 fn build_tray_menu(
-    app: &AppHandle,
-    overlay_files: &[String],
-    current_overlay: &str,
-    passthrough_enabled: bool,
+  app: &AppHandle,
+  overlay_files: &[String],
+  current_overlay: &str,
+  passthrough_enabled: bool,
 ) -> Result<tauri::menu::Menu<tauri::Wry>, Box<dyn std::error::Error>> {
-    let mut menu = MenuBuilder::new(app);
+  let mut menu = MenuBuilder::new(app);
 
-    // Overlay items
-    if overlay_files.is_empty() {
-        menu = menu.item(
-            &MenuItemBuilder::new("No overlays found")
-                .id("no_overlays")
-                .enabled(false)
-                .build(app)?,
-        );
-    } else {
-        for filename in overlay_files {
-            let display_name = filename.trim_end_matches(".html");
-            let item = CheckMenuItemBuilder::new(display_name)
-                .id(filename)
-                .checked(current_overlay == filename)
-                .build(app)?;
-            menu = menu.item(&item);
-        }
+  // Overlay items
+  if overlay_files.is_empty() {
+    menu = menu.item(
+      &MenuItemBuilder::new("No overlays found")
+        .id("no_overlays")
+        .enabled(false)
+        .build(app)?,
+    );
+  } else {
+    for filename in overlay_files {
+      let display_name = filename.trim_end_matches(".html");
+      let item = CheckMenuItemBuilder::new(display_name)
+        .id(filename)
+        .checked(current_overlay == filename)
+        .build(app)?;
+      menu = menu.item(&item);
     }
+  }
 
-    menu = menu.item(&PredefinedMenuItem::separator(app)?);
+  menu = menu.item(&PredefinedMenuItem::separator(app)?);
 
-    // Load options
-    menu = menu.item(
-        &MenuItemBuilder::new("Load URL...")
-            .id("load_url")
-            .build(app)?,
-    );
-    menu = menu.item(
-        &MenuItemBuilder::new("Load File...")
-            .id("load_file")
-            .build(app)?,
-    );
+  // Load options
+  menu = menu.item(
+    &MenuItemBuilder::new("Load URL...")
+      .id("load_url")
+      .build(app)?,
+  );
+  menu = menu.item(
+    &MenuItemBuilder::new("Load File...")
+      .id("load_file")
+      .build(app)?,
+  );
 
-    menu = menu.item(&PredefinedMenuItem::separator(app)?);
+  menu = menu.item(&PredefinedMenuItem::separator(app)?);
 
-    // Passthrough toggle
-    let passthrough_text = if passthrough_enabled {
-        "Disable Passthrough"
-    } else {
-        "Enable Passthrough"
-    };
-    menu = menu.item(
-        &MenuItemBuilder::new(passthrough_text)
-            .id("toggle_passthrough")
-            .build(app)?,
-    );
+  // Passthrough toggle
+  let passthrough_text = if passthrough_enabled {
+    "Disable Passthrough"
+  } else {
+    "Enable Passthrough"
+  };
+  menu = menu.item(
+    &MenuItemBuilder::new(passthrough_text)
+      .id("toggle_passthrough")
+      .build(app)?,
+  );
 
-    menu = menu.item(&PredefinedMenuItem::separator(app)?);
-    menu = menu.item(&MenuItemBuilder::new("Quit").id("quit").build(app)?);
+  menu = menu.item(&PredefinedMenuItem::separator(app)?);
+  menu = menu.item(&MenuItemBuilder::new("Quit").id("quit").build(app)?);
 
-    menu.build().map_err(Into::into)
+  menu.build().map_err(Into::into)
 }
 
 fn build_or_update_tray(
-    app: &AppHandle,
-    overlay_files: &[String],
+  app: &AppHandle,
+  overlay_files: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let state = app.state::<AppState>();
-    let current_overlay = state.current_overlay.lock().unwrap().clone();
-    let passthrough_enabled = state.clickthrough_enabled.load(Ordering::Relaxed);
+  let state = app.state::<AppState>();
+  let current_overlay = state.current_overlay.lock().unwrap().clone();
+  let passthrough_enabled = state.clickthrough_enabled.load(Ordering::Relaxed);
 
-    let menu = build_tray_menu(app, overlay_files, &current_overlay, passthrough_enabled)?;
+  let menu = build_tray_menu(app, overlay_files, &current_overlay, passthrough_enabled)?;
 
-    if let Some(tray) = app.tray_by_id("main-tray") {
-        // Update existing tray menu and icon
-        tray.set_menu(Some(menu))?;
-        if let Some(icon) = get_tray_icon(passthrough_enabled) {
-            let _ = tray.set_icon(Some(icon));
-        }
-    } else {
-        // Create new tray
-        let icon = get_tray_icon(passthrough_enabled)
-            .unwrap_or_else(|| app.default_window_icon().unwrap().clone());
-
-        TrayIconBuilder::with_id("main-tray")
-            .menu(&menu)
-            .icon(icon)
-            .on_menu_event(handle_tray_event)
-            .build(app)?;
+  if let Some(tray) = app.tray_by_id("main-tray") {
+    // Update existing tray menu and icon
+    tray.set_menu(Some(menu))?;
+    if let Some(icon) = get_tray_icon(passthrough_enabled) {
+      let _ = tray.set_icon(Some(icon));
     }
+  } else {
+    // Create new tray
+    let icon = get_tray_icon(passthrough_enabled)
+      .unwrap_or_else(|| app.default_window_icon().unwrap().clone());
 
-    Ok(())
+    TrayIconBuilder::with_id("main-tray")
+      .menu(&menu)
+      .icon(icon)
+      .on_menu_event(handle_tray_event)
+      .build(app)?;
+  }
+
+  Ok(())
 }
 
 fn handle_tray_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
-    let id = event.id().0.clone();
-    let handle = app.clone();
+  let id = event.id().0.clone();
+  let handle = app.clone();
 
-    // IMPORTANT: Defer execution to avoid use-after-free.
-    // The menu is rebuilt during these handlers, but muda is still
-    // accessing the old menu item strings. Deferring ensures the
-    // event handler completes before we replace the menu.
-    thread::spawn(move || {
-        let app = handle.clone();
-        let _ = handle.run_on_main_thread(move || match id.as_str() {
-            "toggle_passthrough" => {
-                let _ = toggle_passthrough(&app);
-            }
-            "load_url" => show_url_dialog(&app),
-            "load_file" => show_file_dialog(&app),
-            "quit" => app.exit(0),
-            "no_overlays" => {}
-            id => {
-                let _ = switch_overlay(&app, id);
-            }
-        });
+  // IMPORTANT: Defer execution to avoid use-after-free.
+  // The menu is rebuilt during these handlers, but muda is still
+  // accessing the old menu item strings. Deferring ensures the
+  // event handler completes before we replace the menu.
+  thread::spawn(move || {
+    let app = handle.clone();
+    let _ = handle.run_on_main_thread(move || match id.as_str() {
+      "toggle_passthrough" => {
+        let _ = toggle_passthrough(&app);
+      }
+      "load_url" => show_url_dialog(&app),
+      "load_file" => show_file_dialog(&app),
+      "quit" => app.exit(0),
+      "no_overlays" => {}
+      id => {
+        let _ = switch_overlay(&app, id);
+      }
     });
+  });
 }
 
 // ============================================================================
@@ -280,74 +281,76 @@ fn handle_tray_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
 // ============================================================================
 
 fn toggle_passthrough(app: &AppHandle) -> Result<bool, Box<dyn std::error::Error>> {
-    let state = app.state::<AppState>();
-    let window = get_main_window(app)?;
+  let state = app.state::<AppState>();
+  let window = get_main_window(app)?;
 
-    let was_enabled = state.clickthrough_enabled.load(Ordering::Relaxed);
-    let now_enabled = !was_enabled;
+  let was_enabled = state.clickthrough_enabled.load(Ordering::Relaxed);
+  let now_enabled = !was_enabled;
 
-    window.set_ignore_cursor_events(now_enabled)?;
-    state
-        .clickthrough_enabled
-        .store(now_enabled, Ordering::Relaxed);
+  window.set_ignore_cursor_events(now_enabled)?;
+  state
+    .clickthrough_enabled
+    .store(now_enabled, Ordering::Relaxed);
 
-    build_or_update_tray(app, &get_overlay_files())?;
-    Ok(now_enabled)
+  build_or_update_tray(app, &get_overlay_files())?;
+  Ok(now_enabled)
 }
 
 fn switch_overlay(app: &AppHandle, filename: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let state = app.state::<AppState>();
-    *state.current_overlay.lock().unwrap() = filename.to_string();
+  let state = app.state::<AppState>();
+  *state.current_overlay.lock().unwrap() = filename.to_string();
 
-    let window = get_main_window(app)?;
-    window.navigate(
-        get_overlay_url(filename)
-            .parse()
-            .expect("Invalid overlay URL"),
-    )?;
+  let window = get_main_window(app)?;
+  window.navigate(
+    get_overlay_url(filename)
+      .parse()
+      .expect("Invalid overlay URL"),
+  )?;
 
-    build_or_update_tray(app, &get_overlay_files())?;
-    Ok(())
+  build_or_update_tray(app, &get_overlay_files())?;
+  Ok(())
 }
 
 fn show_url_dialog(app: &AppHandle) {
-    // Disable passthrough so user can interact with the dialog
-    let state = app.state::<AppState>();
-    if state.clickthrough_enabled.load(Ordering::Relaxed) {
-        let _ = toggle_passthrough(app);
-    }
+  // Disable passthrough so user can interact with the dialog
+  let state = app.state::<AppState>();
+  if state.clickthrough_enabled.load(Ordering::Relaxed) {
+    let _ = toggle_passthrough(app);
+  }
 
-    if let Ok(window) = get_main_window(app) {
-        let url = get_overlay_url("url-input.html");
-        let _ = window.navigate(
-            url.parse()
-                .unwrap_or_else(|_| "about:blank".parse().unwrap()),
-        );
-    }
+  if let Ok(window) = get_main_window(app) {
+    let url = get_overlay_url("url-input.html");
+    let _ = window.navigate(
+      url
+        .parse()
+        .unwrap_or_else(|_| "about:blank".parse().unwrap()),
+    );
+  }
 }
 
 fn show_file_dialog(app: &AppHandle) {
-    use tauri_plugin_dialog::DialogExt;
+  use tauri_plugin_dialog::DialogExt;
 
-    let app_clone = app.clone();
-    app.dialog()
-        .file()
-        .add_filter("HTML Files", &["html", "htm"])
-        .add_filter("All Files", &["*"])
-        .pick_file(move |result| {
-            if let Some(path) = result.and_then(|p| p.as_path().map(|p| p.to_path_buf())) {
-                let _ = load_file(&app_clone, &path);
-            }
-        });
+  let app_clone = app.clone();
+  app
+    .dialog()
+    .file()
+    .add_filter("HTML Files", &["html", "htm"])
+    .add_filter("All Files", &["*"])
+    .pick_file(move |result| {
+      if let Some(path) = result.and_then(|p| p.as_path().map(|p| p.to_path_buf())) {
+        let _ = load_file(&app_clone, &path);
+      }
+    });
 }
 
 fn load_file(app: &AppHandle, path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
-    *app.state::<AppState>().current_overlay.lock().unwrap() = format!("file: {}", file_name);
+  let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+  *app.state::<AppState>().current_overlay.lock().unwrap() = format!("file: {}", file_name);
 
-    let url = format!("file://{}", path.display());
-    get_main_window(app)?.navigate(url.parse()?)?;
-    Ok(())
+  let url = format!("file://{}", path.display());
+  get_main_window(app)?.navigate(url.parse()?)?;
+  Ok(())
 }
 
 // ============================================================================
@@ -355,61 +358,61 @@ fn load_file(app: &AppHandle, path: &PathBuf) -> Result<(), Box<dyn std::error::
 // ============================================================================
 
 fn create_rpc_handler(app_handle: AppHandle) -> axio_ws::CustomRpcHandler {
-    let last_state = std::sync::Arc::new(AtomicBool::new(true));
+  let last_state = std::sync::Arc::new(AtomicBool::new(true));
 
-    std::sync::Arc::new(move |method, args| {
-        if method != "set_passthrough" && method != "set_clickthrough" {
-            return None;
-        }
+  std::sync::Arc::new(move |method, args| {
+    if method != "set_passthrough" && method != "set_clickthrough" {
+      return None;
+    }
 
-        let enabled = args["enabled"].as_bool().unwrap_or(false);
+    let enabled = args["enabled"].as_bool().unwrap_or(false);
 
-        // Skip if no change
-        if last_state.swap(enabled, Ordering::SeqCst) == enabled {
-            return Some(serde_json::json!({ "result": { "enabled": enabled, "changed": false } }));
-        }
+    // Skip if no change
+    if last_state.swap(enabled, Ordering::SeqCst) == enabled {
+      return Some(serde_json::json!({ "result": { "enabled": enabled, "changed": false } }));
+    }
 
-        // Update AppState so tray reflects the change
-        app_handle
-            .state::<AppState>()
-            .clickthrough_enabled
-            .store(enabled, Ordering::Relaxed);
+    // Update AppState so tray reflects the change
+    app_handle
+      .state::<AppState>()
+      .clickthrough_enabled
+      .store(enabled, Ordering::Relaxed);
 
-        #[cfg(target_os = "macos")]
-        {
-            let handle = app_handle.clone();
-            thread::spawn(move || {
-                let h = handle.clone();
-                let _ = handle.run_on_main_thread(move || {
-                    if let Ok(panel) = h.get_webview_panel("main") {
-                        panel.set_ignores_mouse_events(enabled);
-                        if enabled {
-                            panel.resign_key_window();
-                        } else {
-                            panel.make_key_window();
-                        }
-                    }
-                    let _ = build_or_update_tray(&h, &get_overlay_files());
-                });
-            });
-            return Some(serde_json::json!({ "result": { "enabled": enabled, "changed": true } }));
-        }
+    #[cfg(target_os = "macos")]
+    {
+      let handle = app_handle.clone();
+      thread::spawn(move || {
+        let h = handle.clone();
+        let _ = handle.run_on_main_thread(move || {
+          if let Ok(panel) = h.get_webview_panel("main") {
+            panel.set_ignores_mouse_events(enabled);
+            if enabled {
+              panel.resign_key_window();
+            } else {
+              panel.make_key_window();
+            }
+          }
+          let _ = build_or_update_tray(&h, &get_overlay_files());
+        });
+      });
+      return Some(serde_json::json!({ "result": { "enabled": enabled, "changed": true } }));
+    }
 
-        #[cfg(not(target_os = "macos"))]
-        {
-            let result = app_handle
-                .get_webview_window("main")
-                .ok_or("Window not found")
-                .and_then(|w| w.set_ignore_cursor_events(enabled).map_err(|_| "Failed"));
+    #[cfg(not(target_os = "macos"))]
+    {
+      let result = app_handle
+        .get_webview_window("main")
+        .ok_or("Window not found")
+        .and_then(|w| w.set_ignore_cursor_events(enabled).map_err(|_| "Failed"));
 
-            let _ = build_or_update_tray(&app_handle, &get_overlay_files());
+      let _ = build_or_update_tray(&app_handle, &get_overlay_files());
 
-            Some(match result {
-                Ok(_) => serde_json::json!({ "result": { "enabled": enabled } }),
-                Err(e) => serde_json::json!({ "error": e }),
-            })
-        }
-    })
+      Some(match result {
+        Ok(_) => serde_json::json!({ "result": { "enabled": enabled } }),
+        Err(e) => serde_json::json!({ "error": e }),
+      })
+    }
+  })
 }
 
 // ============================================================================
@@ -417,69 +420,69 @@ fn create_rpc_handler(app_handle: AppHandle) -> axio_ws::CustomRpcHandler {
 // ============================================================================
 
 fn setup_main_window(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let (width, height) = get_main_screen_dimensions();
-    let window = app
-        .get_webview_window("main")
-        .ok_or("Main window not found")?;
+  let (width, height) = get_main_screen_dimensions();
+  let window = app
+    .get_webview_window("main")
+    .ok_or("Main window not found")?;
 
-    window.set_size(tauri::LogicalSize::new(width, height))?;
-    window.set_position(tauri::LogicalPosition::new(0.0, 0.0))?;
-    window.set_ignore_cursor_events(true)?;
+  window.set_size(tauri::LogicalSize::new(width, height))?;
+  window.set_position(tauri::LogicalPosition::new(0.0, 0.0))?;
+  window.set_ignore_cursor_events(true)?;
 
-    #[cfg(target_os = "macos")]
-    setup_macos_panel(&window)?;
+  #[cfg(target_os = "macos")]
+  setup_macos_panel(&window)?;
 
-    #[cfg(not(target_os = "macos"))]
-    window.show()?;
+  #[cfg(not(target_os = "macos"))]
+  window.show()?;
 
-    Ok(())
+  Ok(())
 }
 
 #[cfg(target_os = "macos")]
 fn setup_macos_panel(window: &tauri::WebviewWindow) -> Result<(), Box<dyn std::error::Error>> {
-    let panel = window.to_panel::<AxioPanel>()?;
+  let panel = window.to_panel::<AxioPanel>()?;
 
-    panel.set_style_mask(StyleMask::empty().nonactivating_panel().into());
-    panel.set_level(PanelLevel::Floating.into());
-    panel.set_becomes_key_only_if_needed(true);
-    panel.set_hides_on_deactivate(false);
-    panel.set_floating_panel(true);
-    panel.set_ignores_mouse_events(true);
-    panel.show();
+  panel.set_style_mask(StyleMask::empty().nonactivating_panel().into());
+  panel.set_level(PanelLevel::Floating.into());
+  panel.set_becomes_key_only_if_needed(true);
+  panel.set_hides_on_deactivate(false);
+  panel.set_floating_panel(true);
+  panel.set_ignores_mouse_events(true);
+  panel.show();
 
-    Ok(())
+  Ok(())
 }
 
 fn setup_shortcuts(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let toggle = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyE);
-    let devtools = Shortcut::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::KeyI);
+  let toggle = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyE);
+  let devtools = Shortcut::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::KeyI);
 
-    app.handle().plugin(
-        tauri_plugin_global_shortcut::Builder::new()
-            .with_handler(move |app, shortcut, event| {
-                if event.state() != ShortcutState::Pressed {
-                    return;
-                }
+  app.handle().plugin(
+    tauri_plugin_global_shortcut::Builder::new()
+      .with_handler(move |app, shortcut, event| {
+        if event.state() != ShortcutState::Pressed {
+          return;
+        }
 
-                if shortcut == &toggle {
-                    let _ = toggle_passthrough(app);
-                } else if shortcut == &devtools {
-                    if let Some(w) = app.get_webview_window("main") {
-                        if w.is_devtools_open() {
-                            w.close_devtools();
-                        } else {
-                            w.open_devtools();
-                        }
-                    }
-                }
-            })
-            .build(),
-    )?;
+        if shortcut == &toggle {
+          let _ = toggle_passthrough(app);
+        } else if shortcut == &devtools {
+          if let Some(w) = app.get_webview_window("main") {
+            if w.is_devtools_open() {
+              w.close_devtools();
+            } else {
+              w.open_devtools();
+            }
+          }
+        }
+      })
+      .build(),
+  )?;
 
-    app.global_shortcut().register(toggle)?;
-    app.global_shortcut().register(devtools)?;
+  app.global_shortcut().register(toggle)?;
+  app.global_shortcut().register(devtools)?;
 
-    Ok(())
+  Ok(())
 }
 
 // ============================================================================
@@ -487,65 +490,65 @@ fn setup_shortcuts(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 // ============================================================================
 
 fn main() {
-    let mut builder = tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_dialog::init());
+  let mut builder = tauri::Builder::default()
+    .plugin(tauri_plugin_shell::init())
+    .plugin(tauri_plugin_dialog::init());
 
-    #[cfg(target_os = "macos")]
-    {
-        builder = builder.plugin(tauri_nspanel::init());
-    }
+  #[cfg(target_os = "macos")]
+  {
+    builder = builder.plugin(tauri_nspanel::init());
+  }
 
-    builder
-        .manage(AppState::default())
-        .setup(|app| {
-            // WebSocket setup
-            let (sender, _) = tokio::sync::broadcast::channel(1000);
-            let ws_state = WebSocketState::new(std::sync::Arc::new(sender))
-                .with_custom_handler(create_rpc_handler(app.handle().clone()));
-            axio::set_event_sink(ws_state.clone());
-            axio::api::initialize();
+  builder
+    .manage(AppState::default())
+    .setup(|app| {
+      // WebSocket setup
+      let (sender, _) = tokio::sync::broadcast::channel(1000);
+      let ws_state = WebSocketState::new(std::sync::Arc::new(sender))
+        .with_custom_handler(create_rpc_handler(app.handle().clone()));
+      axio::set_event_sink(ws_state.clone());
+      axio::api::initialize();
 
-            // Window setup
-            setup_main_window(app)?;
+      // Window setup
+      setup_main_window(app)?;
 
-            // Shortcuts
-            #[cfg(desktop)]
-            setup_shortcuts(app)?;
+      // Shortcuts
+      #[cfg(desktop)]
+      setup_shortcuts(app)?;
 
-            // Tray setup
-            let overlays = get_overlay_files();
-            build_or_update_tray(&app.handle(), &overlays)?;
+      // Tray setup
+      let overlays = get_overlay_files();
+      build_or_update_tray(&app.handle(), &overlays)?;
 
-            // Load first overlay
-            if let Some(first) = overlays.first() {
-                *app.state::<AppState>().current_overlay.lock().unwrap() = first.clone();
-                if let Some(w) = app.get_webview_window("main") {
-                    w.navigate(get_overlay_url(first).parse().expect("Invalid URL"))?;
-                }
-            }
+      // Load first overlay
+      if let Some(first) = overlays.first() {
+        *app.state::<AppState>().current_overlay.lock().unwrap() = first.clone();
+        if let Some(w) = app.get_webview_window("main") {
+          w.navigate(get_overlay_url(first).parse().expect("Invalid URL"))?;
+        }
+      }
 
-            // Start services
-            mouse::start_mouse_tracking(ws_state.clone());
+      // Start services
+      mouse::start_mouse_tracking(ws_state.clone());
 
-            axio::start_polling(PollingConfig {
-                enum_options: WindowEnumOptions {
-                    exclude_pid: Some(std::process::id()),
-                    filter_fullscreen: true,
-                    filter_offscreen: true,
-                },
-                ..Default::default()
-            });
+      axio::start_polling(PollingConfig {
+        enum_options: WindowEnumOptions {
+          exclude_pid: Some(std::process::id()),
+          filter_fullscreen: true,
+          filter_offscreen: true,
+        },
+        ..Default::default()
+      });
 
-            let ws = ws_state.clone();
-            thread::spawn(move || {
-                tokio::runtime::Runtime::new()
-                    .expect("Failed to create runtime")
-                    .block_on(axio_ws::start_ws_server(ws));
-            });
+      let ws = ws_state.clone();
+      thread::spawn(move || {
+        tokio::runtime::Runtime::new()
+          .expect("Failed to create runtime")
+          .block_on(axio_ws::start_ws_server(ws));
+      });
 
-            Ok(())
-        })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+      Ok(())
+    })
+    .run(tauri::generate_context!())
+    .expect("error while running tauri application");
 }
