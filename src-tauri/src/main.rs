@@ -251,18 +251,28 @@ fn build_or_update_tray(
 }
 
 fn handle_tray_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
-    match event.id().0.as_str() {
-        "toggle_passthrough" => {
-            let _ = toggle_passthrough(app);
-        }
-        "load_url" => show_url_dialog(app),
-        "load_file" => show_file_dialog(app),
-        "quit" => app.exit(0),
-        "no_overlays" => {}
-        id => {
-            let _ = switch_overlay(app, id);
-        }
-    }
+    let id = event.id().0.clone();
+    let handle = app.clone();
+
+    // IMPORTANT: Defer execution to avoid use-after-free.
+    // The menu is rebuilt during these handlers, but muda is still
+    // accessing the old menu item strings. Deferring ensures the
+    // event handler completes before we replace the menu.
+    thread::spawn(move || {
+        let app = handle.clone();
+        let _ = handle.run_on_main_thread(move || match id.as_str() {
+            "toggle_passthrough" => {
+                let _ = toggle_passthrough(&app);
+            }
+            "load_url" => show_url_dialog(&app),
+            "load_file" => show_file_dialog(&app),
+            "quit" => app.exit(0),
+            "no_overlays" => {}
+            id => {
+                let _ = switch_overlay(&app, id);
+            }
+        });
+    });
 }
 
 // ============================================================================
