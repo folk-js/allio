@@ -257,6 +257,10 @@ pub fn start_polling(config: PollingConfig) {
                 // Detect added windows
                 for added_id in current_ids.difference(&last_ids) {
                     if let Some(window) = current_map.get(*added_id) {
+                        // Enable accessibility for Electron apps (Signal, Discord, etc.)
+                        // This must be done when the window is first discovered to give the
+                        // accessibility tree time to populate before we try to query elements
+                        crate::platform::macos::enable_accessibility_for_pid(window.process_id);
                         crate::events::emit_window_added(window, &depth_order);
                     }
                 }

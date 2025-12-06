@@ -542,17 +542,27 @@ unsafe extern "C" fn observer_callback(
     notification: core_foundation::string::CFStringRef,
     refcon: *mut std::ffi::c_void,
 ) {
-    assert!(
-        !refcon.is_null(),
-        "AXObserver callback received null refcon"
-    );
+    // Catch any panics to prevent crashes - Electron apps can send notifications
+    // for elements that are no longer valid maybe???
+    let result = std::panic::catch_unwind(|| {
+        assert!(
+            !refcon.is_null(),
+            "AXObserver callback received null refcon"
+        );
 
-    let context = &*(refcon as *const ObserverContext);
-    let notif_cfstring = CFString::wrap_under_get_rule(notification);
-    let notification_name = notif_cfstring.to_string();
-    let changed_element = AXUIElement::wrap_under_get_rule(_element);
+        let context = &*(refcon as *const ObserverContext);
+        let notif_cfstring = CFString::wrap_under_get_rule(notification);
+        let notification_name = notif_cfstring.to_string();
+        let changed_element = AXUIElement::wrap_under_get_rule(_element);
 
-    handle_notification(&context.element_id, &notification_name, &changed_element);
+        handle_notification(&context.element_id, &notification_name, &changed_element);
+    });
+
+    if result.is_err() {
+        eprintln!(
+            "[axio] ⚠️  Accessibility notification handler panicked (possibly invalid element)"
+        );
+    }
 }
 
 fn handle_notification(element_id: &ElementId, notification: &str, ax_element: &AXUIElement) {
@@ -1161,9 +1171,51 @@ pub fn get_window_root(window_id: &WindowId) -> AxioResult<AXElement> {
     ))
 }
 
+/// Enable accessibility for an Electron app by setting AXManualAccessibility
+/// This is necessary because Electron apps only expose their accessibility tree
+/// when they detect assistive technology (like VoiceOver) is running.
+///
+/// Call this when a window is first discovered to give the accessibility tree
+/// time to populate before querying elements.
+pub fn enable_accessibility_for_pid(pid: u32) {
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::string::CFString;
+
+    let app_element = AXUIElement::application(pid as i32);
+    let attr_name = CFString::new("AXManualAccessibility");
+
+    // Try to set AXManualAccessibility to true
+    let value = CFBoolean::true_value();
+
+    unsafe {
+        use accessibility_sys::{
+            kAXErrorAttributeUnsupported, kAXErrorSuccess, AXUIElementSetAttributeValue,
+        };
+        use core_foundation::base::TCFType;
+
+        let result = AXUIElementSetAttributeValue(
+            app_element.as_concrete_TypeRef(),
+            attr_name.as_concrete_TypeRef(),
+            value.as_CFTypeRef(),
+        );
+
+        if result == kAXErrorSuccess {
+            eprintln!("[axio] ✓ Enabled accessibility for PID {}", pid);
+        } else if result != kAXErrorAttributeUnsupported {
+            // Only warn if it's not "attribute unsupported" (which is expected for native apps)
+            eprintln!(
+                "[axio] ⚠️  Failed to enable accessibility for PID {} (error: {})",
+                pid, result
+            );
+        }
+        // Silently ignore kAXErrorAttributeUnsupported - it's expected for non-Electron apps
+    }
+}
+
 /// Get the accessibility element at a specific screen position.
 /// Queries only tracked windows (which exclude our own PID) to avoid hitting our overlay.
-/// Uses AXUIElementCopyElementAtPosition on the app element for that window's PID.
+/// Uses AXUIElementCopyElementAtPosition as a starting point, then searches deeper
+/// to find the most specific/interactive element at that position.
 pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
     use crate::window_manager::WindowManager;
     use accessibility_sys::AXUIElementRef;
