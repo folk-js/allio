@@ -5,7 +5,7 @@ use crate::types::AXWindow;
 use crate::window_manager::WindowManager;
 use crate::WindowId;
 use once_cell::sync::Lazy;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -27,26 +27,9 @@ const FILTERED_BUNDLE_IDS: &[&str] = &[
   "com.apple.ScreenContinuity",
 ];
 
-static BUNDLE_ID_CACHE: Lazy<Mutex<HashMap<u32, Option<String>>>> =
-  Lazy::new(|| Mutex::new(HashMap::new()));
-
-/// Clean up bundle ID cache entries for PIDs that are no longer active.
-#[cfg(target_os = "macos")]
-fn cleanup_bundle_id_cache(active_pids: &HashSet<u32>) -> usize {
-  let mut cache = BUNDLE_ID_CACHE.lock();
-  let initial_size = cache.len();
-  cache.retain(|pid, _| active_pids.contains(pid));
-  initial_size - cache.len()
-}
-
-#[cfg(not(target_os = "macos"))]
-fn cleanup_bundle_id_cache(_active_pids: &HashSet<u32>) -> usize {
-  0
-}
-
-/// Get the current size of the bundle ID cache (for diagnostics).
-pub fn bundle_id_cache_size() -> usize {
-  BUNDLE_ID_CACHE.lock().len()
+/// Check if a window should be filtered based on its bundle ID.
+fn should_filter_bundle_id(bundle_id: Option<&str>) -> bool {
+  bundle_id.map_or(false, |id| FILTERED_BUNDLE_IDS.contains(&id))
 }
 
 /// Last known window list from polling. Always available immediately.
@@ -63,49 +46,6 @@ pub fn get_current_windows() -> Vec<AXWindow> {
 /// Get the active window ID (most recent valid focus, preserved when desktop focused)
 pub fn get_active_window() -> Option<String> {
   ACTIVE_WINDOW.read().clone()
-}
-
-#[cfg(target_os = "macos")]
-fn parse_bundle_id(info: &str) -> Option<String> {
-  let eq_pos = info.rfind('=')?;
-  let after_eq = &info[eq_pos + 1..];
-  let start = after_eq.find('"')?;
-  let end = after_eq[start + 1..].find('"')?;
-  Some(after_eq[start + 1..start + 1 + end].to_string())
-}
-
-#[cfg(target_os = "macos")]
-fn get_bundle_id(pid: u32) -> Option<String> {
-  use std::process::Command;
-
-  {
-    let cache = BUNDLE_ID_CACHE.lock();
-    if let Some(cached) = cache.get(&pid) {
-      return cached.clone();
-    }
-  }
-
-  // TODO: Use native NSRunningApplication API instead of shelling out
-  let bundle_id = Command::new("lsappinfo")
-    .args(["info", "-only", "bundleid", &format!("{}", pid)])
-    .output()
-    .ok()
-    .and_then(|output| String::from_utf8(output.stdout).ok())
-    .and_then(|info| parse_bundle_id(&info));
-
-  BUNDLE_ID_CACHE.lock().insert(pid, bundle_id.clone());
-
-  bundle_id
-}
-
-#[cfg(target_os = "macos")]
-fn should_filter_process(pid: u32) -> bool {
-  get_bundle_id(pid).map_or(false, |id| FILTERED_BUNDLE_IDS.contains(&id.as_str()))
-}
-
-#[cfg(not(target_os = "macos"))]
-fn should_filter_process(_pid: u32) -> bool {
-  false
 }
 
 #[cfg(target_os = "macos")]
@@ -192,7 +132,7 @@ pub fn get_windows(options: &WindowEnumOptions) -> Option<Vec<AXWindow>> {
       if options.exclude_pid == Some(w.process_id) {
         return false;
       }
-      if should_filter_process(w.process_id) {
+      if should_filter_bundle_id(w.bundle_id.as_deref()) {
         return false;
       }
       true
@@ -360,9 +300,7 @@ pub fn start_polling(config: PollingConfig) {
           // Collect active PIDs from current windows
           let active_pids: HashSet<u32> = last_windows.values().map(|w| w.process_id).collect();
 
-          // Clean up caches for dead PIDs
-          let _bundle_cleaned = cleanup_bundle_id_cache(&active_pids);
-
+          // Clean up observers for dead PIDs
           #[cfg(target_os = "macos")]
           let _observers_cleaned = crate::platform::macos::cleanup_dead_observers(&active_pids);
         }

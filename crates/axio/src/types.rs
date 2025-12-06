@@ -76,6 +76,21 @@ pub struct Bounds {
   pub h: f64,
 }
 
+impl Bounds {
+  /// Check if two bounds match within a margin of error.
+  pub fn matches(&self, other: &Bounds, margin: f64) -> bool {
+    (self.x - other.x).abs() <= margin
+      && (self.y - other.y).abs() <= margin
+      && (self.w - other.w).abs() <= margin
+      && (self.h - other.h).abs() <= margin
+  }
+
+  /// Check if a point is contained within these bounds.
+  pub fn contains_point(&self, x: f64, y: f64) -> bool {
+    x >= self.x && x <= self.x + self.w && y >= self.y && y <= self.y + self.h
+  }
+}
+
 // === ARIA role subset ===
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, TS)]

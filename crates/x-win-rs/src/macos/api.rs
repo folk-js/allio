@@ -81,6 +81,11 @@ fn get_windows_inner() -> Result<Vec<WindowInfo>> {
     let title = get_cf_string_value(&window_cf_dictionary, "kCGWindowName");
     let id = get_cf_number_value(&window_cf_dictionary, "kCGWindowNumber");
     let z_index = windows.len() as u32;
+    let bundle_id = if bundle_identifier.is_empty() {
+      None
+    } else {
+      Some(bundle_identifier)
+    };
 
     windows.push(WindowInfo {
       id: id.to_string(),
@@ -93,6 +98,7 @@ fn get_windows_inner() -> Result<Vec<WindowInfo>> {
       focused,
       process_id: process_id as u32,
       z_index,
+      bundle_id,
     });
   }
 

@@ -636,7 +636,7 @@ fn get_window_id_from_ax_element(element: &AXUIElement) -> Option<WindowId> {
   let bounds = get_element_bounds(&window_ax)?;
 
   // Find matching window by bounds
-  WindowManager::find_window_id_by_bounds(bounds.x, bounds.y, bounds.w, bounds.h)
+  WindowManager::find_window_id_by_bounds(&bounds)
 }
 
 /// Create an AXObserver for a process and add it to the main run loop.

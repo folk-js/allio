@@ -12,8 +12,8 @@ Status tracking for architectural improvements.
 
 - [x] **1. parking_lot migration** - Replace `std::sync::Mutex` with `parking_lot::Mutex`
 - [x] **2. Double-Option removal** - `Lazy<Mutex<Option<T>>>` → `LazyLock<Mutex<T>>`
-- [ ] **3. Bounds helpers** - Extract `Bounds::matches()` and `Bounds::contains_point()`
-- [ ] **4. Bundle ID from x-win** - Add `bundle_id` to `x-win::WindowInfo`, remove `BUNDLE_ID_CACHE`
+- [x] **3. Bounds helpers** - Extract `Bounds::matches()` and `Bounds::contains_point()`
+- [x] **4. Bundle ID from x-win** - Add `bundle_id` to `x-win::WindowInfo`, remove `BUNDLE_ID_CACHE`
 
 ### Phase 2: Prep Work (makes Phase 3 easier)
 
@@ -29,9 +29,10 @@ Status tracking for architectural improvements.
 
 ### Phase 4: Polish & Experiments
 
-- [ ] **11. CFHash for element dedup** - Try O(1) lookup (might not work)
-- [ ] **12. Element eviction strategy** - Prevent unbounded growth
-- [ ] **13. Better error handling** - Graceful degradation
+- [ ] **11. Merge x-win into windowing** - Inline x-win functionality directly into axio
+- [ ] **12. CFHash for element dedup** - Try O(1) lookup (might not work)
+- [ ] **13. Element eviction strategy** - Prevent unbounded growth
+- [ ] **14. Better error handling** - Graceful degradation
 
 ---
 

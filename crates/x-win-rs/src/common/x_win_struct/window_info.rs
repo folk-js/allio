@@ -14,4 +14,6 @@ pub struct WindowInfo {
   pub process_id: u32,
   /// Z-order index (0 = frontmost)
   pub z_index: u32,
+  /// Bundle identifier (macOS) e.g. "com.apple.Safari"
+  pub bundle_id: Option<String>,
 }

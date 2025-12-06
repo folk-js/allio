@@ -5,7 +5,7 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use std::collections::HashMap;
 
-use crate::types::{AXWindow, WindowId};
+use crate::types::{AXWindow, Bounds, WindowId};
 
 #[derive(Clone)]
 pub struct ManagedWindow {
@@ -122,11 +122,7 @@ impl WindowManager {
       return None;
     }
 
-    const MARGIN: i32 = 2;
-    let win_x = window.bounds.x as i32;
-    let win_y = window.bounds.y as i32;
-    let win_w = window.bounds.w as i32;
-    let win_h = window.bounds.h as i32;
+    const MARGIN: f64 = 2.0;
 
     for element in window_elements.iter() {
       let position_attr = CFString::new(kAXPositionAttribute);
@@ -144,11 +140,13 @@ impl WindowManager {
         .and_then(|s| crate::platform::macos::extract_size(&s));
 
       if let (Some((ax_x, ax_y)), Some((ax_w, ax_h))) = (element_pos, element_size) {
-        let pos_ok = (ax_x as i32 - win_x).abs() <= MARGIN && (ax_y as i32 - win_y).abs() <= MARGIN;
-        let size_ok =
-          (ax_w as i32 - win_w).abs() <= MARGIN && (ax_h as i32 - win_h).abs() <= MARGIN;
-
-        if pos_ok && size_ok {
+        let element_bounds = Bounds {
+          x: ax_x,
+          y: ax_y,
+          w: ax_w,
+          h: ax_h,
+        };
+        if window.bounds.matches(&element_bounds, MARGIN) {
           return Some(element.clone());
         }
       }
@@ -169,16 +167,12 @@ impl WindowManager {
 
   /// Find a tracked window by its bounds (position and size).
   /// Used to match an AXWindow element back to its real window ID.
-  pub fn find_window_id_by_bounds(x: f64, y: f64, w: f64, h: f64) -> Option<WindowId> {
+  pub fn find_window_id_by_bounds(bounds: &Bounds) -> Option<WindowId> {
     let cache = WINDOW_CACHE.lock();
     const MARGIN: f64 = 2.0;
 
     for (window_id, managed) in cache.windows.iter() {
-      let b = &managed.info.bounds;
-      let pos_ok = (b.x - x).abs() <= MARGIN && (b.y - y).abs() <= MARGIN;
-      let size_ok = (b.w - w).abs() <= MARGIN && (b.h - h).abs() <= MARGIN;
-
-      if pos_ok && size_ok {
+      if managed.info.bounds.matches(bounds, MARGIN) {
         return Some(window_id.clone());
       }
     }
@@ -195,10 +189,7 @@ impl WindowManager {
     let mut candidates: Vec<_> = cache
       .windows
       .values()
-      .filter(|managed| {
-        let b = &managed.info.bounds;
-        x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h
-      })
+      .filter(|managed| managed.info.bounds.contains_point(x, y))
       .collect();
 
     // Sort by z_index (lowest = frontmost)

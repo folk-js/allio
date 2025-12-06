@@ -20,5 +20,6 @@ pub fn empty_entity() -> WindowInfo {
     focused: false,
     process_id: 0,
     z_index: 0,
+    bundle_id: None,
   }
 }
