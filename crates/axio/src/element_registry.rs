@@ -272,8 +272,8 @@ impl ElementRegistry {
         let hash = platform::element_hash(&stored.handle);
         window_state.by_hash.remove(&hash);
 
-        if let Some(observer) = window_state.observer {
-          unwatch_element(&mut stored, observer);
+        if let Some(ref observer) = window_state.observer {
+          unwatch_element(&mut stored, observer.clone());
         }
       }
     });
@@ -285,9 +285,9 @@ impl ElementRegistry {
         return;
       };
 
-      if let Some(observer) = window_state.observer {
+      if let Some(ref observer) = window_state.observer {
         for (_, mut stored) in window_state.elements.drain() {
-          unwatch_element(&mut stored, observer);
+          unwatch_element(&mut stored, observer.clone());
         }
       }
 
@@ -324,13 +324,11 @@ impl ElementRegistry {
       let pid = stored.pid;
 
       // Get or create observer
-      let observer = if let Some(obs) = window_state.observer {
-        obs
-      } else {
+      if window_state.observer.is_none() {
         let obs = platform::create_observer_for_pid(pid)?;
         window_state.observer = Some(obs);
-        obs
-      };
+      }
+      let observer = window_state.observer.as_ref().unwrap().clone();
 
       let stored = window_state.elements.get_mut(element_id).unwrap();
       watch_element(stored, observer)
@@ -347,12 +345,12 @@ impl ElementRegistry {
         return;
       };
 
-      let Some(observer) = window_state.observer else {
+      let Some(ref observer) = window_state.observer else {
         return;
       };
 
       if let Some(stored) = window_state.elements.get_mut(element_id) {
-        unwatch_element(stored, observer);
+        unwatch_element(stored, observer.clone());
       }
     });
   }

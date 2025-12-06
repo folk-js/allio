@@ -2,47 +2,51 @@
 
 #[cfg(target_os = "macos")]
 mod macos_impl {
-  use accessibility::AXUIElement;
-  use accessibility_sys::AXObserverRef;
+  use objc2_application_services::{AXObserver, AXUIElement};
+  use objc2_core_foundation::CFRetained;
 
   /// Opaque handle to a UI element.
   ///
   /// On macOS this wraps an AXUIElement reference.
-  /// Clone is cheap (reference counted).
+  /// Clone is cheap (reference counted via CFRetained).
   #[derive(Clone)]
-  pub struct ElementHandle(pub(in crate::platform) AXUIElement);
+  pub struct ElementHandle(pub(in crate::platform) CFRetained<AXUIElement>);
 
   impl ElementHandle {
-    pub(in crate::platform) fn new(element: AXUIElement) -> Self {
+    pub(in crate::platform) fn new(element: CFRetained<AXUIElement>) -> Self {
       Self(element)
     }
 
     pub(in crate::platform) fn inner(&self) -> &AXUIElement {
       &self.0
     }
+
+    pub(in crate::platform) fn retained(&self) -> CFRetained<AXUIElement> {
+      self.0.clone()
+    }
   }
 
-  // SAFETY: AXUIElement is a CFTypeRef (reference-counted, immutable).
+  // SAFETY: CFRetained<AXUIElement> is reference-counted and thread-safe.
   unsafe impl Send for ElementHandle {}
   unsafe impl Sync for ElementHandle {}
 
   /// Opaque handle to an observer (for watching element changes).
   ///
-  /// On macOS this wraps an AXObserverRef.
-  #[derive(Clone, Copy)]
-  pub struct ObserverHandle(pub(in crate::platform) AXObserverRef);
+  /// On macOS this wraps an AXObserver.
+  #[derive(Clone)]
+  pub struct ObserverHandle(pub(in crate::platform) CFRetained<AXObserver>);
 
   impl ObserverHandle {
-    pub(in crate::platform) fn new(observer: AXObserverRef) -> Self {
+    pub(in crate::platform) fn new(observer: CFRetained<AXObserver>) -> Self {
       Self(observer)
     }
 
-    pub(in crate::platform) fn inner(&self) -> AXObserverRef {
-      self.0
+    pub(in crate::platform) fn inner(&self) -> &AXObserver {
+      &self.0
     }
   }
 
-  // SAFETY: AXObserverRef is a CFTypeRef, access is synchronized.
+  // SAFETY: CFRetained<AXObserver> is reference-counted and thread-safe.
   unsafe impl Send for ObserverHandle {}
   unsafe impl Sync for ObserverHandle {}
 }
@@ -56,16 +60,11 @@ pub use macos_impl::*;
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
-  /// Opaque handle to a UI element.
-  /// On Windows this would wrap IUIAutomationElement.
   #[derive(Clone)]
   pub struct ElementHandle {
-    // Would contain: IUIAutomationElement or similar
     _placeholder: (),
   }
 
-  /// Opaque handle to an observer.
-  /// On Windows this would wrap IUIAutomationEventHandler.
   #[derive(Clone, Copy)]
   pub struct ObserverHandle {
     _placeholder: (),
@@ -86,16 +85,11 @@ pub use windows_impl::*;
 
 #[cfg(target_os = "linux")]
 mod linux_impl {
-  /// Opaque handle to a UI element.
-  /// On Linux this would wrap an AT-SPI Accessible object.
   #[derive(Clone)]
   pub struct ElementHandle {
-    // Would contain: atspi::Accessible or similar
     _placeholder: (),
   }
 
-  /// Opaque handle to an observer.
-  /// On Linux this would wrap AT-SPI event subscriptions.
   #[derive(Clone, Copy)]
   pub struct ObserverHandle {
     _placeholder: (),

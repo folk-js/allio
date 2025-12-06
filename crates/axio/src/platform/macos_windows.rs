@@ -28,6 +28,8 @@ pub fn enumerate_windows() -> Vec<AXWindow> {
 
 fn enumerate_windows_inner() -> Vec<AXWindow> {
   let mut windows = Vec::new();
+  // Track which PIDs we've already seen a window for (to mark only frontmost as focused)
+  let mut seen_active_pid: Option<u32> = None;
 
   let option = CGWindowListOption::OptionOnScreenOnly
     | CGWindowListOption::ExcludeDesktopElements
@@ -86,7 +88,18 @@ fn enumerate_windows_inner() -> Vec<AXWindow> {
       }
     }
 
-    let focused = app.isActive();
+    let app_is_active = app.isActive();
+
+    // Only mark the FIRST (frontmost) window of the active app as focused.
+    // CGWindowListCopyWindowInfo returns windows in z-order, so the first
+    // window we see from an active app is the focused one.
+    let focused = if app_is_active && seen_active_pid.is_none() {
+      seen_active_pid = Some(process_id as u32);
+      true
+    } else {
+      false
+    };
+
     let app_name = get_cf_string(&dict, "kCGWindowOwnerName");
     let title = get_cf_string(&dict, "kCGWindowName");
     let id = get_cf_number(&dict, "kCGWindowNumber");
