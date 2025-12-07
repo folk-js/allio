@@ -382,7 +382,7 @@ pub struct SyncInit {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(tag = "event", content = "data")]
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
-pub enum ServerEvent {
+pub enum Event {
   // Initial sync (on connection)
   #[serde(rename = "sync:init")]
   SyncInit(SyncInit),

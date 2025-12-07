@@ -11,7 +11,7 @@ export type { ElementId } from "./generated/ElementId";
 export type { RpcRequest } from "./generated/RpcRequest";
 export type { RpcResponse } from "./generated/RpcResponse";
 export type { Selection } from "./generated/Selection";
-export type { ServerEvent } from "./generated/ServerEvent";
+export type { Event } from "./generated/Event";
 export type { SyncInit } from "./generated/SyncInit";
 export type { TextRange } from "./generated/TextRange";
 export type { WindowId } from "./generated/WindowId";

@@ -3,7 +3,7 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use crate::types::{AXWindow, Bounds, WindowId};
+use crate::types::{AXWindow, WindowId};
 
 /// Internal storage - window data plus platform handle.
 struct StoredWindow {
@@ -81,18 +81,6 @@ pub fn find_at_point(x: f64, y: f64) -> Option<AXWindow> {
 
   candidates.sort_by_key(|s| s.info.z_index);
   candidates.first().map(|s| s.info.clone())
-}
-
-/// Find window by bounds (for matching AX elements to windows).
-pub fn find_by_bounds(bounds: &Bounds) -> Option<WindowId> {
-  let registry = REGISTRY.read();
-  const MARGIN: f64 = 2.0;
-
-  registry
-    .windows
-    .iter()
-    .find(|(_, s)| s.info.bounds.matches(bounds, MARGIN))
-    .map(|(id, _)| id.clone())
 }
 
 // =============================================================================

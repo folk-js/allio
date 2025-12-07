@@ -153,50 +153,6 @@ impl ElementRegistry {
     })
   }
 
-  /// Get all elements for a specific window.
-  pub fn get_for_window(window_id: &WindowId) -> Vec<AXElement> {
-    Self::with(|registry| {
-      registry
-        .windows
-        .get(window_id)
-        .map(|w| w.elements.values().map(|s| s.element.clone()).collect())
-        .unwrap_or_default()
-    })
-  }
-
-  /// Get root elements for a window (elements with no parent).
-  pub fn get_roots_for_window(window_id: &WindowId) -> Vec<AXElement> {
-    Self::with(|registry| {
-      registry
-        .windows
-        .get(window_id)
-        .map(|w| {
-          w.elements
-            .values()
-            .filter(|s| s.element.parent_id.is_none())
-            .map(|s| s.element.clone())
-            .collect()
-        })
-        .unwrap_or_default()
-    })
-  }
-
-  /// Total element count across all windows.
-  pub fn count() -> usize {
-    Self::with(|registry| registry.windows.values().map(|w| w.elements.len()).sum())
-  }
-
-  /// Element count for a specific window.
-  pub fn count_for_window(window_id: &WindowId) -> usize {
-    Self::with(|registry| {
-      registry
-        .windows
-        .get(window_id)
-        .map(|w| w.elements.len())
-        .unwrap_or(0)
-    })
-  }
-
   /// Access stored element (for internal ops like click, write).
   pub fn with_stored<F, R>(element_id: &ElementId, f: F) -> AxioResult<R>
   where

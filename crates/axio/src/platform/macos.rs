@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use super::handles::{ElementHandle, ObserverHandle};
 use crate::events::emit;
-use crate::types::{AXElement, AXRole, AxioError, AxioResult, ElementId, ServerEvent, WindowId};
+use crate::types::{AXElement, AXRole, AxioError, AxioResult, ElementId, Event, WindowId};
 
 /// Create an AXUIElement for an application by PID.
 /// Encapsulates the unsafe FFI call.
@@ -26,19 +26,6 @@ fn app_element(pid: u32) -> CFRetained<AXUIElement> {
 /// Returns true if trusted, false otherwise.
 pub fn check_accessibility_permissions() -> bool {
   unsafe { AXIsProcessTrusted() }
-}
-
-/// Check accessibility permissions and log a warning if not granted.
-/// Call this at app startup to help debug permission issues.
-pub fn verify_accessibility_permissions() {
-  if check_accessibility_permissions() {
-    println!("[axio] ✓ Accessibility permissions granted");
-  } else {
-    eprintln!("[axio] ⚠️  WARNING: Accessibility permissions NOT granted!");
-    eprintln!("[axio]    Go to System Preferences > Privacy & Security > Accessibility");
-    eprintln!("[axio]    and add this application to the list.");
-    eprintln!("[axio]    You may need to remove and re-add the app after rebuilding.");
-  }
 }
 
 /// Type-safe representation of macOS accessibility notifications
@@ -391,7 +378,7 @@ fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
     let _ = crate::element_registry::ElementRegistry::watch(&ax_element.id);
   }
 
-  emit(ServerEvent::FocusElement {
+  emit(Event::FocusElement {
     element: ax_element,
     previous_element_id,
   });
@@ -413,7 +400,7 @@ fn handle_app_selection_changed(pid: u32, element: CFRetained<AXUIElement>) {
     get_selected_text_range(&handle)
   };
 
-  emit(ServerEvent::SelectionChanged {
+  emit(Event::SelectionChanged {
     window_id,
     element_id: ax_element.id,
     text: selected_text,
@@ -560,7 +547,7 @@ fn handle_notification(
         if let Ok(mut element) = ElementRegistry::get(element_id) {
           element.value = Some(value);
           let _ = ElementRegistry::update(element_id, element.clone());
-          emit(ServerEvent::ElementChanged {
+          emit(Event::ElementChanged {
             element: element.clone(),
           });
         }
@@ -574,7 +561,7 @@ fn handle_notification(
           if let Ok(mut element) = ElementRegistry::get(element_id) {
             element.label = Some(label);
             let _ = ElementRegistry::update(element_id, element.clone());
-            emit(ServerEvent::ElementChanged {
+            emit(Event::ElementChanged {
               element: element.clone(),
             });
           }
@@ -585,7 +572,7 @@ fn handle_notification(
     AXNotification::UIElementDestroyed => {
       if let Ok(element) = ElementRegistry::get(element_id) {
         ElementRegistry::remove_element(element_id);
-        emit(ServerEvent::ElementRemoved {
+        emit(Event::ElementRemoved {
           element: element.clone(),
         });
       } else {
@@ -677,13 +664,13 @@ pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResu
   ElementRegistry::set_children(parent_id, child_ids.clone())?;
 
   for child in &children {
-    emit(ServerEvent::ElementAdded {
+    emit(Event::ElementAdded {
       element: child.clone(),
     });
   }
 
   if let Ok(updated_parent) = ElementRegistry::get(parent_id) {
-    emit(ServerEvent::ElementChanged {
+    emit(Event::ElementChanged {
       element: updated_parent.clone(),
     });
   }

@@ -20,8 +20,7 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 #[cfg(target_os = "macos")]
 use tauri_nspanel::{tauri_panel, ManagerExt as _, PanelLevel, StyleMask, WebviewWindowExt as _};
 
-use axio::get_main_screen_dimensions;
-use axio::windows::{PollingConfig, WindowEnumOptions};
+use axio::{PollingConfig, WindowEnumOptions};
 use axio_ws::WebSocketState;
 
 // ============================================================================
@@ -419,7 +418,7 @@ fn create_rpc_handler(app_handle: AppHandle) -> axio_ws::CustomRpcHandler {
 // ============================================================================
 
 fn setup_main_window(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-  let (width, height) = get_main_screen_dimensions();
+  let (width, height) = axio::screen::dimensions();
   let window = app
     .get_webview_window("main")
     .ok_or("Main window not found")?;
@@ -506,7 +505,10 @@ fn main() {
       let ws_state = WebSocketState::new(std::sync::Arc::new(sender))
         .with_custom_handler(create_rpc_handler(app.handle().clone()));
       axio::set_event_sink(ws_state.clone());
-      axio::api::initialize();
+      if !axio::verify_permissions() {
+        eprintln!("[axio] ⚠️  Accessibility permissions NOT granted!");
+        eprintln!("[axio]    Go to System Preferences > Privacy & Security > Accessibility");
+      }
 
       // Window setup
       setup_main_window(app)?;

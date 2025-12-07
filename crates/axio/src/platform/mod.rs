@@ -17,8 +17,8 @@ pub use macos::{
   check_accessibility_permissions, cleanup_dead_observers, click_element, create_observer_for_pid,
   discover_children, element_hash, enable_accessibility_for_pid, fetch_window_handle,
   get_current_focus, get_element_at_position, get_window_root, refresh_element,
-  subscribe_element_notifications, unsubscribe_element_notifications,
-  verify_accessibility_permissions, write_element_value, AXNotification, ObserverContextHandle,
+  subscribe_element_notifications, unsubscribe_element_notifications, write_element_value,
+  AXNotification, ObserverContextHandle,
 };
 
 #[cfg(target_os = "macos")]

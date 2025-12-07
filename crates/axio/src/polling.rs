@@ -1,7 +1,6 @@
 use crate::events::emit;
 use crate::platform;
-use crate::types::{AXWindow, ProcessId, ServerEvent};
-use crate::WindowId;
+use crate::types::{AXWindow, Event, Point, ProcessId, WindowId};
 use std::collections::HashSet;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -94,7 +93,6 @@ const CLEANUP_INTERVAL: u64 = 1250;
 
 /// Start background polling for windows and mouse position.
 pub fn start_polling(config: PollingConfig) {
-  use crate::types::Point;
   use crate::window_registry;
 
   thread::spawn(move || {
@@ -112,7 +110,7 @@ pub fn start_polling(config: PollingConfig) {
         let changed = last_mouse_pos.map_or(true, |last| pos.moved_from(last, 1.0));
         if changed {
           last_mouse_pos = Some(pos);
-          emit(ServerEvent::MousePosition(pos));
+          emit(Event::MousePosition(pos));
         }
       }
 
@@ -121,7 +119,7 @@ pub fn start_polling(config: PollingConfig) {
 
         // Emit events for removed windows
         for removed_id in &result.removed {
-          emit(ServerEvent::WindowRemoved {
+          emit(Event::WindowRemoved {
             window_id: removed_id.clone(),
             depth_order: result.depth_order.clone(),
           });
@@ -131,7 +129,7 @@ pub fn start_polling(config: PollingConfig) {
         for added_id in &result.added {
           if let Some(window) = window_registry::get_window(added_id) {
             platform::enable_accessibility_for_pid(window.process_id);
-            emit(ServerEvent::WindowAdded {
+            emit(Event::WindowAdded {
               window: window.clone(),
               depth_order: result.depth_order.clone(),
             });
@@ -141,7 +139,7 @@ pub fn start_polling(config: PollingConfig) {
         // Emit events for changed windows
         for changed_id in &result.changed {
           if let Some(window) = window_registry::get_window(changed_id) {
-            emit(ServerEvent::WindowChanged {
+            emit(Event::WindowChanged {
               window: window.clone(),
               depth_order: result.depth_order.clone(),
             });
@@ -154,7 +152,7 @@ pub fn start_polling(config: PollingConfig) {
         let current_focused_id = focused_window.map(|w| w.id.clone());
 
         if current_focused_id != last_focused_id {
-          emit(ServerEvent::FocusChanged {
+          emit(Event::FocusChanged {
             window_id: current_focused_id.clone(),
           });
           last_focused_id = current_focused_id.clone();
@@ -164,7 +162,7 @@ pub fn start_polling(config: PollingConfig) {
         if let Some(ref focused_id) = current_focused_id {
           if last_active_id.as_ref() != Some(focused_id) {
             window_registry::set_active(Some(focused_id.clone()));
-            emit(ServerEvent::ActiveChanged {
+            emit(Event::ActiveChanged {
               window_id: focused_id.clone(),
             });
             last_active_id = Some(focused_id.clone());

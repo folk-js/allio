@@ -1,4 +1,4 @@
-use axio::{AXElement, ElementId, WindowId};
+use axio::{elements, windows, AXElement, ElementId, WindowId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use ts_rs::TS;
@@ -64,17 +64,17 @@ pub fn dispatch_json(method: &str, args: &Value) -> Value {
 pub fn dispatch(request: RpcRequest) -> Result<RpcResponse, String> {
   match request {
     RpcRequest::ElementAt { x, y } => {
-      let element = axio::element_at(x, y).map_err(|e| e.to_string())?;
+      let element = elements::at(x, y).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Element(element))
     }
 
     RpcRequest::Get { element_id } => {
-      let element = axio::get(&element_id).map_err(|e| e.to_string())?;
+      let element = elements::get(&element_id).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Element(element))
     }
 
     RpcRequest::WindowRoot { window_id } => {
-      let element = axio::window_root(&window_id).map_err(|e| e.to_string())?;
+      let element = windows::root(&window_id).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Element(element))
     }
 
@@ -82,32 +82,32 @@ pub fn dispatch(request: RpcRequest) -> Result<RpcResponse, String> {
       element_id,
       max_children,
     } => {
-      let children = axio::children(&element_id, max_children).map_err(|e| e.to_string())?;
+      let children = elements::children(&element_id, max_children).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Elements(children))
     }
 
     RpcRequest::Refresh { element_id } => {
-      let element = axio::refresh(&element_id).map_err(|e| e.to_string())?;
+      let element = elements::refresh(&element_id).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Element(element))
     }
 
     RpcRequest::Write { element_id, text } => {
-      axio::write(&element_id, &text).map_err(|e| e.to_string())?;
+      elements::write(&element_id, &text).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Null)
     }
 
     RpcRequest::Click { element_id } => {
-      axio::click(&element_id).map_err(|e| e.to_string())?;
+      elements::click(&element_id).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Null)
     }
 
     RpcRequest::Watch { element_id } => {
-      axio::watch(&element_id).map_err(|e| e.to_string())?;
+      elements::watch(&element_id).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Null)
     }
 
     RpcRequest::Unwatch { element_id } => {
-      axio::unwatch(&element_id);
+      elements::unwatch(&element_id);
       Ok(RpcResponse::Null)
     }
   }

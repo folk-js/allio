@@ -1,9 +1,13 @@
+//! Element operations
+//!
+//! All functions for discovering, querying, and interacting with UI elements.
+
 use crate::element_registry::ElementRegistry;
 use crate::platform;
-use crate::types::{AXElement, AxioResult, ElementId, Selection, WindowId};
+use crate::types::{AXElement, AxioResult, ElementId, Selection};
 
 /// Discover element at screen coordinates.
-pub fn element_at(x: f64, y: f64) -> AxioResult<AXElement> {
+pub fn at(x: f64, y: f64) -> AxioResult<AXElement> {
   platform::get_element_at_position(x, y)
 }
 
@@ -27,12 +31,6 @@ pub fn refresh(element_id: &ElementId) -> AxioResult<AXElement> {
   platform::refresh_element(element_id)
 }
 
-/// Get the root element for a window.
-/// This is the accessibility element representing the window itself.
-pub fn window_root(window_id: &WindowId) -> AxioResult<AXElement> {
-  platform::get_window_root(window_id)
-}
-
 /// Write text to an element.
 pub fn write(element_id: &ElementId, text: &str) -> AxioResult<()> {
   ElementRegistry::write(element_id, text)
@@ -53,14 +51,12 @@ pub fn unwatch(element_id: &ElementId) {
   ElementRegistry::unwatch(element_id)
 }
 
-/// Initialize the AXIO system.
-pub fn initialize() {
-  // Check accessibility permissions and warn if not granted
-  platform::verify_accessibility_permissions();
+/// Get currently focused element and selection for a given PID.
+pub fn focus(pid: u32) -> (Option<AXElement>, Option<Selection>) {
+  platform::get_current_focus(pid)
 }
 
-/// Get currently focused element and selection for a given PID.
-/// Returns (focused_element, selection).
-pub fn get_current_focus(pid: u32) -> (Option<AXElement>, Option<Selection>) {
-  platform::get_current_focus(pid)
+/// Get all elements in the registry (for sync).
+pub fn all() -> Vec<AXElement> {
+  ElementRegistry::get_all()
 }

@@ -8,7 +8,7 @@
 import EventEmitter from "eventemitter3";
 import type {
   RpcRequest,
-  ServerEvent,
+  Event,
   AXElement,
   AXWindow,
   ElementId,
@@ -34,11 +34,8 @@ type RpcReturns = {
 };
 
 // Event types derived from ServerEvent
-type EventName = ServerEvent["event"];
-type EventData<E extends EventName> = Extract<
-  ServerEvent,
-  { event: E }
->["data"];
+type EventName = Event["event"];
+type EventData<E extends EventName> = Extract<Event, { event: E }>["data"];
 
 // Namespace events (e.g., 'window' catches 'window:added', 'window:changed', 'window:removed')
 type EventNamespace =
@@ -49,7 +46,7 @@ type EventNamespace =
   | "selection"
   | "sync"
   | "mouse";
-type NamespaceEvents = { [N in EventNamespace]: [ServerEvent] };
+type NamespaceEvents = { [N in EventNamespace]: [Event] };
 
 type AxioEvents = { [E in EventName]: [EventData<E>] } & NamespaceEvents;
 
@@ -285,7 +282,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
     // Event - apply to state and emit
     if (!msg.event) return;
 
-    const event = msg as ServerEvent;
+    const event = msg as Event;
     switch (event.event) {
       case "sync:init": {
         const {

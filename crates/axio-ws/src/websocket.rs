@@ -1,4 +1,4 @@
-use axio::{EventSink, ServerEvent, SyncInit};
+use axio::{elements, windows, Event, EventSink, SyncInit};
 use axum::{
   extract::{
     ws::{Message, WebSocket, WebSocketUpgrade},
@@ -38,7 +38,7 @@ impl WebSocketState {
 }
 
 impl EventSink for WebSocketState {
-  fn emit(&self, event: ServerEvent) {
+  fn emit(&self, event: Event) {
     if let Ok(json) = serde_json::to_string(&event) {
       let _ = self.sender.send(json);
     }
@@ -81,14 +81,14 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
 
   // Send initial state as sync:init (run on blocking thread pool)
   let init_result = tokio::task::spawn_blocking(|| {
-    let active = axio::get_active();
-    let windows = axio::get_windows();
-    let depth_order = axio::get_depth_order();
+    let active = windows::active();
+    let all_windows = windows::all();
+    let depth_order = windows::depth_order();
 
     // Query focused element and selection for the active window's app
     let (focused_element, selection) = if let Some(ref window_id) = active {
-      if let Some(window) = axio::get_window(window_id) {
-        axio::get_current_focus(window.process_id.as_u32())
+      if let Some(window) = windows::get(window_id) {
+        elements::focus(window.process_id.as_u32())
       } else {
         (None, None)
       }
@@ -97,14 +97,14 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
     };
 
     SyncInit {
-      windows,
-      elements: axio::element_registry::ElementRegistry::get_all(),
+      windows: all_windows,
+      elements: elements::all(),
       active_window: active.clone(),
       focused_window: active,
       focused_element,
       selection,
       depth_order,
-      accessibility_enabled: axio::check_accessibility_permissions(),
+      accessibility_enabled: axio::verify_permissions(),
     }
   })
   .await;
@@ -114,7 +114,7 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
     Err(_) => return,
   };
 
-  let event = ServerEvent::SyncInit(init);
+  let event = Event::SyncInit(init);
   if let Ok(msg) = serde_json::to_string(&event) {
     if socket.send(Message::Text(msg)).await.is_err() {
       return;
