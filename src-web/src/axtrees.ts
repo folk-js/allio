@@ -31,9 +31,25 @@ class AXTreeOverlay {
   private async init() {
     const render = () => this.render();
 
+    // Fetch root when we get initial sync data
+    this.axio.on("sync:init", async () => {
+      if (this.axio.activeWindow) {
+        await this.fetchWindowRoot(this.axio.activeWindow);
+        render();
+      }
+    });
+
     // Fetch root elements when active window changes
     this.axio.on("active:changed", async (data) => {
       await this.fetchWindowRoot(data.window_id);
+      render();
+    });
+
+    // Fetch root when a new window is added (in case it's active)
+    this.axio.on("window:added", async () => {
+      if (this.axio.activeWindow) {
+        await this.fetchWindowRoot(this.axio.activeWindow);
+      }
       render();
     });
 
@@ -44,7 +60,6 @@ class AXTreeOverlay {
         "focus:changed",
         "focus:element", // Tier 1: element focus changes
         "selection:changed", // Tier 1: text selection changes
-        "window:added",
         "window:changed",
         "window:removed",
         "element:added",
@@ -57,12 +72,6 @@ class AXTreeOverlay {
     // (tree element is marked with axio-opaque attribute)
 
     await this.axio.connect();
-
-    // Fetch root for initial active window (if any)
-    if (this.axio.activeWindow) {
-      await this.fetchWindowRoot(this.axio.activeWindow);
-      render();
-    }
   }
 
   /** Fetch root element and its immediate children for a window */
@@ -120,6 +129,7 @@ class AXTreeOverlay {
         <span class="legend-item"><span class="tree-label">label</span></span>
         <span class="legend-item"><span class="tree-value">value</span></span>
         <span class="legend-item"><span class="tree-actions">[actions]</span></span>
+        <span class="legend-item"><span class="tree-pid">[pid]</span></span>
       </div>
       <div class="tree-content">${this.renderNodes(rootElements)}</div>
     `;
@@ -155,7 +165,10 @@ class AXTreeOverlay {
 
     // Count
     const count = notDiscovered ? "?" : hasChildIds ? el.children!.length : 0;
-    const isTextInput = el.role === "textfield" || el.role === "searchfield" || el.role === "textarea";
+    const isTextInput =
+      el.role === "textfield" ||
+      el.role === "searchfield" ||
+      el.role === "textarea";
 
     return `
       <div class="tree-node" data-id="${el.id}">
@@ -189,6 +202,7 @@ class AXTreeOverlay {
               : ""
           }
           ${count ? `<span class="tree-count">(${count})</span>` : ""}
+          <span class="tree-pid">[${el.pid}]</span>
           ${
             isTextInput
               ? `

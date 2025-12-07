@@ -143,6 +143,8 @@ pub struct AXElement {
   pub id: ElementId,
   /// Window this element belongs to
   pub window_id: WindowId,
+  /// Process that owns this element (may differ from window's process for helper processes)
+  pub pid: ProcessId,
   /// None = root element of window
   pub parent_id: Option<ElementId>,
   /// Child element IDs. None = not yet fetched, Some([]) = no children

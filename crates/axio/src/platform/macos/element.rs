@@ -11,9 +11,30 @@ use objc2_core_foundation::CFHash;
 
 use crate::events::emit;
 use crate::platform::handles::ElementHandle;
-use crate::types::{AXElement, AxioError, AxioResult, ElementId, Event, WindowId};
+use crate::types::{AXElement, AxioError, AxioResult, ElementId, Event, ProcessId, WindowId};
 
 use super::mapping::{ax_action, role_from_macos};
+use crate::accessibility::Role;
+
+// =============================================================================
+// Role Heuristics
+// =============================================================================
+
+/// Refine role based on element attributes.
+///
+/// Groups with no label and no value are likely just layout containers
+/// with no semantic meaning—classify them as GenericContainer.
+fn refine_role(
+  role: Role,
+  label: &Option<String>,
+  value: &Option<crate::accessibility::Value>,
+) -> Role {
+  if role == Role::Group && label.is_none() && value.is_none() {
+    Role::GenericContainer
+  } else {
+    role
+  }
+}
 
 // =============================================================================
 // Element Building
@@ -33,9 +54,10 @@ pub fn build_element_from_handle(
   let attrs = handle.get_attributes(None);
 
   let platform_role = attrs.role.clone().unwrap_or_else(|| "Unknown".to_string());
-  let role = role_from_macos(&platform_role);
+  let base_role = role_from_macos(&platform_role);
+  let role = refine_role(base_role, &attrs.title, &attrs.value);
 
-  let subrole = if matches!(role, crate::accessibility::Role::Unknown) {
+  let subrole = if matches!(base_role, Role::Unknown) {
     Some(platform_role.clone())
   } else {
     attrs.subrole
@@ -44,6 +66,7 @@ pub fn build_element_from_handle(
   let element = AXElement {
     id: ElementId::new(),
     window_id: *window_id,
+    pid: ProcessId(pid),
     parent_id: parent_id.copied(),
     children: None,
     role,
@@ -117,8 +140,9 @@ pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
   // Use safe ElementHandle method for batch attribute fetch
   let attrs = info.handle.get_attributes(Some(&info.platform_role));
 
-  let role = role_from_macos(&info.platform_role);
-  let subrole = if matches!(role, crate::accessibility::Role::Unknown) {
+  let base_role = role_from_macos(&info.platform_role);
+  let role = refine_role(base_role, &attrs.title, &attrs.value);
+  let subrole = if matches!(base_role, Role::Unknown) {
     Some(info.platform_role.to_string())
   } else {
     attrs.subrole
@@ -127,6 +151,7 @@ pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
   let updated = AXElement {
     id: *element_id,
     window_id: info.window_id,
+    pid: ProcessId(info.pid),
     parent_id: info.parent_id,
     children: info.children,
     role,

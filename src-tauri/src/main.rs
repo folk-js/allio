@@ -8,6 +8,7 @@ use std::{
     Mutex,
   },
   thread,
+  time::Duration,
 };
 use tauri::{
   image::Image,
@@ -46,6 +47,9 @@ struct AppState {
   current_overlay: Mutex<String>,
   /// Handle to control the polling thread. Stops polling when dropped.
   polling_handle: Mutex<Option<PollingHandle>>,
+  /// Guards against menu updates during tray event handling.
+  /// The muda crate can crash if the menu is replaced while it's accessing menu items.
+  tray_event_active: AtomicBool,
 }
 
 impl Default for AppState {
@@ -54,6 +58,7 @@ impl Default for AppState {
       clickthrough_enabled: AtomicBool::new(false),
       current_overlay: Mutex::new(String::new()),
       polling_handle: Mutex::new(None),
+      tray_event_active: AtomicBool::new(false),
     }
   }
 }
@@ -233,20 +238,41 @@ fn build_or_update_tray(
   app: &AppHandle,
   overlay_files: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
+  build_or_update_tray_inner(app, overlay_files, false)
+}
+
+/// Update tray, optionally icon-only (safer during potential menu interactions).
+fn build_or_update_tray_inner(
+  app: &AppHandle,
+  overlay_files: &[String],
+  icon_only: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
   let state = app.state::<AppState>();
+
+  // Safety: Skip menu updates if a tray event is being processed.
+  // The muda crate can crash (use-after-free) if we replace the menu
+  // while it's still accessing the old menu items internally.
+  if !icon_only && state.tray_event_active.load(Ordering::SeqCst) {
+    return Ok(());
+  }
+
   let current_overlay = state.current_overlay.lock().unwrap().clone();
   let passthrough_enabled = state.clickthrough_enabled.load(Ordering::Relaxed);
 
-  let menu = build_tray_menu(app, overlay_files, &current_overlay, passthrough_enabled)?;
-
   if let Some(tray) = app.tray_by_id("main-tray") {
-    // Update existing tray menu and icon
-    tray.set_menu(Some(menu))?;
+    // Always safe to update icon
     if let Some(icon) = get_tray_icon(passthrough_enabled) {
       let _ = tray.set_icon(Some(icon));
     }
+
+    // Only update menu if not icon-only mode
+    if !icon_only {
+      let menu = build_tray_menu(app, overlay_files, &current_overlay, passthrough_enabled)?;
+      tray.set_menu(Some(menu))?;
+    }
   } else {
-    // Create new tray
+    // Create new tray (first time setup)
+    let menu = build_tray_menu(app, overlay_files, &current_overlay, passthrough_enabled)?;
     let icon = get_tray_icon(passthrough_enabled)
       .unwrap_or_else(|| app.default_window_icon().unwrap().clone());
 
@@ -264,22 +290,40 @@ fn handle_tray_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
   let id = event.id().0.clone();
   let handle = app.clone();
 
+  // Mark that we're handling a tray event - this blocks menu rebuilds.
+  // The muda crate crashes if the menu is replaced while it's still
+  // accessing the old menu item's String data internally.
+  let state = app.state::<AppState>();
+  state.tray_event_active.store(true, Ordering::SeqCst);
+
   // IMPORTANT: Defer execution to avoid use-after-free.
-  // The menu is rebuilt during these handlers, but muda is still
-  // accessing the old menu item strings. Deferring ensures the
-  // event handler completes before we replace the menu.
+  // We spawn a thread, sleep briefly to let muda finish its internal cleanup,
+  // then dispatch to main thread to handle the event.
   thread::spawn(move || {
+    // Wait for muda to finish accessing the old menu items.
+    // This delay is critical - without it, muda may still be iterating
+    // over menu items when we clear the tray_event_active flag.
+    thread::sleep(Duration::from_millis(50));
+
     let app = handle.clone();
-    let _ = handle.run_on_main_thread(move || match id.as_str() {
-      "toggle_passthrough" => {
-        let _ = toggle_passthrough(&app);
-      }
-      "load_url" => show_url_dialog(&app),
-      "load_file" => show_file_dialog(&app),
-      "quit" => app.exit(0),
-      "no_overlays" => {}
-      id => {
-        let _ = switch_overlay(&app, id);
+    let _ = handle.run_on_main_thread(move || {
+      // Re-enable menu updates now that muda has finished
+      app
+        .state::<AppState>()
+        .tray_event_active
+        .store(false, Ordering::SeqCst);
+
+      match id.as_str() {
+        "toggle_passthrough" => {
+          let _ = toggle_passthrough(&app);
+        }
+        "load_url" => show_url_dialog(&app),
+        "load_file" => show_file_dialog(&app),
+        "quit" => app.exit(0),
+        "no_overlays" => {}
+        id => {
+          let _ = switch_overlay(&app, id);
+        }
       }
     });
   });
@@ -401,7 +445,11 @@ fn create_rpc_handler(app_handle: AppHandle) -> axio_ws::CustomRpcHandler {
               panel.make_key_window();
             }
           }
-          let _ = build_or_update_tray(&h, &get_overlay_files());
+          // Use icon-only update to avoid rebuilding the menu.
+          // This is much safer during potential tray interactions.
+          // The menu text ("Enable/Disable Passthrough") will be updated
+          // next time the user actually clicks on the tray.
+          let _ = build_or_update_tray_inner(&h, &get_overlay_files(), true);
         });
       });
       Some(serde_json::json!({ "result": { "enabled": enabled, "changed": true } }))
@@ -414,7 +462,8 @@ fn create_rpc_handler(app_handle: AppHandle) -> axio_ws::CustomRpcHandler {
         .ok_or("Window not found")
         .and_then(|w| w.set_ignore_cursor_events(enabled).map_err(|_| "Failed"));
 
-      let _ = build_or_update_tray(&app_handle, &get_overlay_files());
+      // Use icon-only update to avoid rebuilding the menu during potential interactions
+      let _ = build_or_update_tray_inner(&app_handle, &get_overlay_files(), true);
 
       Some(match result {
         Ok(_) => serde_json::json!({ "result": { "enabled": enabled } }),

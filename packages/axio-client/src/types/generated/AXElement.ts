@@ -2,6 +2,7 @@
 import type { Action } from "./Action";
 import type { Bounds } from "./Bounds";
 import type { ElementId } from "./ElementId";
+import type { ProcessId } from "./ProcessId";
 import type { Role } from "./Role";
 import type { Value } from "./Value";
 import type { WindowId } from "./WindowId";
@@ -15,6 +16,10 @@ export type AXElement = { id: ElementId,
  * Window this element belongs to
  */
 window_id: WindowId, 
+/**
+ * Process that owns this element (may differ from window's process for helper processes)
+ */
+pid: ProcessId, 
 /**
  * None = root element of window
  */

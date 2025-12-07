@@ -51,6 +51,23 @@ pub fn get_window_root(window_id: &WindowId) -> AxioResult<AXElement> {
 // Element at Position
 // =============================================================================
 
+/// Retry delays (in ms) for Chromium/Electron lazy accessibility initialization.
+///
+/// Chromium/Electron apps lazily build their accessibility spatial index on a per-region
+/// basis. The first hit test at any coordinate triggers async initialization of that region,
+/// returning a window-sized fallback container. Subsequent queries return the actual element.
+///
+/// We retry with increasing delays to give Chromium time to process:
+/// - Attempt 0: Immediate (often returns fallback)
+/// - Attempt 1: 10ms delay (usually sufficient for Chromium to initialize)
+/// - Attempt 2: 25ms delay (handles slower systems/complex trees)
+const HIT_TEST_RETRY_DELAYS_MS: [u64; 3] = [0, 10, 25];
+
+/// Tolerance in pixels for detecting window-sized fallback containers.
+/// Chromium's fallback container has EXACTLY the same bounds as the window,
+/// so we use 0.0 for precise matching.
+const FALLBACK_CONTAINER_TOLERANCE_PX: f64 = 0.0;
+
 /// Get the accessibility element at a specific screen position.
 pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
   let window = crate::registry::find_window_at_point(x, y).ok_or_else(|| {
@@ -60,11 +77,63 @@ pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
   let window_id = window.id;
   let pid = window.process_id.0;
 
-  // Use safe ElementHandle method
   let app_handle = ElementHandle::new(app_element(pid));
-  let element_handle = app_handle.element_at_position(x, y).ok_or_else(|| {
+
+  // Retry hit testing to handle Chromium/Electron's lazy accessibility initialization.
+  // See HIT_TEST_RETRY_DELAYS_MS for rationale.
+  let mut element_handle = None;
+  let mut fallback_container = None;
+
+  for (_, &delay_ms) in HIT_TEST_RETRY_DELAYS_MS.iter().enumerate() {
+    if delay_ms > 0 {
+      std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+    }
+
+    let Some(hit) = app_handle.element_at_position(x, y) else {
+      continue;
+    };
+
+    let attrs = hit.get_attributes(None);
+    let is_fallback_container = attrs.role.as_deref() == Some("AXGroup")
+      && attrs
+        .bounds
+        .as_ref()
+        .map(|b| b.matches(&window.bounds, FALLBACK_CONTAINER_TOLERANCE_PX))
+        .unwrap_or(false);
+
+    if is_fallback_container {
+      fallback_container = Some(hit);
+      continue;
+    }
+
+    element_handle = Some(hit);
+    break;
+  }
+
+  // Use real element if found, otherwise fall back to container (better than nothing)
+  let mut element_handle = element_handle.or(fallback_container).ok_or_else(|| {
     AxioError::AccessibilityError(format!("No element found at ({x}, {y}) in app {pid}"))
   })?;
+
+  // Try recursive hit testing - drill down through nested containers
+  let raw_attrs = element_handle.get_attributes(None);
+  const MAX_DEPTH: u8 = 10;
+  for _ in 1..=MAX_DEPTH {
+    let Some(deeper) = element_handle.element_at_position(x, y) else {
+      break;
+    };
+
+    let deeper_attrs = deeper.get_attributes(None);
+    let same_element = deeper_attrs.bounds == raw_attrs.bounds
+      && deeper_attrs.role == raw_attrs.role
+      && deeper_attrs.title == raw_attrs.title;
+
+    if same_element {
+      break;
+    }
+
+    element_handle = deeper;
+  }
 
   build_element_from_handle(element_handle, &window_id, pid, None).ok_or_else(|| {
     AxioError::AccessibilityError(format!("Element at ({x}, {y}) was previously destroyed"))
@@ -88,7 +157,7 @@ pub fn enable_accessibility_for_pid(pid: crate::ProcessId) {
     if result == AXError::Success {
       log::debug!("Enabled accessibility for PID {raw_pid}");
     } else if result != AXError::AttributeUnsupported {
-      log::warn!("Failed to enable accessibility for PID {raw_pid} (error: {result:?})");
+      log::debug!("Failed to enable accessibility for PID {raw_pid} (error: {result:?})");
     }
   }
 }
@@ -122,4 +191,3 @@ pub fn fetch_window_handle(window: &crate::AXWindow) -> Option<ElementHandle> {
 
   None
 }
-
