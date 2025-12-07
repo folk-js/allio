@@ -2,6 +2,41 @@
 
 > Design document for refactoring the accessibility registry and platform code.
 
+## Progress
+
+### ✅ Phase 1: Accessibility Types (Complete)
+
+- [x] Created `accessibility/` module with cross-platform types
+  - `Role` - 36 roles with metadata methods (`is_writable()`, `is_focusable()`, etc.)
+  - `Action` - 11 actions (Press, ShowMenu, Increment, Decrement, Confirm, Cancel, Raise, Pick, Expand, Collapse, ScrollToVisible)
+  - `Value` - typed values with `From` impls
+  - `Notification` - 7 notification types with `ALWAYS` and `for_watching()`
+- [x] Created `platform/macos_platform/mapping.rs` with:
+  - `ax_role::*`, `ax_action::*`, `ax_notification::*` constants
+  - Bidirectional mapping functions (`role_from_macos`, `action_from_macos`, etc.)
+- [x] Migrated `AXElement` to use new `Role`, `Action`, `Value` types
+- [x] Removed old `AXRole`, `AXAction`, `AXValue` from `types.rs`
+- [x] Regenerated TypeScript types
+- [x] Updated `handles.rs` to use new types + `action_from_macos()`
+- [x] Updated `macos.rs` to use `role_from_macos()` and `Role` methods
+
+### 🔲 Phase 2: Registry Unification (Next)
+
+- [ ] Create `registry/` module with unified Registry
+- [ ] Migrate from `ElementRegistry` + `APP_OBSERVERS` to single Registry
+- [ ] Migrate `AXNotification` → use `Notification` type + mapping functions
+- [ ] Registry stores handles (generic `ElementHandle`, not macOS-specific)
+- [ ] Implement cascading cleanup:
+  - Individual element removal
+  - Window removal → cascades to all elements in window
+  - Process removal → cascades to all windows → cascades to elements
+- [ ] Dead hash cleanup on window removal (+ note: explore if dead_hashes needed at all)
+
+### 🔲 Phase 3: Platform Organization (Future)
+
+- [ ] Split `macos.rs` (~960 lines) into sub-modules
+- [ ] Clean up observer management
+
 ## Goals
 
 1. **Clear lifecycle management** - Process, window, and element lifecycles are explicit
@@ -39,40 +74,75 @@ Element (ElementId)
 └─ owns: platform handle, notification subscriptions
 ```
 
-## Proposed File Structure
+## File Structure
+
+### Current State
 
 ```
 crates/axio/src/
   lib.rs                    # Re-exports
+  types.rs                  # AXElement, AXWindow, Event, IDs, Bounds, etc.
 
-  accessibility/            # Cross-platform abstractions
+  accessibility/            # ✅ NEW - Cross-platform abstractions
     mod.rs
     role.rs                 # Role enum + metadata (writable, focusable, etc.)
     action.rs               # Action enum
     notification.rs         # Notification types
     value.rs                # Value types (String, Number, Boolean)
-    element.rs              # Element struct (the public data type)
 
-  registry/                 # Unified state management
+  element_registry.rs       # Current registry (to be replaced)
+  window_registry.rs        # Window tracking
+  events.rs                 # Event emission
+
+  platform/
+    mod.rs                  # Re-exports
+    handles.rs              # ElementHandle, ObserverHandle
+    macos.rs                # ~960 lines (to be split)
+    macos_cf.rs             # CF helpers
+    macos_windows.rs        # Window enumeration
+    macos_platform/         # ✅ NEW - organized macOS code
+      mod.rs
+      mapping.rs            # ax_role/ax_action/ax_notification constants + bidirectional mapping
+```
+
+### Target State
+
+```
+crates/axio/src/
+  lib.rs
+  types.rs                  # IDs, Bounds, Event (slim)
+
+  accessibility/            # ✅ Done
+    mod.rs
+    role.rs
+    action.rs
+    notification.rs
+    value.rs
+
+  registry/                 # 🔲 TODO - Unified state management
     mod.rs                  # Registry struct + public API
     process.rs              # ProcessState
     window.rs               # WindowState
-    element.rs              # ElementState (internal, includes handle)
+    element.rs              # ElementState (internal)
 
-  platform/                 # Platform implementations
-    mod.rs                  # Shared types, maybe Platform trait
-    macos/                  # macOS-specific
-      mod.rs                # Re-exports
+  platform/
+    mod.rs
+    handles.rs
+    macos_platform/         # 🔲 TODO - Complete migration
+      mod.rs
+      mapping.rs            # ✅ Done
       observer.rs           # AXObserver management & callbacks
       element.rs            # Element handle operations
       windows.rs            # Window enumeration (CGWindowList)
       attributes.rs         # Attribute fetching
-      mapping.rs            # Platform role/action → our types
 ```
 
 ## Key Types
 
-### accessibility/role.rs
+> Note: The `accessibility/` module is now implemented. Code samples below are for reference.
+> See actual implementation in `crates/axio/src/accessibility/`.
+
+### accessibility/role.rs ✅
 
 ```rust
 /// Semantic UI role (cross-platform)
@@ -144,7 +214,7 @@ impl Role {
 }
 ```
 
-### accessibility/notification.rs
+### accessibility/notification.rs ✅
 
 ```rust
 /// Notifications we can subscribe to
@@ -181,7 +251,7 @@ impl Notification {
 }
 ```
 
-### accessibility/element.rs
+### accessibility/element.rs (Future - currently in types.rs as AXElement)
 
 ```rust
 /// The public element type (what we expose via API)
@@ -209,7 +279,7 @@ pub struct Element {
 }
 ```
 
-### accessibility/value.rs
+### accessibility/value.rs ✅
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -231,7 +301,27 @@ impl Value {
 
 ## Registry Design
 
-### registry/mod.rs
+> Note: The unified Registry is not yet implemented. This section describes the target design.
+> Current state uses `element_registry.rs` + `APP_OBSERVERS` in `macos.rs`.
+
+### Design Decisions (Updated)
+
+1. **Handles stay in Registry** - `ElementState` includes the platform handle (`ElementHandle`).
+   The handle type is generic (defined in `platform/handles.rs`), not macOS-specific.
+   This avoids extra indirection while keeping the type portable.
+
+2. **Registry emits events** - Coupling to `events::emit()` is acceptable since events are core to axio.
+
+3. **Dead hashes** - Cleaned up when window is removed (remove hashes for elements in that window).
+   Accept unbounded growth otherwise. Future exploration: may not need dead_hashes at all if
+   we can detect stale elements another way.
+
+4. **Cascade behavior**:
+   - Elements can be removed individually (e.g., `AXUIElementDestroyed` notification)
+   - Window removal cascades to all elements in that window
+   - Process removal cascades to all windows, which cascade to elements
+
+### registry/mod.rs (Planned)
 
 ```rust
 pub struct Registry {
@@ -245,6 +335,7 @@ pub struct Registry {
   hash_to_element: HashMap<u64, ElementId>,
 
   // Dead tracking (prevent re-registration of destroyed elements)
+  // Note: Pruned on window removal. May explore removing entirely in future.
   dead_hashes: HashSet<u64>,
 
   // Current focus
@@ -253,7 +344,7 @@ pub struct Registry {
 
 struct ProcessState {
   pid: u32,
-  // Observer lives in Platform, not here
+  observer: ObserverHandle,  // One per process
 }
 
 struct WindowState {
@@ -263,7 +354,9 @@ struct WindowState {
 
 struct ElementState {
   element: Element,
+  handle: ElementHandle,  // Platform handle (generic type from platform/handles.rs)
   hash: u64,
+  pid: u32,  // For observer operations
   subscriptions: HashSet<Notification>,  // Logical subscription state
 }
 ```
@@ -401,22 +494,17 @@ impl Registry {
 └─────────────────────────────────────────────────────────┘
 ```
 
-### Platform Stores Handles
+### Registry Stores Handles
 
-The Registry stores `Element` (the data) and logical subscription state.
-The Platform stores the actual `AXUIElement` handles for operations.
+Registry stores the `ElementHandle` directly in `ElementState`. The handle type is defined
+in `platform/handles.rs` as a generic wrapper (on macOS it wraps `CFRetained<AXUIElement>`).
+This keeps the code simpler and avoids synchronization between separate stores.
 
 ```rust
-// platform/macos/handles.rs
-static HANDLES: LazyLock<Mutex<HashMap<ElementId, ElementHandle>>> = ...;
-
-fn store_handle(id: ElementId, handle: ElementHandle) { ... }
-fn get_handle(id: &ElementId) -> Option<ElementHandle> { ... }
-fn remove_handle(id: &ElementId) { ... }
+// In Registry
+let handle = registry.get_handle(element_id)?;
+handle.get_string("AXValue")  // Platform operation using handle from Registry
 ```
-
-This keeps Registry decoupled from platform types while Platform has
-everything it needs to perform operations.
 
 ### Focus Change Flow (Example)
 
@@ -440,13 +528,12 @@ fn handle_focus_notification(ax_element: CFRetained<AXUIElement>, pid: u32) {
       // New element discovered via focus
       let window_id = determine_window(pid, &handle);
       let element = build_element_from_handle(&handle, window_id, pid, None);
-      let id = registry.register(element, hash)?;
 
-      // Store handle (Option A)
-      store_handle(id, handle.clone());
+      // Register stores element + handle together
+      let id = registry.register(element, handle, hash, pid)?;
 
-      // Subscribe to destruction
-      subscribe_destruction(id, &handle, pid);
+      // Subscribe to destruction (uses Notification type)
+      registry.subscribe_destruction(id);
 
       id
     };
@@ -463,31 +550,30 @@ fn handle_focus_notification(ax_element: CFRetained<AXUIElement>, pid: u32) {
 
 unsafe extern "C-unwind" fn observer_callback(...) {
   let element_id = lookup_context(refcon)?;
-  let notification_name = notification.as_ref().to_string();
+  let notification_str = notification.as_ref().to_string();
 
-  match notification_name.as_str() {
-    "AXUIElementDestroyed" => {
-      // Clean up platform state
-      remove_handle(&element_id);
-      remove_subscription(&element_id);
+  // Use mapping to convert macOS string → Notification enum
+  let Some(notif) = notification_from_macos(&notification_str) else {
+    return;
+  };
 
-      // Tell registry
-      with_registry(|registry| {
+  with_registry(|registry| {
+    match notif {
+      Notification::Destroyed => {
+        // Registry removes element, adds to dead_hashes, emits event
         registry.handle_destroyed(element_id);
-      });
-    }
+      }
 
-    "AXValueChanged" => {
-      if let Some(handle) = get_handle(&element_id) {
-        if let Some(value) = handle.get_value() {
-          with_registry(|registry| {
+      Notification::ValueChanged => {
+        if let Some(handle) = registry.get_handle(element_id) {
+          if let Some(value) = handle.get_value() {
             registry.update_value(element_id, value);
-          });
+          }
         }
       }
+      // ...
     }
-    // ...
-  }
+  });
 }
 ```
 
@@ -495,46 +581,31 @@ unsafe extern "C-unwind" fn observer_callback(...) {
 
 **Logical state** (which notifications) lives in Registry's `ElementState.subscriptions`.
 
-**Operational state** (how to deliver) lives in Platform:
+**Operational state** (how to subscribe with macOS) uses the mapping functions:
 
 ```rust
-// platform/macos/subscription.rs
+// Registry method for subscribing
+impl Registry {
+  pub fn subscribe(&mut self, element_id: ElementId, notif: Notification) -> AxioResult<()> {
+    let state = self.elements.get_mut(&element_id)?;
+    let process = self.processes.get(&state.pid)?;
 
-struct OperationalState {
-  observer: ObserverHandle,
-  context_handle: *mut c_void,
-}
+    // Convert our Notification to macOS string using mapping
+    let notif_str = notification_to_macos(notif);
 
-static SUBSCRIPTIONS: LazyLock<Mutex<HashMap<ElementId, OperationalState>>> = ...;
+    // Subscribe with macOS API
+    unsafe {
+      process.observer.add_notification(
+        state.handle.inner(),
+        &notif_str,
+        state.context_handle
+      );
+    }
 
-pub fn subscribe(element_id: ElementId, handle: &ElementHandle, notif: Notification, pid: u32) {
-  // Get or create operational state
-  let mut subs = SUBSCRIPTIONS.lock();
-  let state = subs.entry(element_id).or_insert_with(|| {
-    let observer = get_or_create_observer(pid);
-    let context = register_context(element_id);
-    OperationalState { observer, context_handle: context }
-  });
-
-  // Actually subscribe with macOS
-  let notif_str = notif.to_macos_string();
-  unsafe {
-    state.observer.add_notification(handle.inner(), &notif_str, state.context_handle);
+    // Track logical state
+    state.subscriptions.insert(notif);
+    Ok(())
   }
-
-  // Update Registry's logical state
-  with_registry(|r| r.mark_subscribed(element_id, notif));
-}
-
-pub fn unsubscribe_all(element_id: &ElementId) {
-  let mut subs = SUBSCRIPTIONS.lock();
-  if let Some(state) = subs.remove(element_id) {
-    // Unsubscribe from macOS
-    // ...
-    unregister_context(state.context_handle);
-  }
-
-  // Registry cleanup happens via handle_destroyed()
 }
 ```
 
@@ -557,58 +628,42 @@ For now, it's fine to have macOS-specific code that directly calls Registry. The
 
 ## Migration Path
 
-1. **Create `accessibility/` module** with Role, Action, Notification, Value, Element
-2. **Create `registry/` module** with the new unified Registry
-3. **Refactor `platform/macos/`** into sub-modules (observer, element, windows, etc.)
-4. **Update API layer** to use new Registry
-5. **Remove old `element_registry.rs`** and clean up `APP_OBSERVERS` usage
-6. **Test thoroughly** - element lifecycle, focus tracking, cleanup
+1. ✅ **Create `accessibility/` module** with Role, Action, Notification, Value
+2. ✅ **Create `platform/macos_platform/mapping.rs`** with constants and bidirectional mapping
+3. ✅ **Migrate types** - AXElement now uses Role, Action, Value; old types removed
+4. 🔲 **Create `registry/` module** with the new unified Registry
+5. 🔲 **Refactor `platform/macos/`** into sub-modules (observer, element, windows, etc.)
+6. 🔲 **Update API layer** to use new Registry
+7. 🔲 **Remove old `element_registry.rs`** and clean up `APP_OBSERVERS` usage
+8. 🔲 **Test thoroughly** - element lifecycle, focus tracking, cleanup
 
 ## Design Decisions
 
-### Subscription State: Registry (not Platform)
+### Registry Owns Everything
 
-The Registry tracks _logical_ subscription state (which notifications are active per element).
-The Platform tracks _operational_ state (observer handles, context pointers).
+Registry stores:
+
+- Element data (`Element`)
+- Platform handle (`ElementHandle` - generic, not macOS-specific)
+- Subscriptions (`HashSet<Notification>`)
+- Context pointer for callbacks
 
 ```rust
-// registry/element.rs
 struct ElementState {
   element: Element,
+  handle: ElementHandle,
   hash: u64,
-  subscriptions: HashSet<Notification>,  // Logical state in Registry
+  pid: u32,
+  subscriptions: HashSet<Notification>,
+  context_handle: *mut c_void,  // For observer callbacks
 }
-
-// platform/macos/subscription.rs
-struct OperationalState {
-  observer: ObserverHandle,
-  context: *mut c_void,
-}
-static SUBSCRIPTIONS: HashMap<ElementId, OperationalState>;  // Operational state in Platform
 ```
 
-**Why Registry knows:**
+This keeps everything in one place:
 
-- Complete picture of element lifecycle in one place
-- API can answer "is element X watched?" without platform call
-- Enables features like "list all watched elements" or "watch all matching X"
-- Registry is the source of truth; Platform is the mechanism
-
-**Flow:**
-
-```rust
-// When subscribing
-platform::subscribe(element_id, handle, Notification::ValueChanged);
-registry.mark_subscribed(element_id, Notification::ValueChanged);
-
-// When unsubscribing
-platform::unsubscribe(element_id, Notification::ValueChanged);
-registry.mark_unsubscribed(element_id, Notification::ValueChanged);
-
-// Query
-registry.is_watched(element_id) -> bool
-registry.subscriptions(element_id) -> &HashSet<Notification>
-```
+- No synchronization between separate stores
+- API can answer "is element X watched?" directly
+- Cleanup is straightforward (remove element = remove everything)
 
 **Note:** Destruction notification is always implicitly subscribed for all elements.
 Registry can represent this with a method rather than storing it:
