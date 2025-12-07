@@ -114,6 +114,7 @@ pub fn dispatch(request: RpcRequest) -> Result<RpcResponse, String> {
   }
 }
 
+// TODO: can this be removed?
 #[cfg(test)]
 mod tests {
   use super::*;

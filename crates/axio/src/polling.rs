@@ -139,7 +139,7 @@ const CLEANUP_INTERVAL: u64 = 1250;
 /// Returns a `PollingHandle` that can be used to stop the polling thread.
 /// The polling will automatically stop when the handle is dropped.
 pub fn start_polling(config: PollingOptions) -> PollingHandle {
-  use crate::window_registry;
+  use crate::registry;
 
   let stop_signal = Arc::new(AtomicBool::new(false));
   let stop_signal_clone = Arc::clone(&stop_signal);
@@ -164,20 +164,47 @@ pub fn start_polling(config: PollingOptions) -> PollingHandle {
       }
 
       if let Some(raw_windows) = poll_windows(&config) {
-        let result = window_registry::update(raw_windows);
-        let depth_order = result.depth_order;
+        // Get previous window state for comparison
+        let prev_windows: HashSet<WindowId> = registry::get_windows()
+          .into_iter()
+          .map(|w| w.id)
+          .collect();
+        let prev_window_data: std::collections::HashMap<WindowId, crate::AXWindow> =
+          registry::get_windows().into_iter().map(|w| (w.id, w)).collect();
 
-        // Emit events for removed windows (consume vec to avoid cloning IDs)
-        for removed_id in result.removed {
+        // Update registry (handles cascading cleanup internally)
+        registry::update_windows(raw_windows.clone());
+
+        // Get new state
+        let new_windows = registry::get_windows();
+        let new_ids: HashSet<WindowId> = new_windows.iter().map(|w| w.id).collect();
+        let depth_order = registry::get_depth_order();
+
+        // Calculate diffs
+        let removed: Vec<WindowId> = prev_windows.difference(&new_ids).copied().collect();
+        let added: Vec<WindowId> = new_ids.difference(&prev_windows).copied().collect();
+        let changed: Vec<WindowId> = new_windows
+          .iter()
+          .filter(|w| {
+            prev_window_data
+              .get(&w.id)
+              .map(|prev| prev != *w)
+              .unwrap_or(false)
+          })
+          .map(|w| w.id)
+          .collect();
+
+        // Emit events for removed windows
+        for removed_id in removed {
           emit(Event::WindowRemoved {
             window_id: removed_id,
             depth_order: depth_order.clone(),
           });
         }
 
-        // Emit events for added windows (consume vec to avoid cloning IDs)
-        for added_id in result.added {
-          if let Some(window) = window_registry::get_window(&added_id) {
+        // Emit events for added windows
+        for added_id in added {
+          if let Some(window) = registry::get_window(&added_id) {
             platform::enable_accessibility_for_pid(window.process_id);
             emit(Event::WindowAdded {
               window,
@@ -186,9 +213,9 @@ pub fn start_polling(config: PollingOptions) -> PollingHandle {
           }
         }
 
-        // Emit events for changed windows (consume vec to avoid cloning IDs)
-        for changed_id in result.changed {
-          if let Some(window) = window_registry::get_window(&changed_id) {
+        // Emit events for changed windows
+        for changed_id in changed {
+          if let Some(window) = registry::get_window(&changed_id) {
             emit(Event::WindowChanged {
               window,
               depth_order: depth_order.clone(),
@@ -197,8 +224,7 @@ pub fn start_polling(config: PollingOptions) -> PollingHandle {
         }
 
         // Focus tracking
-        let windows = window_registry::get_windows();
-        let focused_window = windows.iter().find(|w| w.focused);
+        let focused_window = new_windows.iter().find(|w| w.focused);
         let current_focused_id = focused_window.map(|w| w.id);
 
         if current_focused_id != last_focused_id {
@@ -211,7 +237,7 @@ pub fn start_polling(config: PollingOptions) -> PollingHandle {
         // Active window tracking
         if let Some(focused_id) = current_focused_id {
           if last_active_id.as_ref() != Some(&focused_id) {
-            window_registry::set_active(Some(focused_id));
+            registry::set_active_window(Some(focused_id));
             emit(Event::ActiveChanged {
               window_id: focused_id,
             });
@@ -221,8 +247,8 @@ pub fn start_polling(config: PollingOptions) -> PollingHandle {
 
         // Periodic cleanup
         if poll_count % CLEANUP_INTERVAL == 0 {
-          let active_pids: HashSet<ProcessId> = windows.iter().map(|w| w.process_id).collect();
-          let _observers_cleaned = platform::cleanup_dead_observers(&active_pids);
+          let active_pids: HashSet<ProcessId> = new_windows.iter().map(|w| w.process_id).collect();
+          let _observers_cleaned = registry::cleanup_dead_processes(&active_pids);
         }
       }
 

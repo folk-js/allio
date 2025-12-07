@@ -369,12 +369,12 @@ fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
 
   if previous_was_watchable && !same_element {
     if let Some(ref prev_id) = previous_element_id {
-      crate::element_registry::ElementRegistry::unwatch(prev_id);
+      crate::registry::unwatch_element(prev_id);
     }
   }
 
   if new_is_watchable && !same_element {
-    let _ = crate::element_registry::ElementRegistry::watch(&ax_element.id);
+    let _ = crate::registry::watch_element(&ax_element.id);
   }
 
   emit(Event::FocusElement {
@@ -537,8 +537,6 @@ fn handle_notification(
   notification: &str,
   ax_element: CFRetained<AXUIElement>,
 ) {
-  use crate::element_registry::ElementRegistry;
-
   let Ok(notification_type) = notification.parse::<AXNotification>() else {
     return;
   };
@@ -548,9 +546,9 @@ fn handle_notification(
       let handle = ElementHandle::new(ax_element);
       let attrs = handle.get_attributes(None);
       if let Some(value) = attrs.value {
-        if let Ok(mut element) = ElementRegistry::get(element_id) {
+        if let Ok(mut element) = crate::registry::get_element(element_id) {
           element.value = Some(value);
-          let _ = ElementRegistry::update(element_id, element.clone());
+          let _ = crate::registry::update_element(element_id, element.clone());
           emit(Event::ElementChanged {
             element: element.clone(),
           });
@@ -562,9 +560,9 @@ fn handle_notification(
       let handle = ElementHandle::new(ax_element);
       if let Some(label) = handle.get_string("AXTitle") {
         if !label.is_empty() {
-          if let Ok(mut element) = ElementRegistry::get(element_id) {
+          if let Ok(mut element) = crate::registry::get_element(element_id) {
             element.label = Some(label);
-            let _ = ElementRegistry::update(element_id, element.clone());
+            let _ = crate::registry::update_element(element_id, element.clone());
             emit(Event::ElementChanged {
               element: element.clone(),
             });
@@ -575,10 +573,8 @@ fn handle_notification(
 
     AXNotification::UIElementDestroyed => {
       log::debug!("UIElementDestroyed notification for element {}", element_id);
-      ElementRegistry::remove_element(element_id);
-      emit(Event::ElementRemoved {
-        element_id: *element_id,
-      });
+      crate::registry::remove_element(element_id);
+      // Event is emitted by registry
     }
 
     _ => {}
@@ -599,8 +595,6 @@ pub fn build_element_from_handle(
   pid: u32,
   parent_id: Option<&ElementId>,
 ) -> Option<AXElement> {
-  use crate::element_registry::ElementRegistry;
-
   ensure_app_observer(pid);
 
   // Fetch all attributes in ONE IPC call - safe method!
@@ -632,21 +626,17 @@ pub fn build_element_from_handle(
     actions: attrs.actions,
   };
 
-  ElementRegistry::register(element, handle, pid, &platform_role)
+  crate::registry::register_element(element, handle, pid, &platform_role)
 }
 
 /// Discover and register children of an element.
 pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResult<Vec<AXElement>> {
-  use crate::element_registry::ElementRegistry;
-
-  let (parent_handle, window_id, pid) = ElementRegistry::with_stored(parent_id, |stored| {
-    (stored.handle.clone(), stored.element.window_id, stored.pid)
-  })?;
+  let info = crate::registry::get_stored_element_info(parent_id)?;
 
   // Use safe ElementHandle method
-  let child_handles = parent_handle.get_children();
+  let child_handles = info.handle.get_children();
   if child_handles.is_empty() {
-    ElementRegistry::set_children(parent_id, vec![])?;
+    crate::registry::set_element_children(parent_id, vec![])?;
     return Ok(vec![]);
   }
 
@@ -655,13 +645,13 @@ pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResu
 
   for child_handle in child_handles.into_iter().take(max_children) {
     // Skip children that were previously destroyed
-    if let Some(child) = build_element_from_handle(child_handle, &window_id, pid, Some(parent_id)) {
+    if let Some(child) = build_element_from_handle(child_handle, &info.window_id, info.pid, Some(parent_id)) {
       child_ids.push(child.id);
       children.push(child);
     }
   }
 
-  ElementRegistry::set_children(parent_id, child_ids)?;
+  crate::registry::set_element_children(parent_id, child_ids)?;
 
   for child in &children {
     emit(Event::ElementAdded {
@@ -669,7 +659,7 @@ pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResu
     });
   }
 
-  if let Ok(updated_parent) = ElementRegistry::get(parent_id) {
+  if let Ok(updated_parent) = crate::registry::get_element(parent_id) {
     emit(Event::ElementChanged {
       element: updated_parent.clone(),
     });
@@ -680,34 +670,23 @@ pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResu
 
 /// Refresh an element's attributes from the platform.
 pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
-  use crate::element_registry::ElementRegistry;
-
-  let (handle, window_id, parent_id, children, platform_role) =
-    ElementRegistry::with_stored(element_id, |stored| {
-      (
-        stored.handle.clone(),
-        stored.element.window_id,
-        stored.element.parent_id,
-        stored.element.children.clone(),
-        stored.platform_role.clone(),
-      )
-    })?;
+  let info = crate::registry::get_stored_element_info(element_id)?;
 
   // Use safe ElementHandle method for batch attribute fetch
-  let attrs = handle.get_attributes(Some(&platform_role));
+  let attrs = info.handle.get_attributes(Some(&info.platform_role));
 
-  let role = crate::platform::macos_platform::mapping::role_from_macos(&platform_role);
+  let role = crate::platform::macos_platform::mapping::role_from_macos(&info.platform_role);
   let subrole = if matches!(role, crate::accessibility::Role::Unknown) {
-    Some(platform_role.to_string())
+    Some(info.platform_role.to_string())
   } else {
     attrs.subrole
   };
 
   let updated = AXElement {
     id: *element_id,
-    window_id,
-    parent_id,
-    children,
+    window_id: info.window_id,
+    parent_id: info.parent_id,
+    children: info.children,
     role,
     subrole,
     label: attrs.title,
@@ -720,7 +699,7 @@ pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
     actions: attrs.actions,
   };
 
-  ElementRegistry::update(element_id, updated.clone())?;
+  crate::registry::update_element(element_id, updated.clone())?;
   Ok(updated)
 }
 
@@ -743,7 +722,7 @@ pub fn get_window_elements(pid: u32) -> AxioResult<Vec<ElementHandle>> {
 
 /// Get the root element for a window.
 pub fn get_window_root(window_id: &WindowId) -> AxioResult<AXElement> {
-  let (window, handle) = crate::window_registry::get_with_handle(window_id)
+  let (window, handle) = crate::registry::get_window_with_handle(window_id)
     .ok_or_else(|| AxioError::WindowNotFound(*window_id))?;
 
   let window_handle =
@@ -774,7 +753,7 @@ pub fn enable_accessibility_for_pid(pid: crate::ProcessId) {
 
 /// Get the accessibility element at a specific screen position.
 pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
-  let window = crate::window_registry::find_at_point(x, y).ok_or_else(|| {
+  let window = crate::registry::find_window_at_point(x, y).ok_or_else(|| {
     AxioError::AccessibilityError(format!("No tracked window found at position ({x}, {y})"))
   })?;
 
@@ -930,6 +909,73 @@ pub fn unsubscribe_destruction_notification(
       .inner()
       .remove_notification(handle.inner(), &notif_cfstring);
   }
+  unregister_observer_context(context_handle);
+}
+
+// =============================================================================
+// New Notification API (uses Notification enum from accessibility module)
+// =============================================================================
+
+use crate::accessibility::Notification;
+use crate::platform::macos_platform::mapping::notification_to_macos;
+
+/// Subscribe to notifications for an element (using new Notification type).
+pub fn subscribe_notifications(
+  element_id: &ElementId,
+  handle: &ElementHandle,
+  observer: ObserverHandle,
+  _platform_role: &str,
+  notifications: &[Notification],
+) -> AxioResult<*mut ObserverContextHandle> {
+  if notifications.is_empty() {
+    return Err(AxioError::NotSupported("No notifications to subscribe".into()));
+  }
+
+  let context_handle = register_observer_context(*element_id);
+
+  let mut registered = 0;
+  for notification in notifications {
+    let notif_str = notification_to_macos(*notification);
+    let notif_cfstring = CFString::from_str(notif_str);
+    unsafe {
+      let result = observer.inner().add_notification(
+        handle.inner(),
+        &notif_cfstring,
+        context_handle as *mut c_void,
+      );
+      if result == AXError::Success {
+        registered += 1;
+      }
+    }
+  }
+
+  if registered == 0 {
+    unregister_observer_context(context_handle);
+    return Err(AxioError::ObserverError(
+      "Failed to register any notifications".into(),
+    ));
+  }
+
+  Ok(context_handle)
+}
+
+/// Unsubscribe from notifications (using new Notification type).
+pub fn unsubscribe_notifications(
+  handle: &ElementHandle,
+  observer: ObserverHandle,
+  context_handle: *mut ObserverContextHandle,
+  notifications: &[Notification],
+) {
+  for notification in notifications {
+    let notif_str = notification_to_macos(*notification);
+    let notif_cfstring = CFString::from_str(notif_str);
+    unsafe {
+      let _ = observer
+        .inner()
+        .remove_notification(handle.inner(), &notif_cfstring);
+    }
+  }
+
   unregister_observer_context(context_handle);
 }
 

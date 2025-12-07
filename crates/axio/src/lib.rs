@@ -13,11 +13,10 @@ let children = elements::children(&element.id, 100)?;
 */
 
 // Internal modules - not accessible outside this crate
-mod element_registry;
 mod events;
 mod platform;
 mod polling;
-mod window_registry;
+mod registry;
 
 // Cross-platform accessibility abstractions (new)
 pub mod accessibility;

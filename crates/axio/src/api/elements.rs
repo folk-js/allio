@@ -3,8 +3,8 @@
 All functions for discovering, querying, and interacting with UI elements.
 */
 
-use crate::element_registry::ElementRegistry;
 use crate::platform;
+use crate::registry;
 use crate::types::{AXElement, AxioResult, ElementId, Selection};
 
 /// Discover element at screen coordinates.
@@ -14,12 +14,12 @@ pub fn at(x: f64, y: f64) -> AxioResult<AXElement> {
 
 /// Get cached element by ID.
 pub fn get(element_id: &ElementId) -> AxioResult<AXElement> {
-  ElementRegistry::get(element_id)
+  registry::get_element(element_id)
 }
 
 /// Get multiple cached elements by ID.
 pub fn get_many(element_ids: &[ElementId]) -> Vec<AXElement> {
-  ElementRegistry::get_many(element_ids)
+  registry::get_elements(element_ids)
 }
 
 /// Discover children of element (registers them, updates parent's children).
@@ -34,22 +34,22 @@ pub fn refresh(element_id: &ElementId) -> AxioResult<AXElement> {
 
 /// Write text to an element.
 pub fn write(element_id: &ElementId, text: &str) -> AxioResult<()> {
-  ElementRegistry::write(element_id, text)
+  registry::write_element_value(element_id, text)
 }
 
 /// Click an element.
 pub fn click(element_id: &ElementId) -> AxioResult<()> {
-  ElementRegistry::click(element_id)
+  registry::click_element(element_id)
 }
 
 /// Watch element for changes.
 pub fn watch(element_id: &ElementId) -> AxioResult<()> {
-  ElementRegistry::watch(element_id)
+  registry::watch_element(element_id)
 }
 
 /// Stop watching element.
 pub fn unwatch(element_id: &ElementId) {
-  ElementRegistry::unwatch(element_id)
+  registry::unwatch_element(element_id)
 }
 
 /// Get currently focused element and selection for a given PID.
@@ -59,5 +59,5 @@ pub fn focus(pid: u32) -> (Option<AXElement>, Option<Selection>) {
 
 /// Get all elements in the registry (for sync).
 pub fn all() -> Vec<AXElement> {
-  ElementRegistry::get_all()
+  registry::get_all_elements()
 }
