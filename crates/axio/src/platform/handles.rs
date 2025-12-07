@@ -28,7 +28,7 @@ mod macos_impl {
     AXCopyMultipleAttributeOptions, AXError, AXObserver, AXUIElement, AXValue as AXValueRef,
     AXValueType,
   };
-  use objc2_core_foundation::{CFArray, CFBoolean, CFHash, CFNumber, CFRetained, CFString, CFType};
+  use objc2_core_foundation::{CFArray, CFBoolean, CFNumber, CFRetained, CFString, CFType};
   use std::ffi::c_void;
   use std::ptr::NonNull;
 
@@ -64,61 +64,11 @@ mod macos_impl {
       }
     }
 
-    /// Get boolean attribute by name.
-    pub fn get_bool(&self, attr: &str) -> Option<bool> {
-      let value = self.get_raw_attr(&CFString::from_str(attr))?;
-      Some(value.downcast_ref::<CFBoolean>()?.as_bool())
-    }
-
     /// Get bounds (position + size).
     pub fn get_bounds(&self) -> Option<Bounds> {
       let pos = self.get_raw_attr(&CFString::from_static_str("AXPosition"))?;
       let sz = self.get_raw_attr(&CFString::from_static_str("AXSize"))?;
-
-      let pos_val = pos.downcast_ref::<AXValueRef>()?;
-      let sz_val = sz.downcast_ref::<AXValueRef>()?;
-
-      #[repr(C)]
-      struct CGPoint {
-        x: f64,
-        y: f64,
-      }
-      #[repr(C)]
-      struct CGSize {
-        width: f64,
-        height: f64,
-      }
-
-      unsafe {
-        if pos_val.r#type() != AXValueType::CGPoint || sz_val.r#type() != AXValueType::CGSize {
-          return None;
-        }
-        let mut point = CGPoint { x: 0.0, y: 0.0 };
-        let mut size = CGSize {
-          width: 0.0,
-          height: 0.0,
-        };
-
-        if !pos_val.value(
-          AXValueType::CGPoint,
-          NonNull::new(&mut point as *mut _ as *mut c_void)?,
-        ) {
-          return None;
-        }
-        if !sz_val.value(
-          AXValueType::CGSize,
-          NonNull::new(&mut size as *mut _ as *mut c_void)?,
-        ) {
-          return None;
-        }
-
-        Some(Bounds {
-          x: point.x,
-          y: point.y,
-          w: size.width,
-          h: size.height,
-        })
-      }
+      Self::parse_bounds(Some(&*pos), Some(&*sz))
     }
 
     /// Get child elements.
@@ -202,12 +152,6 @@ mod macos_impl {
       }
     }
 
-    /// Get hash for deduplication.
-    pub fn hash(&self) -> u64 {
-      // AXUIElement derefs to CFType
-      CFHash(Some(&*self.0)) as u64
-    }
-
     /// Get element at position (for app-level elements only).
     pub fn element_at_position(&self, x: f64, y: f64) -> Option<ElementHandle> {
       unsafe {
@@ -286,60 +230,29 @@ mod macos_impl {
         Some(retained)
       };
 
-      // Parse each attribute
-      let role_str = get_val(0).and_then(|v| {
+      // Helper to parse non-empty string from CFType
+      let parse_str = |v: &CFType| -> Option<String> {
         let s = v.downcast_ref::<CFString>()?.to_string();
         if s.is_empty() {
           None
         } else {
           Some(s)
         }
-      });
+      };
 
-      let subrole_str = get_val(1).and_then(|v| {
-        let s = v.downcast_ref::<CFString>()?.to_string();
-        if s.is_empty() {
-          None
-        } else {
-          Some(s)
-        }
-      });
-
-      let title_str = get_val(2).and_then(|v| {
-        let s = v.downcast_ref::<CFString>()?.to_string();
-        if s.is_empty() {
-          None
-        } else {
-          Some(s)
-        }
-      });
-
+      // Parse attributes
+      let role_str = get_val(0).and_then(|v| parse_str(&v));
+      let subrole_str = get_val(1).and_then(|v| parse_str(&v));
+      let title_str = get_val(2).and_then(|v| parse_str(&v));
       let value_parsed =
         get_val(3).and_then(|v| Self::extract_value(&v, role_hint.or(role_str.as_deref())));
-
-      let desc_str = get_val(4).and_then(|v| {
-        let s = v.downcast_ref::<CFString>()?.to_string();
-        if s.is_empty() {
-          None
-        } else {
-          Some(s)
-        }
-      });
-
-      let placeholder_str = get_val(5).and_then(|v| {
-        let s = v.downcast_ref::<CFString>()?.to_string();
-        if s.is_empty() {
-          None
-        } else {
-          Some(s)
-        }
-      });
-
+      let desc_str = get_val(4).and_then(|v| parse_str(&v));
+      let placeholder_str = get_val(5).and_then(|v| parse_str(&v));
       let bounds = Self::parse_bounds(get_val(6).as_deref(), get_val(7).as_deref());
-
-      let focused_bool = get_val(8).and_then(|v| Some(v.downcast_ref::<CFBoolean>()?.as_bool()));
-
-      let enabled_bool = get_val(9).and_then(|v| Some(v.downcast_ref::<CFBoolean>()?.as_bool()));
+      let focused_bool =
+        get_val(8).and_then(|v| v.downcast_ref::<CFBoolean>().map(|b| b.as_bool()));
+      let enabled_bool =
+        get_val(9).and_then(|v| v.downcast_ref::<CFBoolean>().map(|b| b.as_bool()));
 
       // Get actions separately (not in batch)
       let action_strs = self.get_actions();
@@ -367,19 +280,6 @@ mod macos_impl {
         focused: focused_bool,
         enabled: enabled_bool,
         actions,
-      }
-    }
-
-    /// Get PID of the process owning this element.
-    pub fn pid(&self) -> Option<u32> {
-      unsafe {
-        let mut pid: i32 = 0;
-        let result = self.0.pid(NonNull::new(&mut pid)?);
-        if result == AXError::Success {
-          Some(pid as u32)
-        } else {
-          None
-        }
       }
     }
 

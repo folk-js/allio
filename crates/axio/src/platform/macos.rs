@@ -1,10 +1,5 @@
 /**
  * macOS Platform Implementation
- *
- * Converts macOS Accessibility API elements to AXElement format.
- * All macOS-specific knowledge is encapsulated here.
- *
- * Uses objc2-application-services for modern, safe FFI bindings.
  */
 use objc2_application_services::{
   AXError, AXIsProcessTrusted, AXObserver, AXObserverCallback, AXUIElement, AXValue as AXValueRef,
@@ -20,32 +15,11 @@ use uuid::Uuid;
 use super::handles::{ElementHandle, ObserverHandle};
 use crate::types::{AXElement, AXRole, AxioError, AxioResult, ElementId, WindowId};
 
-// ============================================================================
-// Safe Helpers
-// ============================================================================
-
 /// Create an AXUIElement for an application by PID.
 /// Encapsulates the unsafe FFI call.
 fn app_element(pid: u32) -> CFRetained<AXUIElement> {
   unsafe { AXUIElement::new_application(pid as i32) }
 }
-
-// ============================================================================
-// Accessibility Attribute Constants
-// ============================================================================
-
-mod ax_attrs {
-  use objc2_core_foundation::{CFRetained, CFString};
-
-  #[inline]
-  pub fn value() -> CFRetained<CFString> {
-    CFString::from_static_str("AXValue")
-  }
-}
-
-// ============================================================================
-// Accessibility Permission Check
-// ============================================================================
 
 /// Check if accessibility permissions are granted.
 /// Returns true if trusted, false otherwise.
@@ -65,10 +39,6 @@ pub fn verify_accessibility_permissions() {
     eprintln!("[axio]    You may need to remove and re-add the app after rebuilding.");
   }
 }
-
-// ============================================================================
-// macOS Accessibility Notifications
-// ============================================================================
 
 /// Type-safe representation of macOS accessibility notifications
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -122,7 +92,7 @@ impl AXNotification {
 }
 
 // ============================================================================
-// Observer Context Registry - Safe callback handling
+// Generic Context Registry - Safe callback handling for macOS observers
 // ============================================================================
 
 use once_cell::sync::Lazy;
@@ -130,91 +100,86 @@ use parking_lot::Mutex;
 use std::collections::HashMap as StdHashMap;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
-/// Next available context ID
+/// Next available context ID (shared across all registries)
 static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Registry mapping context IDs to element IDs
-static OBSERVER_CONTEXT_REGISTRY: Lazy<Mutex<StdHashMap<u64, ElementId>>> =
-  Lazy::new(|| Mutex::new(StdHashMap::new()));
+/// Generic registry for mapping context IDs to values.
+/// Used to safely pass data through macOS C callbacks via opaque pointers.
+struct ContextRegistry<T>(Mutex<StdHashMap<u64, T>>);
 
-/// Handle passed to macOS callbacks - contains only an ID, no heap data
+impl<T: Clone> ContextRegistry<T> {
+  /// Register a value and get a raw pointer handle for use in C callbacks.
+  fn register(&self, value: T) -> *mut ContextHandle {
+    let context_id = NEXT_CONTEXT_ID.fetch_add(1, AtomicOrdering::Relaxed);
+    self.0.lock().insert(context_id, value);
+    Box::into_raw(Box::new(ContextHandle { context_id }))
+  }
+
+  /// Unregister and free a context handle.
+  fn unregister(&self, handle_ptr: *mut ContextHandle) {
+    if handle_ptr.is_null() {
+      return;
+    }
+    unsafe {
+      let handle = Box::from_raw(handle_ptr);
+      self.0.lock().remove(&handle.context_id);
+    }
+  }
+
+  /// Look up value from context handle (for use in callbacks).
+  fn lookup(&self, handle_ptr: *const ContextHandle) -> Option<T> {
+    if handle_ptr.is_null() {
+      return None;
+    }
+    unsafe {
+      let handle = &*handle_ptr;
+      self.0.lock().get(&handle.context_id).cloned()
+    }
+  }
+}
+
+/// Opaque handle passed to macOS callbacks - contains only an ID.
 #[repr(C)]
-pub struct ObserverContextHandle {
+pub struct ContextHandle {
   context_id: u64,
 }
 
-/// Register an element for observation and get a context handle.
+// Type aliases for the two registries we need
+pub type ObserverContextHandle = ContextHandle;
+pub type AppObserverContextHandle = ContextHandle;
+
+/// Registry for element observer contexts (ElementId)
+static ELEMENT_CONTEXTS: Lazy<ContextRegistry<ElementId>> =
+  Lazy::new(|| ContextRegistry(Mutex::new(StdHashMap::new())));
+
+/// Registry for app observer contexts (PID)
+static APP_CONTEXTS: Lazy<ContextRegistry<u32>> =
+  Lazy::new(|| ContextRegistry(Mutex::new(StdHashMap::new())));
+
+// Public API for element contexts
 pub fn register_observer_context(element_id: ElementId) -> *mut ObserverContextHandle {
-  let context_id = NEXT_CONTEXT_ID.fetch_add(1, AtomicOrdering::Relaxed);
-  OBSERVER_CONTEXT_REGISTRY
-    .lock()
-    .insert(context_id, element_id);
-  Box::into_raw(Box::new(ObserverContextHandle { context_id }))
+  ELEMENT_CONTEXTS.register(element_id)
 }
 
-/// Unregister an element's observer context.
 pub fn unregister_observer_context(handle_ptr: *mut ObserverContextHandle) {
-  if handle_ptr.is_null() {
-    return;
-  }
-  unsafe {
-    let handle = Box::from_raw(handle_ptr);
-    OBSERVER_CONTEXT_REGISTRY.lock().remove(&handle.context_id);
-  }
+  ELEMENT_CONTEXTS.unregister(handle_ptr)
 }
 
-/// Look up element ID from context handle.
 fn lookup_observer_context(handle_ptr: *const ObserverContextHandle) -> Option<ElementId> {
-  if handle_ptr.is_null() {
-    return None;
-  }
-  unsafe {
-    let handle = &*handle_ptr;
-    OBSERVER_CONTEXT_REGISTRY
-      .lock()
-      .get(&handle.context_id)
-      .cloned()
-  }
+  ELEMENT_CONTEXTS.lookup(handle_ptr)
 }
 
-// ============================================================================
-// App Observer Context Registry
-// ============================================================================
-
-/// Registry mapping app context IDs to PIDs
-static APP_CONTEXT_REGISTRY: Lazy<Mutex<StdHashMap<u64, u32>>> =
-  Lazy::new(|| Mutex::new(StdHashMap::new()));
-
-/// Handle passed to app-level macOS callbacks
-#[repr(C)]
-pub struct AppObserverContextHandle {
-  context_id: u64,
-}
-
+// Internal API for app contexts
 fn register_app_context(pid: u32) -> *mut AppObserverContextHandle {
-  let context_id = NEXT_CONTEXT_ID.fetch_add(1, AtomicOrdering::Relaxed);
-  APP_CONTEXT_REGISTRY.lock().insert(context_id, pid);
-  Box::into_raw(Box::new(AppObserverContextHandle { context_id }))
+  APP_CONTEXTS.register(pid)
 }
 
 fn unregister_app_context(handle_ptr: *mut AppObserverContextHandle) {
-  if handle_ptr.is_null() {
-    return;
-  }
-  unsafe {
-    let handle = Box::from_raw(handle_ptr);
-    APP_CONTEXT_REGISTRY.lock().remove(&handle.context_id);
-  }
+  APP_CONTEXTS.unregister(handle_ptr)
 }
 
 fn lookup_app_context(handle_ptr: *const AppObserverContextHandle) -> Option<u32> {
-  if handle_ptr.is_null() {
-    return None;
-  }
-  unsafe {
-    let handle = &*handle_ptr;
-    APP_CONTEXT_REGISTRY.lock().get(&handle.context_id).copied()
-  }
+  APP_CONTEXTS.lookup(handle_ptr)
 }
 
 // ============================================================================
@@ -289,13 +254,14 @@ pub fn ensure_app_observer(pid: u32) {
   }
 }
 
-/// Create an app-level observer for Tier 1 notifications.
-fn create_app_observer(
+/// Create an AXObserver and add it to the main run loop.
+/// This is the core observer creation logic shared by all observer types.
+fn create_observer_raw(
   pid: u32,
-) -> AxioResult<(CFRetained<AXObserver>, *mut AppObserverContextHandle)> {
+  callback: AXObserverCallback,
+) -> AxioResult<CFRetained<AXObserver>> {
   let observer = unsafe {
     let mut observer_ptr: *mut AXObserver = std::ptr::null_mut();
-    let callback: AXObserverCallback = Some(app_observer_callback);
     let result = AXObserver::create(
       pid as i32,
       callback,
@@ -304,7 +270,7 @@ fn create_app_observer(
 
     if result != AXError::Success {
       return Err(AxioError::ObserverError(format!(
-        "AXObserverCreate failed for app PID {} with code {:?}",
+        "AXObserverCreate failed for PID {} with code {:?}",
         pid, result
       )));
     }
@@ -315,7 +281,7 @@ fn create_app_observer(
     )
   };
 
-  // Add to main run loop
+  // Add to main run loop - required for callbacks to fire
   unsafe {
     let run_loop_source = observer.run_loop_source();
     if let Some(main_run_loop) = CFRunLoop::main() {
@@ -323,25 +289,25 @@ fn create_app_observer(
     }
   }
 
-  // Subscribe to app-level notifications on the application element
-  let app_element = app_element(pid);
+  Ok(observer)
+}
 
+/// Create an app-level observer for Tier 1 notifications.
+fn create_app_observer(
+  pid: u32,
+) -> AxioResult<(CFRetained<AXObserver>, *mut AppObserverContextHandle)> {
+  let observer = create_observer_raw(pid, Some(app_observer_callback))?;
+
+  // Subscribe to app-level notifications on the application element
+  let app_el = app_element(pid);
   let context_handle = register_app_context(pid);
 
-  // Subscribe to focus changes
-  let focus_notif = CFString::from_static_str("AXFocusedUIElementChanged");
-  unsafe {
-    let _ = observer.add_notification(&app_element, &focus_notif, context_handle as *mut c_void);
-  }
-
-  // Subscribe to selection changes
-  let selection_notif = CFString::from_static_str("AXSelectedTextChanged");
-  unsafe {
-    let _ = observer.add_notification(
-      &app_element,
-      &selection_notif,
-      context_handle as *mut c_void,
-    );
+  // Subscribe to focus and selection changes
+  for notif in ["AXFocusedUIElementChanged", "AXSelectedTextChanged"] {
+    let notif_str = CFString::from_static_str(notif);
+    unsafe {
+      let _ = observer.add_notification(&app_el, &notif_str, context_handle as *mut c_void);
+    }
   }
 
   Ok((observer, context_handle))
@@ -539,36 +505,7 @@ fn get_selection_from_handle(
 
 /// Create an observer for a process and add it to the main run loop.
 pub fn create_observer_for_pid(pid: u32) -> AxioResult<ObserverHandle> {
-  let observer = unsafe {
-    let mut observer_ptr: *mut AXObserver = std::ptr::null_mut();
-    let callback: AXObserverCallback = Some(observer_callback);
-    let result = AXObserver::create(
-      pid as i32,
-      callback,
-      NonNull::new_unchecked(&mut observer_ptr),
-    );
-
-    if result != AXError::Success {
-      return Err(AxioError::ObserverError(format!(
-        "AXObserverCreate failed with code {:?}",
-        result
-      )));
-    }
-
-    CFRetained::from_raw(
-      NonNull::new(observer_ptr)
-        .ok_or_else(|| AxioError::ObserverError("AXObserverCreate returned null".to_string()))?,
-    )
-  };
-
-  // Must add to MAIN run loop for callbacks to fire
-  unsafe {
-    let run_loop_source = observer.run_loop_source();
-    if let Some(main_run_loop) = CFRunLoop::main() {
-      main_run_loop.add_source(Some(&run_loop_source), kCFRunLoopDefaultMode);
-    }
-  }
-
+  let observer = create_observer_raw(pid, Some(observer_callback))?;
   Ok(ObserverHandle::new(observer))
 }
 
@@ -934,37 +871,16 @@ pub fn write_element_value(
     )));
   }
 
-  let cf_string = CFString::from_str(text);
-  let attr_name = ax_attrs::value();
-
-  unsafe {
-    let result = handle.inner().set_attribute_value(&attr_name, &*cf_string);
-    if result != AXError::Success {
-      return Err(AxioError::AccessibilityError(format!(
-        "Failed to set value: {:?}",
-        result
-      )));
-    }
-  }
-
-  Ok(())
+  handle
+    .set_value(text)
+    .map_err(|e| AxioError::AccessibilityError(format!("Failed to set value: {:?}", e)))
 }
 
 /// Perform a click (press) action on an element.
 pub fn click_element(handle: &ElementHandle) -> AxioResult<()> {
-  let action = CFString::from_static_str("AXPress");
-
-  unsafe {
-    let result = handle.inner().perform_action(&action);
-    if result != AXError::Success {
-      return Err(AxioError::AccessibilityError(format!(
-        "AXUIElementPerformAction failed with code {:?}",
-        result
-      )));
-    }
-  }
-
-  Ok(())
+  handle
+    .perform_action("AXPress")
+    .map_err(|e| AxioError::AccessibilityError(format!("AXPress failed: {:?}", e)))
 }
 
 /// Register notifications for an element.
