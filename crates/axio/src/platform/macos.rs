@@ -13,7 +13,8 @@ use std::ptr::NonNull;
 use uuid::Uuid;
 
 use super::handles::{ElementHandle, ObserverHandle};
-use crate::types::{AXElement, AXRole, AxioError, AxioResult, ElementId, WindowId};
+use crate::events::emit;
+use crate::types::{AXElement, AXRole, AxioError, AxioResult, ElementId, ServerEvent, WindowId};
 
 /// Create an AXUIElement for an application by PID.
 /// Encapsulates the unsafe FFI call.
@@ -390,12 +391,12 @@ fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
     let _ = crate::element_registry::ElementRegistry::watch(&ax_element.id);
   }
 
-  crate::events::emit_focus_element(
-    &window_id,
-    &ax_element.id,
-    &ax_element,
-    previous_element_id.as_ref(),
-  );
+  emit(ServerEvent::FocusElement {
+    window_id,
+    element_id: ax_element.id.clone(),
+    element: ax_element,
+    previous_element_id,
+  });
 }
 
 fn handle_app_selection_changed(pid: u32, element: CFRetained<AXUIElement>) {
@@ -414,7 +415,12 @@ fn handle_app_selection_changed(pid: u32, element: CFRetained<AXUIElement>) {
     get_selected_text_range(&handle)
   };
 
-  crate::events::emit_selection_changed(&window_id, &ax_element.id, &selected_text, range.as_ref());
+  emit(ServerEvent::SelectionChanged {
+    window_id,
+    element_id: ax_element.id,
+    text: selected_text,
+    range,
+  });
 }
 
 fn get_selected_text_range(handle: &ElementHandle) -> Option<crate::types::TextRange> {
@@ -556,7 +562,9 @@ fn handle_notification(
         if let Ok(mut element) = ElementRegistry::get(element_id) {
           element.value = Some(value);
           let _ = ElementRegistry::update(element_id, element.clone());
-          crate::events::emit_element_changed(&element);
+          emit(ServerEvent::ElementChanged {
+            element: element.clone(),
+          });
         }
       }
     }
@@ -568,7 +576,9 @@ fn handle_notification(
           if let Ok(mut element) = ElementRegistry::get(element_id) {
             element.label = Some(label);
             let _ = ElementRegistry::update(element_id, element.clone());
-            crate::events::emit_element_changed(&element);
+            emit(ServerEvent::ElementChanged {
+              element: element.clone(),
+            });
           }
         }
       }
@@ -577,7 +587,9 @@ fn handle_notification(
     AXNotification::UIElementDestroyed => {
       if let Ok(element) = ElementRegistry::get(element_id) {
         ElementRegistry::remove_element(element_id);
-        crate::events::emit_element_removed(&element);
+        emit(ServerEvent::ElementRemoved {
+          element: element.clone(),
+        });
       } else {
         ElementRegistry::remove_element(element_id);
       }
@@ -667,11 +679,15 @@ pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResu
   ElementRegistry::set_children(parent_id, child_ids.clone())?;
 
   for child in &children {
-    crate::events::emit_element_added(child);
+    emit(ServerEvent::ElementAdded {
+      element: child.clone(),
+    });
   }
 
   if let Ok(updated_parent) = ElementRegistry::get(parent_id) {
-    crate::events::emit_element_changed(&updated_parent);
+    emit(ServerEvent::ElementChanged {
+      element: updated_parent.clone(),
+    });
   }
 
   Ok(children)

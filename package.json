@@ -9,6 +9,8 @@
   "scripts": {
     "dev": "tauri dev",
     "build": "tsc && vite build",
+    "check": "cargo check",
+    "docs": "cargo doc -p axio --open",
     "typegen": "TS_RS_EXPORT_DIR=$PWD cargo test -p axio -p axio-ws export_bindings",
     "profile:build": "tauri build && echo '\n✅ App built! Now open Instruments.app and profile:\n   target/release/bundle/macos/axio.app'",
     "profile:leaks": "./scripts/check-leaks.sh",

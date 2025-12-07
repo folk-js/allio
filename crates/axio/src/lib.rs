@@ -5,7 +5,7 @@ pub use types::{
 };
 
 pub mod events;
-pub use events::{set_event_sink, EventSink, NoopEventSink};
+pub use events::{emit, set_event_sink, EventSink, NoopEventSink};
 
 pub mod api;
 pub mod element_registry;
