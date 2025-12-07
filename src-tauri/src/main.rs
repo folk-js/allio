@@ -2,7 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{
-  path::PathBuf,
+  path::{Path, PathBuf},
   sync::{
     atomic::{AtomicBool, Ordering},
     Mutex,
@@ -20,7 +20,7 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 #[cfg(target_os = "macos")]
 use tauri_nspanel::{tauri_panel, ManagerExt as _, PanelLevel, StyleMask, WebviewWindowExt as _};
 
-use axio::PollingOptions;
+use axio::{PollingHandle, PollingOptions};
 use axio_ws::WebSocketState;
 
 // ============================================================================
@@ -41,10 +41,21 @@ tauri_panel! {
 // App State
 // ============================================================================
 
-#[derive(Default)]
 struct AppState {
   clickthrough_enabled: AtomicBool,
   current_overlay: Mutex<String>,
+  /// Handle to control the polling thread. Stops polling when dropped.
+  polling_handle: Mutex<Option<PollingHandle>>,
+}
+
+impl Default for AppState {
+  fn default() -> Self {
+    Self {
+      clickthrough_enabled: AtomicBool::new(false),
+      current_overlay: Mutex::new(String::new()),
+      polling_handle: Mutex::new(None),
+    }
+  }
 }
 
 // ============================================================================
@@ -65,9 +76,9 @@ fn get_main_window(app: &AppHandle) -> Result<tauri::WebviewWindow, &'static str
 
 fn get_overlay_url(filename: &str) -> String {
   if is_dev_mode() {
-    format!("http://localhost:1420/src-web/overlays/{}", filename)
+    format!("http://localhost:1420/src-web/overlays/{filename}")
   } else {
-    format!("tauri://localhost/{}", filename)
+    format!("tauri://localhost/{filename}")
   }
 }
 
@@ -342,9 +353,9 @@ fn show_file_dialog(app: &AppHandle) {
     });
 }
 
-fn load_file(app: &AppHandle, path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn load_file(app: &AppHandle, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
   let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
-  *app.state::<AppState>().current_overlay.lock().unwrap() = format!("file: {}", file_name);
+  *app.state::<AppState>().current_overlay.lock().unwrap() = format!("file: {file_name}");
 
   let url = format!("file://{}", path.display());
   get_main_window(app)?.navigate(url.parse()?)?;
@@ -393,7 +404,7 @@ fn create_rpc_handler(app_handle: AppHandle) -> axio_ws::CustomRpcHandler {
           let _ = build_or_update_tray(&h, &get_overlay_files());
         });
       });
-      return Some(serde_json::json!({ "result": { "enabled": enabled, "changed": true } }));
+      Some(serde_json::json!({ "result": { "enabled": enabled, "changed": true } }))
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -519,7 +530,7 @@ fn main() {
 
       // Tray setup
       let overlays = get_overlay_files();
-      build_or_update_tray(&app.handle(), &overlays)?;
+      build_or_update_tray(app.handle(), &overlays)?;
 
       // Load first overlay
       if let Some(first) = overlays.first() {
@@ -530,10 +541,11 @@ fn main() {
       }
 
       // Start polling (handles windows + mouse position in one loop)
-      axio::start_polling(PollingOptions {
+      let polling_handle = axio::start_polling(PollingOptions {
         exclude_pid: Some(axio::ProcessId::new(std::process::id())),
         ..PollingOptions::default()
       });
+      *app.state::<AppState>().polling_handle.lock().unwrap() = Some(polling_handle);
 
       let ws = ws_state.clone();
       thread::spawn(move || {

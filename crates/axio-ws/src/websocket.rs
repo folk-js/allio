@@ -139,7 +139,7 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
                     break;
                 }
                 Some(Err(e)) => {
-                    eprintln!("WebSocket error: {}", e);
+                    eprintln!("WebSocket error: {e}");
                     break;
                 }
                 None => {

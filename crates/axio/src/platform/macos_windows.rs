@@ -57,7 +57,7 @@ fn enumerate_windows_inner() -> Vec<AXWindow> {
 
     // Filter by window layer (normal windows are 0-100)
     let window_layer = get_cf_number(&dict, "kCGWindowLayer");
-    if window_layer < 0 || window_layer > 100 {
+    if !(0..=100).contains(&window_layer) {
       continue;
     }
 
@@ -83,7 +83,7 @@ fn enumerate_windows_inner() -> Vec<AXWindow> {
     };
 
     // Filter system UI windows
-    if let Some(bundle_id) = get_bundle_identifier(&app) {
+    if let Some(bundle_id) = get_bundle_identifier(app) {
       if FILTERED_BUNDLE_IDS.contains(&bundle_id.as_str()) {
         continue;
       }

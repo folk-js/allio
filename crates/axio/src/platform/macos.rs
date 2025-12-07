@@ -45,7 +45,7 @@ pub enum AXNotification {
 
 impl AXNotification {
   /// Get the macOS notification name string
-  pub fn as_str(&self) -> &'static str {
+  pub const fn as_str(&self) -> &'static str {
     match self {
       Self::ValueChanged => "AXValueChanged",
       Self::TitleChanged => "AXTitleChanged",
@@ -65,16 +65,19 @@ impl AXNotification {
       _ => vec![],
     }
   }
+}
 
-  /// Parse from notification name string
-  pub fn from_str(s: &str) -> Option<Self> {
+impl std::str::FromStr for AXNotification {
+  type Err = ();
+
+  fn from_str(s: &str) -> Result<Self, Self::Err> {
     match s {
-      "AXValueChanged" => Some(Self::ValueChanged),
-      "AXTitleChanged" => Some(Self::TitleChanged),
-      "AXUIElementDestroyed" => Some(Self::UIElementDestroyed),
-      "AXFocusedUIElementChanged" => Some(Self::FocusedUIElementChanged),
-      "AXSelectedChildrenChanged" => Some(Self::SelectedChildrenChanged),
-      _ => None,
+      "AXValueChanged" => Ok(Self::ValueChanged),
+      "AXTitleChanged" => Ok(Self::TitleChanged),
+      "AXUIElementDestroyed" => Ok(Self::UIElementDestroyed),
+      "AXFocusedUIElementChanged" => Ok(Self::FocusedUIElementChanged),
+      "AXSelectedChildrenChanged" => Ok(Self::SelectedChildrenChanged),
+      _ => Err(()),
     }
   }
 }
@@ -83,17 +86,17 @@ impl AXNotification {
 // Generic Context Registry - Safe callback handling for macOS observers
 // ============================================================================
 
-use once_cell::sync::Lazy;
 use parking_lot::Mutex;
-use std::collections::HashMap as StdHashMap;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::LazyLock;
 
 /// Next available context ID (shared across all registries)
 static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Generic registry for mapping context IDs to values.
 /// Used to safely pass data through macOS C callbacks via opaque pointers.
-struct ContextRegistry<T>(Mutex<StdHashMap<u64, T>>);
+struct ContextRegistry<T>(Mutex<HashMap<u64, T>>);
 
 impl<T: Clone> ContextRegistry<T> {
   /// Register a value and get a raw pointer handle for use in C callbacks.
@@ -137,12 +140,12 @@ pub type ObserverContextHandle = ContextHandle;
 pub type AppObserverContextHandle = ContextHandle;
 
 /// Registry for element observer contexts (ElementId)
-static ELEMENT_CONTEXTS: Lazy<ContextRegistry<ElementId>> =
-  Lazy::new(|| ContextRegistry(Mutex::new(StdHashMap::new())));
+static ELEMENT_CONTEXTS: LazyLock<ContextRegistry<ElementId>> =
+  LazyLock::new(|| ContextRegistry(Mutex::new(HashMap::new())));
 
 /// Registry for app observer contexts (PID)
-static APP_CONTEXTS: Lazy<ContextRegistry<u32>> =
-  Lazy::new(|| ContextRegistry(Mutex::new(StdHashMap::new())));
+static APP_CONTEXTS: LazyLock<ContextRegistry<u32>> =
+  LazyLock::new(|| ContextRegistry(Mutex::new(HashMap::new())));
 
 // Public API for element contexts
 pub fn register_observer_context(element_id: ElementId) -> *mut ObserverContextHandle {
@@ -186,8 +189,8 @@ struct AppState {
 unsafe impl Send for AppState {}
 unsafe impl Sync for AppState {}
 
-static APP_OBSERVERS: Lazy<Mutex<StdHashMap<u32, AppState>>> =
-  Lazy::new(|| Mutex::new(StdHashMap::new()));
+static APP_OBSERVERS: LazyLock<Mutex<HashMap<u32, AppState>>> =
+  LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Clean up app observers for PIDs that are no longer running.
 pub fn cleanup_dead_observers(active_pids: &std::collections::HashSet<crate::ProcessId>) -> usize {
@@ -234,10 +237,7 @@ pub fn ensure_app_observer(pid: u32) {
       );
     }
     Err(e) => {
-      eprintln!(
-        "[axio] Failed to create app observer for PID {}: {:?}",
-        pid, e
-      );
+      log::warn!("Failed to create app observer for PID {pid}: {e:?}");
     }
   }
 }
@@ -258,8 +258,7 @@ fn create_observer_raw(
 
     if result != AXError::Success {
       return Err(AxioError::ObserverError(format!(
-        "AXObserverCreate failed for PID {} with code {:?}",
-        pid, result
+        "AXObserverCreate failed for PID {pid} with code {result:?}"
       )));
     }
 
@@ -524,7 +523,7 @@ unsafe extern "C-unwind" fn observer_callback(
   }));
 
   if result.is_err() {
-    eprintln!("[axio] ⚠️  Accessibility notification handler panicked (possibly invalid element)");
+    log::warn!("Accessibility notification handler panicked (possibly invalid element)");
   }
 }
 
@@ -535,7 +534,7 @@ fn handle_notification(
 ) {
   use crate::element_registry::ElementRegistry;
 
-  let Some(notification_type) = AXNotification::from_str(notification) else {
+  let Ok(notification_type) = notification.parse::<AXNotification>() else {
     return;
   };
 
@@ -784,7 +783,7 @@ pub fn get_window_root(window_id: &WindowId) -> AxioResult<AXElement> {
     .ok_or_else(|| AxioError::WindowNotFound(window_id.clone()))?;
 
   let window_handle =
-    handle.ok_or_else(|| AxioError::Internal(format!("Window {} has no AX element", window_id)))?;
+    handle.ok_or_else(|| AxioError::Internal(format!("Window {window_id} has no AX element")))?;
 
   // Clone handle for safe method use
   Ok(build_element_from_handle(
@@ -803,15 +802,12 @@ pub fn enable_accessibility_for_pid(pid: crate::ProcessId) {
   let value = CFBoolean::new(true);
 
   unsafe {
-    let result = app_element.set_attribute_value(&attr_name, &*value);
+    let result = app_element.set_attribute_value(&attr_name, value);
 
     if result == AXError::Success {
-      eprintln!("[axio] ✓ Enabled accessibility for PID {}", raw_pid);
+      log::debug!("Enabled accessibility for PID {raw_pid}");
     } else if result != AXError::AttributeUnsupported {
-      eprintln!(
-        "[axio] ⚠️  Failed to enable accessibility for PID {} (error: {:?})",
-        raw_pid, result
-      );
+      log::warn!("Failed to enable accessibility for PID {raw_pid} (error: {result:?})");
     }
   }
 }
@@ -819,10 +815,7 @@ pub fn enable_accessibility_for_pid(pid: crate::ProcessId) {
 /// Get the accessibility element at a specific screen position.
 pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
   let window = crate::window_registry::find_at_point(x, y).ok_or_else(|| {
-    AxioError::AccessibilityError(format!(
-      "No tracked window found at position ({}, {})",
-      x, y
-    ))
+    AxioError::AccessibilityError(format!("No tracked window found at position ({x}, {y})"))
   })?;
 
   let window_id = window.id.clone();
@@ -831,7 +824,7 @@ pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
   // Use safe ElementHandle method
   let app_handle = ElementHandle::new(app_element(pid));
   let element_handle = app_handle.element_at_position(x, y).ok_or_else(|| {
-    AxioError::AccessibilityError(format!("No element found at ({}, {}) in app {}", x, y, pid))
+    AxioError::AccessibilityError(format!("No element found at ({x}, {y}) in app {pid}"))
   })?;
 
   Ok(build_element_from_handle(
@@ -867,21 +860,20 @@ pub fn write_element_value(
 ) -> AxioResult<()> {
   if !WRITABLE_ROLES.contains(&platform_role) {
     return Err(AxioError::NotSupported(format!(
-      "Element with role '{}' is not writable",
-      platform_role
+      "Element with role '{platform_role}' is not writable"
     )));
   }
 
   handle
     .set_value(text)
-    .map_err(|e| AxioError::AccessibilityError(format!("Failed to set value: {:?}", e)))
+    .map_err(|e| AxioError::AccessibilityError(format!("Failed to set value: {e:?}")))
 }
 
 /// Perform a click (press) action on an element.
 pub fn click_element(handle: &ElementHandle) -> AxioResult<()> {
   handle
     .perform_action("AXPress")
-    .map_err(|e| AxioError::AccessibilityError(format!("AXPress failed: {:?}", e)))
+    .map_err(|e| AxioError::AccessibilityError(format!("AXPress failed: {e:?}")))
 }
 
 /// Register notifications for an element.
@@ -916,8 +908,7 @@ pub fn subscribe_element_notifications(
   if registered.is_empty() {
     unregister_observer_context(context_handle);
     return Err(AxioError::ObserverError(format!(
-      "Failed to register notifications for element (role: {})",
-      platform_role
+      "Failed to register notifications for element (role: {platform_role})"
     )));
   }
 

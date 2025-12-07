@@ -2,10 +2,58 @@ use crate::events::emit;
 use crate::platform;
 use crate::types::{AXWindow, Event, Point, ProcessId, WindowId};
 use std::collections::HashSet;
-use std::thread;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 pub const DEFAULT_POLLING_INTERVAL_MS: u64 = 8;
+
+/// Handle to control the polling thread.
+///
+/// The polling thread runs until this handle is dropped or `stop()` is called.
+/// When dropped, the thread is signaled to stop and joined.
+pub struct PollingHandle {
+  stop_signal: Arc<AtomicBool>,
+  thread: Option<JoinHandle<()>>,
+}
+
+impl PollingHandle {
+  /// Signal the polling thread to stop.
+  ///
+  /// This is non-blocking. The thread will stop on its next iteration.
+  pub fn stop(&self) {
+    self.stop_signal.store(true, Ordering::SeqCst);
+  }
+
+  /// Check if the polling thread is still running.
+  pub fn is_running(&self) -> bool {
+    self
+      .thread
+      .as_ref()
+      .map(|t| !t.is_finished())
+      .unwrap_or(false)
+  }
+
+  /// Wait for the polling thread to finish.
+  ///
+  /// This will block until the thread stops. Call `stop()` first if you want
+  /// to ensure the thread terminates.
+  pub fn join(mut self) {
+    if let Some(thread) = self.thread.take() {
+      let _ = thread.join();
+    }
+  }
+}
+
+impl Drop for PollingHandle {
+  fn drop(&mut self) {
+    self.stop();
+    if let Some(thread) = self.thread.take() {
+      let _ = thread.join();
+    }
+  }
+}
 
 /// Poll for current windows. Returns None if exclude_pid window isn't found.
 fn poll_windows(options: &PollingOptions) -> Option<Vec<AXWindow>> {
@@ -32,7 +80,7 @@ fn poll_windows(options: &PollingOptions) -> Option<Vec<AXWindow>> {
       // Exclude our own window
       if options
         .exclude_pid
-        .map_or(false, |pid| w.process_id.as_u32() == pid.as_u32())
+        .is_some_and(|pid| w.process_id.as_u32() == pid.as_u32())
       {
         return false;
       }
@@ -90,22 +138,28 @@ impl Default for PollingOptions {
 const CLEANUP_INTERVAL: u64 = 1250;
 
 /// Start background polling for windows and mouse position.
-pub fn start_polling(config: PollingOptions) {
+///
+/// Returns a `PollingHandle` that can be used to stop the polling thread.
+/// The polling will automatically stop when the handle is dropped.
+pub fn start_polling(config: PollingOptions) -> PollingHandle {
   use crate::window_registry;
 
-  thread::spawn(move || {
+  let stop_signal = Arc::new(AtomicBool::new(false));
+  let stop_signal_clone = Arc::clone(&stop_signal);
+
+  let thread = thread::spawn(move || {
     let mut last_active_id: Option<WindowId> = None;
     let mut last_focused_id: Option<WindowId> = None;
     let mut last_mouse_pos: Option<Point> = None;
     let mut poll_count: u64 = 0;
 
-    loop {
+    while !stop_signal_clone.load(Ordering::SeqCst) {
       let loop_start = Instant::now();
       poll_count += 1;
 
       // Mouse position polling
       if let Some(pos) = platform::get_mouse_position() {
-        let changed = last_mouse_pos.map_or(true, |last| pos.moved_from(last, 1.0));
+        let changed = last_mouse_pos.is_none_or(|last| pos.moved_from(last, 1.0));
         if changed {
           last_mouse_pos = Some(pos);
           emit(Event::MousePosition(pos));
@@ -114,32 +168,33 @@ pub fn start_polling(config: PollingOptions) {
 
       if let Some(raw_windows) = poll_windows(&config) {
         let result = window_registry::update(raw_windows);
+        let depth_order = result.depth_order;
 
-        // Emit events for removed windows
-        for removed_id in &result.removed {
+        // Emit events for removed windows (consume vec to avoid cloning IDs)
+        for removed_id in result.removed {
           emit(Event::WindowRemoved {
-            window_id: removed_id.clone(),
-            depth_order: result.depth_order.clone(),
+            window_id: removed_id,
+            depth_order: depth_order.clone(),
           });
         }
 
-        // Emit events for added windows
-        for added_id in &result.added {
-          if let Some(window) = window_registry::get_window(added_id) {
+        // Emit events for added windows (consume vec to avoid cloning IDs)
+        for added_id in result.added {
+          if let Some(window) = window_registry::get_window(&added_id) {
             platform::enable_accessibility_for_pid(window.process_id);
             emit(Event::WindowAdded {
-              window: window.clone(),
-              depth_order: result.depth_order.clone(),
+              window,
+              depth_order: depth_order.clone(),
             });
           }
         }
 
-        // Emit events for changed windows
-        for changed_id in &result.changed {
-          if let Some(window) = window_registry::get_window(changed_id) {
+        // Emit events for changed windows (consume vec to avoid cloning IDs)
+        for changed_id in result.changed {
+          if let Some(window) = window_registry::get_window(&changed_id) {
             emit(Event::WindowChanged {
-              window: window.clone(),
-              depth_order: result.depth_order.clone(),
+              window,
+              depth_order: depth_order.clone(),
             });
           }
         }
@@ -181,4 +236,9 @@ pub fn start_polling(config: PollingOptions) {
       }
     }
   });
+
+  PollingHandle {
+    stop_signal,
+    thread: Some(thread),
+  }
 }

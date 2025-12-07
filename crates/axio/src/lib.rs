@@ -30,8 +30,8 @@ pub use api::{elements, screen, windows};
 // Events - just the sink setup, not emit()
 pub use events::{set_event_sink, EventSink, NoopEventSink};
 
-// Polling config
-pub use polling::PollingOptions;
+// Polling
+pub use polling::{PollingHandle, PollingOptions};
 
 /// Check if accessibility permissions are granted.
 pub fn verify_permissions() -> bool {
@@ -39,6 +39,17 @@ pub fn verify_permissions() -> bool {
 }
 
 /// Start background polling for windows and mouse position.
-pub fn start_polling(config: PollingOptions) {
-  polling::start_polling(config);
+///
+/// Returns a [`PollingHandle`] that controls the polling thread lifetime.
+/// The polling will stop when the handle is dropped or [`PollingHandle::stop`] is called.
+///
+/// # Example
+///
+/// ```ignore
+/// let handle = axio::start_polling(PollingOptions::default());
+/// // Polling runs until handle is dropped or stop() is called
+/// handle.stop();
+/// ```
+pub fn start_polling(config: PollingOptions) -> PollingHandle {
+  polling::start_polling(config)
 }

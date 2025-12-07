@@ -42,6 +42,9 @@ pub struct ElementRegistry {
   element_to_window: HashMap<ElementId, WindowId>,
 }
 
+// SAFETY: ElementRegistry is protected by a Mutex, and the raw pointers it contains
+// (context handles in WatchState) are only accessed while holding the lock.
+// The pointed-to data is managed by the context registry which has its own synchronization.
 unsafe impl Send for ElementRegistry {}
 unsafe impl Sync for ElementRegistry {}
 
@@ -256,7 +259,7 @@ impl ElementRegistry {
   }
 
   pub fn click(element_id: &ElementId) -> AxioResult<()> {
-    Self::with_stored(element_id, |stored| click_element(stored))?
+    Self::with_stored(element_id, click_element)?
   }
 
   pub fn watch(element_id: &ElementId) -> AxioResult<()> {
@@ -279,14 +282,20 @@ impl ElementRegistry {
 
       let pid = stored.pid;
 
-      // Get or create observer
-      if window_state.observer.is_none() {
-        let obs = platform::create_observer_for_pid(pid)?;
-        window_state.observer = Some(obs);
-      }
-      let observer = window_state.observer.as_ref().unwrap().clone();
+      // Get or create observer using get_or_insert_with pattern
+      let observer = match &window_state.observer {
+        Some(obs) => obs.clone(),
+        None => {
+          let obs = platform::create_observer_for_pid(pid)?;
+          window_state.observer.insert(obs).clone()
+        }
+      };
 
-      let stored = window_state.elements.get_mut(element_id).unwrap();
+      // Re-borrow as mutable after observer setup
+      let stored = window_state
+        .elements
+        .get_mut(element_id)
+        .expect("element must exist - verified above");
       watch_element(stored, observer)
     })
   }

@@ -144,7 +144,7 @@ mod macos_impl {
       let cf_value = CFString::from_str(value);
       unsafe {
         // CFString derefs to CFType
-        let result = self.0.set_attribute_value(&attr, &*cf_value);
+        let result = self.0.set_attribute_value(&attr, &cf_value);
         if result == AXError::Success {
           Ok(())
         } else {
@@ -225,7 +225,7 @@ mod macos_impl {
         extern "C" {
           static kCFNull: *const CFType;
         }
-        if unsafe { CFRetained::as_ptr(&retained).as_ptr() as *const CFType == kCFNull } {
+        if unsafe { std::ptr::eq(CFRetained::as_ptr(&retained).as_ptr(), kCFNull) } {
           return None;
         }
         Some(retained)

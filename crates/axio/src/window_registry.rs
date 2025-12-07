@@ -146,16 +146,17 @@ pub(crate) fn update(new_windows: Vec<AXWindow>) -> UpdateResult {
     }
   }
 
-  // Update depth order
+  // Update depth order - build once, store reference
   let mut windows: Vec<_> = registry.windows.values().map(|s| &s.info).collect();
   windows.sort_by_key(|w| w.z_index);
-  registry.depth_order = windows.into_iter().map(|w| w.id.clone()).collect();
+  let depth_order: Vec<WindowId> = windows.into_iter().map(|w| w.id.clone()).collect();
+  registry.depth_order.clone_from(&depth_order);
 
   UpdateResult {
     added,
     removed,
     changed,
-    depth_order: registry.depth_order.clone(),
+    depth_order,
   }
 }
 
