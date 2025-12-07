@@ -165,12 +165,13 @@ pub fn start_polling(config: PollingOptions) -> PollingHandle {
 
       if let Some(raw_windows) = poll_windows(&config) {
         // Get previous window state for comparison
-        let prev_windows: HashSet<WindowId> = registry::get_windows()
-          .into_iter()
-          .map(|w| w.id)
-          .collect();
+        let prev_windows: HashSet<WindowId> =
+          registry::get_windows().into_iter().map(|w| w.id).collect();
         let prev_window_data: std::collections::HashMap<WindowId, crate::AXWindow> =
-          registry::get_windows().into_iter().map(|w| (w.id, w)).collect();
+          registry::get_windows()
+            .into_iter()
+            .map(|w| (w.id, w))
+            .collect();
 
         // Update registry (handles cascading cleanup internally)
         registry::update_windows(raw_windows.clone());
@@ -226,6 +227,9 @@ pub fn start_polling(config: PollingOptions) -> PollingHandle {
         // Focus tracking
         let focused_window = new_windows.iter().find(|w| w.focused);
         let current_focused_id = focused_window.map(|w| w.id);
+
+        // Update focused_window in registry (can be None when desktop or non-tracked window focused)
+        registry::set_focused_window(current_focused_id);
 
         if current_focused_id != last_focused_id {
           emit(Event::FocusChanged {

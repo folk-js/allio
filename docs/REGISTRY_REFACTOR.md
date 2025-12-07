@@ -20,24 +20,22 @@
 - [x] Updated `handles.rs` to use new types + `action_from_macos()`
 - [x] Updated `macos.rs` to use `role_from_macos()` and `Role` methods
 
-### 🔲 Phase 2: Observer & Registry Unification (Next)
+### ✅ Phase 2: Observer & Registry Unification (Complete)
 
 **Goal:** Consolidate to ONE observer per process with unified callback routing.
 
-- [ ] Add `Notification::is_app_level()` method for clean dispatch
-- [ ] Unify callbacks: one callback that converts macOS string → `Notification`, then dispatches
-- [ ] Remove `AXNotification` enum (replaced by `Notification` + mapping)
-- [ ] Remove `APP_OBSERVERS` (observer moves to `ProcessState` in Registry)
-- [ ] Remove `AppState`, `APP_CONTEXTS`, `app_observer_callback`
-- [ ] Remove `WRITABLE_ROLES` (replaced by `Role::is_writable()`)
-- [ ] Remove `ensure_app_observer`, `cleanup_dead_observers`
-- [ ] Subscribe app-level notifications (FocusChanged, SelectionChanged) when ProcessState created
-- [ ] Keep element contexts for element-level notification callbacks
-- [ ] Implement cascading cleanup:
-  - Individual element removal
-  - Window removal → cascades to all elements in window
-  - Process removal → cascades to all windows → cascades to elements
-- [ ] Dead hash cleanup on window removal (+ note: explore if dead_hashes needed at all)
+- [x] Add `Notification::is_app_level()` method for clean dispatch
+- [x] Unify callbacks: one `unified_observer_callback` that converts macOS string → `Notification`, then dispatches
+- [x] Remove `AXNotification` enum (replaced by `Notification` + mapping)
+- [x] Remove `APP_OBSERVERS` (observer moves to `ProcessState` in Registry)
+- [x] Remove `AppState`, `APP_CONTEXTS`, `app_observer_callback`, `create_app_observer`
+- [x] Remove `WRITABLE_ROLES` (replaced by `Role::is_writable()`)
+- [x] Remove `ensure_app_observer`, `cleanup_dead_observers`
+- [x] Remove old `subscribe_element_notifications`, `unsubscribe_element_notifications`
+- [x] Subscribe app-level notifications (FocusChanged, SelectionChanged) when ProcessState created
+- [x] Unified context type: `ObserverContext::Element(id)` or `ObserverContext::Process(pid)`
+- [x] Focus tracking via `Registry::set_process_focus()` / `get_process_focus()`
+- [x] Cascading cleanup already implemented
 
 **Removed from `macos.rs`:**
 
@@ -50,17 +48,44 @@
 - `create_app_observer` fn
 - `app_observer_callback` fn
 - `WRITABLE_ROLES` const
+- `subscribe_element_notifications` fn
+- `unsubscribe_element_notifications` fn
 
-**Kept (possibly simplified):**
+**New architecture:**
 
-- `ELEMENT_CONTEXTS` + element context functions (still needed for element callbacks)
-- `create_observer_raw` (low-level helper)
-- Core functions: `build_element_from_handle`, `discover_children`, `element_hash`, etc.
+- Single `OBSERVER_CONTEXTS` registry with `ObserverContext` enum (Element or Process)
+- `unified_observer_callback` dispatches based on context type
+- `subscribe_app_notifications()` called when ProcessState created
+- `handle_app_focus_changed()` / `handle_app_selection_changed()` called from unified callback
 
 ### 🔲 Phase 3: Platform Organization (Future)
 
 - [ ] Split `macos.rs` into sub-modules (observer, element, windows, attributes)
 - [ ] Final cleanup pass
+
+### 🔲 Future Exploration
+
+**AXSelectedChildrenChanged** - Item selection in lists/tables
+
+Currently we track:
+
+- `AXFocusedUIElementChanged` → keyboard focus (app-level notification)
+- `AXSelectedTextChanged` → text selection within text fields (app-level notification)
+
+We do NOT track:
+
+- `AXSelectedChildrenChanged` → which items are selected in a list/table/outline
+
+This is an **element-level** notification (not app-level). You subscribe on a specific container element (list, table) and get notified when its selected children change.
+
+Use case: Tracking which todo item is selected in Apple Notes, which row is selected in a table, etc.
+
+To implement:
+
+1. Add `SelectedChildrenChanged` to `Notification` enum
+2. Map to `"AXSelectedChildrenChanged"` in platform mapping
+3. Subscribe when watching list/table container elements
+4. Emit event with the selected element IDs
 
 ## Goals
 

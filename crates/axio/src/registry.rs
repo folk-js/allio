@@ -35,7 +35,9 @@
 use crate::accessibility::Notification;
 use crate::events;
 use crate::platform::{self, ElementHandle, ObserverHandle};
-use crate::types::{AXElement, AXWindow, AxioError, AxioResult, ElementId, Event, ProcessId, WindowId};
+use crate::types::{
+  AXElement, AXWindow, AxioError, AxioResult, ElementId, Event, ProcessId, WindowId,
+};
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
@@ -47,13 +49,9 @@ use std::sync::LazyLock;
 
 /// Per-process state: owns the AXObserver for this application.
 struct ProcessState {
-  pid: u32,
   /// The observer for this process (one per PID).
   /// All elements in all windows of this process share this observer.
   observer: ObserverHandle,
-  /// Context handle for app-level notifications (focus changes).
-  #[allow(dead_code)]
-  app_context: *mut c_void,
   /// Currently focused element in this app.
   focused_element: Option<ElementId>,
 }
@@ -122,8 +120,10 @@ pub struct Registry {
   hash_to_window: HashMap<u64, WindowId>,
 
   // === Focus ===
-  /// Currently active window.
+  /// Currently active window (sticky - last valid focused window).
   active_window: Option<WindowId>,
+  /// Currently focused window (can be None when desktop is focused).
+  focused_window: Option<WindowId>,
   /// Window depth order (front to back, by z_index).
   depth_order: Vec<WindowId>,
 }
@@ -142,6 +142,7 @@ impl Registry {
       dead_hashes: HashSet::new(),
       hash_to_window: HashMap::new(),
       active_window: None,
+      focused_window: None,
       depth_order: Vec::new(),
     }
   }
@@ -168,18 +169,24 @@ impl Registry {
       return Ok(process_id);
     }
 
+    log::debug!("Creating process state for PID {} (new process)", pid);
+
     // Create observer for this process
     let observer = platform::create_observer_for_pid(pid)?;
 
-    // Create app-level context for focus notifications
-    // TODO: Register app-level notifications here
+    // Subscribe to app-level notifications (focus, selection)
+    if let Err(e) = platform::subscribe_app_notifications(pid, &observer) {
+      log::warn!(
+        "Failed to subscribe app notifications for PID {}: {:?}",
+        pid,
+        e
+      );
+    }
 
     self.processes.insert(
       process_id,
       ProcessState {
-        pid,
         observer,
-        app_context: std::ptr::null_mut(),
         focused_element: None,
       },
     );
@@ -259,6 +266,7 @@ impl Registry {
         }
 
         let handle = platform::fetch_window_handle(&window_info);
+
         self.windows.insert(
           window_id,
           WindowState {
@@ -318,12 +326,12 @@ impl Registry {
     // Remove window state
     if let Some(window_state) = self.windows.remove(window_id) {
       self.window_to_process.remove(window_id);
-      
+
       // Update depth order after removal
       let mut windows: Vec<_> = self.windows.values().map(|w| &w.info).collect();
       windows.sort_by_key(|w| w.z_index);
       self.depth_order = windows.into_iter().map(|w| w.id).collect();
-      
+
       events.push(Event::WindowRemoved {
         window_id: *window_id,
         depth_order: self.depth_order.clone(),
@@ -408,7 +416,11 @@ impl Registry {
       return;
     }
 
-    match platform::subscribe_destruction_notification(&state.element.id, &state.handle, observer.clone()) {
+    match platform::subscribe_destruction_notification(
+      &state.element.id,
+      &state.handle,
+      observer.clone(),
+    ) {
       Ok(context) => {
         state.destruction_context = Some(context as *mut c_void);
         state.subscriptions.insert(Notification::Destroyed);
@@ -445,7 +457,9 @@ impl Registry {
       self.unsubscribe_all(&mut state, &process.observer);
     }
 
-    Some(Event::ElementRemoved { element_id: *element_id })
+    Some(Event::ElementRemoved {
+      element_id: *element_id,
+    })
   }
 
   /// Unsubscribe from all notifications for an element.
@@ -467,7 +481,7 @@ impl Registry {
         .filter(|n| **n != Notification::Destroyed)
         .copied()
         .collect();
-      
+
       platform::unsubscribe_notifications(
         &state.handle,
         observer.clone(),
@@ -554,7 +568,9 @@ impl Registry {
     );
 
     // Keep only Destroyed subscription
-    state.subscriptions.retain(|n| *n == Notification::Destroyed);
+    state
+      .subscriptions
+      .retain(|n| *n == Notification::Destroyed);
   }
 }
 
@@ -580,7 +596,7 @@ pub fn get_window(window_id: &WindowId) -> Option<AXWindow> {
   Registry::with(|r| r.windows.get(window_id).map(|w| w.info.clone()))
 }
 
-/// Get active window ID.
+/// Get active window ID (sticky - last valid focused window).
 pub fn get_active_window() -> Option<WindowId> {
   Registry::with(|r| r.active_window)
 }
@@ -588,6 +604,25 @@ pub fn get_active_window() -> Option<WindowId> {
 /// Set active window.
 pub fn set_active_window(window_id: Option<WindowId>) {
   Registry::with(|r| r.active_window = window_id);
+}
+
+/// Set currently focused window.
+pub fn set_focused_window(window_id: Option<WindowId>) {
+  Registry::with(|r| r.focused_window = window_id);
+}
+
+/// Get the focused window for a specific PID.
+/// Returns the focused window ID if it belongs to the given process.
+pub fn get_focused_window_for_pid(pid: u32) -> Option<WindowId> {
+  Registry::with(|r| {
+    let window_id = r.focused_window?;
+    let window_state = r.windows.get(&window_id)?;
+    if window_state.process_id.0 == pid {
+      Some(window_id)
+    } else {
+      None
+    }
+  })
 }
 
 /// Get window depth order (front to back).
@@ -618,6 +653,22 @@ pub fn get_window_with_handle(window_id: &WindowId) -> Option<(AXWindow, Option<
   })
 }
 
+// === Focus API ===
+
+/// Set focused element for a process, returns the previous focused element.
+pub fn set_process_focus(pid: u32, element_id: ElementId) -> Option<ElementId> {
+  Registry::with(|r| {
+    let process_id = ProcessId(pid);
+    if let Some(process) = r.processes.get_mut(&process_id) {
+      let previous = process.focused_element;
+      process.focused_element = Some(element_id);
+      previous
+    } else {
+      None
+    }
+  })
+}
+
 // === Element API ===
 
 /// Register a new element.
@@ -637,6 +688,16 @@ pub fn get_element(element_id: &ElementId) -> AxioResult<AXElement> {
       .get(element_id)
       .map(|e| e.element.clone())
       .ok_or(AxioError::ElementNotFound(*element_id))
+  })
+}
+
+/// Get element by hash (for checking if element is already registered).
+pub fn get_element_by_hash(hash: u64) -> Option<AXElement> {
+  Registry::with(|r| {
+    r.hash_to_element
+      .get(&hash)
+      .and_then(|id| r.elements.get(id))
+      .map(|e| e.element.clone())
   })
 }
 
@@ -774,4 +835,3 @@ pub fn cleanup_dead_processes(active_pids: &HashSet<ProcessId>) -> usize {
     count
   })
 }
-

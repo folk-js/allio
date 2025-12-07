@@ -19,11 +19,15 @@ pub mod macos_platform;
 
 #[cfg(target_os = "macos")]
 pub use macos::{
+  // Core functionality
   check_accessibility_permissions, click_element, create_observer_for_pid,
   discover_children, element_hash, enable_accessibility_for_pid, fetch_window_handle,
   get_current_focus, get_element_at_position, get_window_root, refresh_element,
-  subscribe_destruction_notification, subscribe_notifications, unsubscribe_notifications,
-  unsubscribe_destruction_notification, write_element_value,
+  write_element_value,
+  // Notification subscriptions
+  subscribe_app_notifications, subscribe_destruction_notification, subscribe_notifications,
+  unsubscribe_destruction_notification, unsubscribe_notifications,
+  // Context management (re-exported for registry use)
   ObserverContextHandle,
 };
 

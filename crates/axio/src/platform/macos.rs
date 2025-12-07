@@ -6,7 +6,7 @@ use objc2_application_services::{
   AXValueType,
 };
 use objc2_core_foundation::{
-  kCFRunLoopDefaultMode, CFBoolean, CFHash, CFNumber, CFRange, CFRetained, CFRunLoop, CFString,
+  kCFRunLoopDefaultMode, CFBoolean, CFHash, CFRange, CFRetained, CFRunLoop, CFString,
 };
 use std::ffi::c_void;
 use std::ptr::NonNull;
@@ -27,70 +27,12 @@ pub fn check_accessibility_permissions() -> bool {
   unsafe { AXIsProcessTrusted() }
 }
 
-/// Type-safe representation of macOS accessibility notifications
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum AXNotification {
-  /// Element's value attribute changed (text fields, sliders, etc.)
-  ValueChanged,
-  /// Element's title attribute changed (windows, buttons with labels)
-  TitleChanged,
-  /// Element was destroyed (removed from the UI)
-  UIElementDestroyed,
-  /// Focus moved to this element
-  FocusedUIElementChanged,
-  /// Selected children changed (lists, tables)
-  SelectedChildrenChanged,
-}
-
-impl AXNotification {
-  /// Get the macOS notification name string
-  pub const fn as_str(&self) -> &'static str {
-    match self {
-      Self::ValueChanged => "AXValueChanged",
-      Self::TitleChanged => "AXTitleChanged",
-      Self::UIElementDestroyed => "AXUIElementDestroyed",
-      Self::FocusedUIElementChanged => "AXFocusedUIElementChanged",
-      Self::SelectedChildrenChanged => "AXSelectedChildrenChanged",
-    }
-  }
-
-  /// Get notifications appropriate for a given macOS accessibility role.
-  /// Always includes UIElementDestroyed for proper element lifecycle tracking.
-  pub fn for_role(role: &str) -> Vec<Self> {
-    // Always watch for destruction
-    let mut notifs = vec![Self::UIElementDestroyed];
-
-    // Role-specific value/title tracking
-    match role {
-      "AXTextField" | "AXTextArea" | "AXComboBox" | "AXSearchField" => {
-        notifs.push(Self::ValueChanged);
-      }
-      "AXWindow" => {
-        notifs.push(Self::TitleChanged);
-      }
-      _ => {}
-    }
-    notifs
-  }
-}
-
-impl std::str::FromStr for AXNotification {
-  type Err = ();
-
-  fn from_str(s: &str) -> Result<Self, Self::Err> {
-    match s {
-      "AXValueChanged" => Ok(Self::ValueChanged),
-      "AXTitleChanged" => Ok(Self::TitleChanged),
-      "AXUIElementDestroyed" => Ok(Self::UIElementDestroyed),
-      "AXFocusedUIElementChanged" => Ok(Self::FocusedUIElementChanged),
-      "AXSelectedChildrenChanged" => Ok(Self::SelectedChildrenChanged),
-      _ => Err(()),
-    }
-  }
-}
+// AXNotification enum has been replaced by:
+// - crate::accessibility::Notification (cross-platform enum)
+// - crate::platform::macos_platform::mapping (macOS string mappings)
 
 // ============================================================================
-// Generic Context Registry - Safe callback handling for macOS observers
+// Unified Context Registry - Safe callback handling for macOS observers
 // ============================================================================
 
 use parking_lot::Mutex;
@@ -98,42 +40,24 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::LazyLock;
 
-/// Next available context ID (shared across all registries)
+use crate::accessibility::Notification;
+use crate::platform::macos_platform::mapping::{
+  ax_action, ax_role, notification_from_macos, notification_to_macos,
+};
+
+/// Next available context ID
 static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Generic registry for mapping context IDs to values.
-/// Used to safely pass data through macOS C callbacks via opaque pointers.
-struct ContextRegistry<T>(Mutex<HashMap<u64, T>>);
-
-impl<T: Clone> ContextRegistry<T> {
-  /// Register a value and get a raw pointer handle for use in C callbacks.
-  fn register(&self, value: T) -> *mut ContextHandle {
-    let context_id = NEXT_CONTEXT_ID.fetch_add(1, AtomicOrdering::Relaxed);
-    self.0.lock().insert(context_id, value);
-    Box::into_raw(Box::new(ContextHandle { context_id }))
-  }
-
-  /// Unregister and free a context handle.
-  fn unregister(&self, handle_ptr: *mut ContextHandle) {
-    if handle_ptr.is_null() {
-      return;
-    }
-    unsafe {
-      let handle = Box::from_raw(handle_ptr);
-      self.0.lock().remove(&handle.context_id);
-    }
-  }
-
-  /// Look up value from context handle (for use in callbacks).
-  fn lookup(&self, handle_ptr: *const ContextHandle) -> Option<T> {
-    if handle_ptr.is_null() {
-      return None;
-    }
-    unsafe {
-      let handle = &*handle_ptr;
-      self.0.lock().get(&handle.context_id).cloned()
-    }
-  }
+/// Unified observer context - either element-level or process-level.
+///
+/// Element contexts are used for per-element notifications (destruction, value change).
+/// Process contexts are used for app-level notifications (focus, selection).
+#[derive(Clone)]
+pub enum ObserverContext {
+  /// Element-level notification (context identifies which element)
+  Element(ElementId),
+  /// Process-level notification (context identifies which app)
+  Process(u32),
 }
 
 /// Opaque handle passed to macOS callbacks - contains only an ID.
@@ -142,112 +66,56 @@ pub struct ContextHandle {
   context_id: u64,
 }
 
-// Type aliases for the two registries we need
 pub type ObserverContextHandle = ContextHandle;
-pub type AppObserverContextHandle = ContextHandle;
 
-/// Registry for element observer contexts (ElementId)
-static ELEMENT_CONTEXTS: LazyLock<ContextRegistry<ElementId>> =
-  LazyLock::new(|| ContextRegistry(Mutex::new(HashMap::new())));
-
-/// Registry for app observer contexts (PID)
-static APP_CONTEXTS: LazyLock<ContextRegistry<u32>> =
-  LazyLock::new(|| ContextRegistry(Mutex::new(HashMap::new())));
-
-// Public API for element contexts
-pub fn register_observer_context(element_id: ElementId) -> *mut ObserverContextHandle {
-  ELEMENT_CONTEXTS.register(element_id)
-}
-
-pub fn unregister_observer_context(handle_ptr: *mut ObserverContextHandle) {
-  ELEMENT_CONTEXTS.unregister(handle_ptr)
-}
-
-fn lookup_observer_context(handle_ptr: *const ObserverContextHandle) -> Option<ElementId> {
-  ELEMENT_CONTEXTS.lookup(handle_ptr)
-}
-
-// Internal API for app contexts
-fn register_app_context(pid: u32) -> *mut AppObserverContextHandle {
-  APP_CONTEXTS.register(pid)
-}
-
-fn unregister_app_context(handle_ptr: *mut AppObserverContextHandle) {
-  APP_CONTEXTS.unregister(handle_ptr)
-}
-
-fn lookup_app_context(handle_ptr: *const AppObserverContextHandle) -> Option<u32> {
-  APP_CONTEXTS.lookup(handle_ptr)
-}
-
-// ============================================================================
-// App-Level Observer State (Tier 1)
-// ============================================================================
-
-/// Per-app state for Tier 1 tracking
-struct AppState {
-  #[allow(dead_code)]
-  observer: CFRetained<AXObserver>,
-  context_handle: *mut AppObserverContextHandle,
-  focused_element_id: Option<ElementId>,
-  focused_is_watchable: bool,
-}
-
-unsafe impl Send for AppState {}
-unsafe impl Sync for AppState {}
-
-static APP_OBSERVERS: LazyLock<Mutex<HashMap<u32, AppState>>> =
+/// Unified registry for observer contexts.
+static OBSERVER_CONTEXTS: LazyLock<Mutex<HashMap<u64, ObserverContext>>> =
   LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Clean up app observers for PIDs that are no longer running.
-pub fn cleanup_dead_observers(active_pids: &std::collections::HashSet<crate::ProcessId>) -> usize {
-  let mut observers = APP_OBSERVERS.lock();
-  let dead_pids: Vec<u32> = observers
-    .keys()
-    .filter(|pid| !active_pids.iter().any(|p| p.0 == **pid))
-    .copied()
-    .collect();
-
-  let count = dead_pids.len();
-  for pid in dead_pids {
-    if let Some(state) = observers.remove(&pid) {
-      // Remove observer from run loop
-      unsafe {
-        let run_loop_source = state.observer.run_loop_source();
-        if let Some(main_run_loop) = CFRunLoop::main() {
-          main_run_loop.remove_source(Some(&run_loop_source), kCFRunLoopDefaultMode);
-        }
-      }
-      unregister_app_context(state.context_handle);
-    }
-  }
-  count
+/// Register an element context and get a raw pointer handle.
+pub fn register_observer_context(element_id: ElementId) -> *mut ObserverContextHandle {
+  register_context(ObserverContext::Element(element_id))
 }
 
-/// Ensure app-level observer is set up for a PID (Tier 1).
-pub fn ensure_app_observer(pid: u32) {
-  let mut observers = APP_OBSERVERS.lock();
-  if observers.contains_key(&pid) {
+/// Register a process context and get a raw pointer handle.
+pub fn register_process_context(pid: u32) -> *mut ObserverContextHandle {
+  register_context(ObserverContext::Process(pid))
+}
+
+fn register_context(ctx: ObserverContext) -> *mut ObserverContextHandle {
+  let context_id = NEXT_CONTEXT_ID.fetch_add(1, AtomicOrdering::Relaxed);
+  OBSERVER_CONTEXTS.lock().insert(context_id, ctx);
+  Box::into_raw(Box::new(ContextHandle { context_id }))
+}
+
+/// Unregister and free a context handle.
+pub fn unregister_observer_context(handle_ptr: *mut ObserverContextHandle) {
+  if handle_ptr.is_null() {
     return;
   }
-
-  match create_app_observer(pid) {
-    Ok((observer, context_handle)) => {
-      observers.insert(
-        pid,
-        AppState {
-          observer,
-          context_handle,
-          focused_element_id: None,
-          focused_is_watchable: false,
-        },
-      );
-    }
-    Err(e) => {
-      log::warn!("Failed to create app observer for PID {pid}: {e:?}");
-    }
+  unsafe {
+    let handle = Box::from_raw(handle_ptr);
+    OBSERVER_CONTEXTS.lock().remove(&handle.context_id);
   }
 }
+
+/// Look up context from handle (for use in callbacks).
+fn lookup_context(handle_ptr: *const ObserverContextHandle) -> Option<ObserverContext> {
+  if handle_ptr.is_null() {
+    return None;
+  }
+  unsafe {
+    let handle = &*handle_ptr;
+    OBSERVER_CONTEXTS.lock().get(&handle.context_id).cloned()
+  }
+}
+
+// ============================================================================
+// Observer Management
+// ============================================================================
+//
+// One observer per process, managed by Registry.ProcessState.
+// App-level notifications (focus, selection) are subscribed in Registry.get_or_create_process().
 
 /// Create an AXObserver and add it to the main run loop.
 /// This is the core observer creation logic shared by all observer types.
@@ -286,95 +154,47 @@ fn create_observer_raw(
   Ok(observer)
 }
 
-/// Create an app-level observer for Tier 1 notifications.
-fn create_app_observer(
-  pid: u32,
-) -> AxioResult<(CFRetained<AXObserver>, *mut AppObserverContextHandle)> {
-  let observer = create_observer_raw(pid, Some(app_observer_callback))?;
-
-  // Subscribe to app-level notifications on the application element
-  let app_el = app_element(pid);
-  let context_handle = register_app_context(pid);
-
-  // Subscribe to focus and selection changes
-  for notif in ["AXFocusedUIElementChanged", "AXSelectedTextChanged"] {
-    let notif_str = CFString::from_static_str(notif);
-    unsafe {
-      let _ = observer.add_notification(&app_el, &notif_str, context_handle as *mut c_void);
-    }
-  }
-
-  Ok((observer, context_handle))
-}
-
-/// Callback for app-level notifications (Tier 1)
-unsafe extern "C-unwind" fn app_observer_callback(
-  _observer: NonNull<AXObserver>,
-  element: NonNull<AXUIElement>,
-  notification: NonNull<CFString>,
-  refcon: *mut c_void,
-) {
-  if refcon.is_null() {
-    return;
-  }
-
-  let Some(pid) = lookup_app_context(refcon as *const AppObserverContextHandle) else {
-    return;
-  };
-
-  let notification_name = notification.as_ref().to_string();
-  let element_ref = CFRetained::retain(element);
-
-  match notification_name.as_str() {
-    "AXFocusedUIElementChanged" => {
-      handle_app_focus_changed(pid, element_ref);
-    }
-    "AXSelectedTextChanged" => {
-      handle_app_selection_changed(pid, element_ref);
-    }
-    _ => {}
-  }
-}
-
 fn should_auto_watch(role: &crate::accessibility::Role) -> bool {
   role.auto_watch_on_focus() || role.is_writable()
 }
 
-fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
+/// Handle focus change notification from the unified callback.
+pub fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
   let handle = ElementHandle::new(element);
-  let window_id = match get_window_id_for_handle(&handle) {
+  let window_id = match get_window_id_for_handle(&handle, pid) {
     Some(id) => id,
-    None => return,
+    None => {
+      // Expected when desktop is focused or window not yet tracked
+      log::debug!("FocusChanged: no window_id found for PID {}, skipping", pid);
+      return;
+    }
   };
 
   let Some(ax_element) = build_element_from_handle(handle, &window_id, pid, None) else {
-    return; // Element was previously destroyed
+    log::warn!("FocusChanged: element build failed for PID {}", pid);
+    return;
   };
+
   let new_is_watchable = should_auto_watch(&ax_element.role);
 
-  let (previous_element_id, previous_was_watchable) = {
-    let mut observers = APP_OBSERVERS.lock();
-    if let Some(state) = observers.get_mut(&pid) {
-      let prev_id = state.focused_element_id;
-      let prev_was_watchable = state.focused_is_watchable;
-      state.focused_element_id = Some(ax_element.id);
-      state.focused_is_watchable = new_is_watchable;
-      (prev_id, prev_was_watchable)
-    } else {
-      (None, false)
-    }
-  };
-
+  // Update focus in registry, get previous
+  let previous_element_id = crate::registry::set_process_focus(pid, ax_element.id);
   let same_element = previous_element_id.as_ref() == Some(&ax_element.id);
 
-  if previous_was_watchable && !same_element {
+  // Auto-watch/unwatch based on role
+  if !same_element {
     if let Some(ref prev_id) = previous_element_id {
-      crate::registry::unwatch_element(prev_id);
+      // Check if previous was watchable before unwatching
+      if let Ok(prev_elem) = crate::registry::get_element(prev_id) {
+        if should_auto_watch(&prev_elem.role) {
+          crate::registry::unwatch_element(prev_id);
+        }
+      }
     }
-  }
 
-  if new_is_watchable && !same_element {
-    let _ = crate::registry::watch_element(&ax_element.id);
+    if new_is_watchable {
+      let _ = crate::registry::watch_element(&ax_element.id);
+    }
   }
 
   emit(Event::FocusElement {
@@ -383,15 +203,24 @@ fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
   });
 }
 
-fn handle_app_selection_changed(pid: u32, element: CFRetained<AXUIElement>) {
+/// Handle selection change notification from the unified callback.
+pub fn handle_app_selection_changed(pid: u32, element: CFRetained<AXUIElement>) {
   let handle = ElementHandle::new(element);
-  let window_id = match get_window_id_for_handle(&handle) {
+  let window_id = match get_window_id_for_handle(&handle, pid) {
     Some(id) => id,
-    None => return,
+    None => {
+      // Expected when desktop is focused or window not yet tracked
+      log::debug!(
+        "SelectionChanged: no window_id found for PID {}, skipping",
+        pid
+      );
+      return;
+    }
   };
 
   let Some(ax_element) = build_element_from_handle(handle.clone(), &window_id, pid, None) else {
-    return; // Element was previously destroyed
+    log::warn!("SelectionChanged: element build failed for PID {}", pid);
+    return;
   };
 
   let selected_text = handle.get_string("AXSelectedText").unwrap_or_default();
@@ -449,7 +278,7 @@ pub fn get_current_focus(
     return (None, None);
   };
 
-  let window_id = match get_window_id_for_handle(&focused_handle) {
+  let window_id = match get_window_id_for_handle(&focused_handle, pid) {
     Some(id) => id,
     None => return (None, None),
   };
@@ -470,20 +299,18 @@ pub fn get_current_focus(
   (Some(element), selection)
 }
 
-/// Get window ID for an ElementHandle.
-fn get_window_id_for_handle(handle: &ElementHandle) -> Option<WindowId> {
-  let window_handle = handle.get_element("AXWindow")?;
-  let window_id_num = get_window_id_from_element(&window_handle)?;
-  Some(WindowId::from(window_id_num as u32))
-}
+/// Get window ID for an ElementHandle using hash-based lookup.
+/// Gets the AXWindow element, hashes it, and looks up in the registry.
+fn get_window_id_for_handle(handle: &ElementHandle, pid: u32) -> Option<WindowId> {
+  // First: check if element is already registered (by hash)
+  let element_hash = element_hash(handle);
+  if let Some(element) = crate::registry::get_element_by_hash(element_hash) {
+    return Some(element.window_id);
+  }
 
-/// Get window ID number from an ElementHandle representing a window.
-fn get_window_id_from_element(handle: &ElementHandle) -> Option<i64> {
-  // Use safe string method, parse the ID
-  let attr_name = CFString::from_static_str("_AXMacAppTitleBarTopLevelID");
-  handle
-    .get_raw_attr_internal(&attr_name)
-    .and_then(|v| v.downcast_ref::<CFNumber>()?.as_i64())
+  // Fallback: use the currently focused window for this PID
+  // This works because focus/selection events only come from the focused app
+  crate::registry::get_focused_window_for_pid(pid)
 }
 
 /// Get selected text and range from an element handle.
@@ -499,12 +326,18 @@ fn get_selection_from_handle(
 }
 
 /// Create an observer for a process and add it to the main run loop.
+/// Uses the unified callback that handles both element-level and app-level notifications.
 pub fn create_observer_for_pid(pid: u32) -> AxioResult<ObserverHandle> {
-  let observer = create_observer_raw(pid, Some(observer_callback))?;
+  let observer = create_observer_raw(pid, Some(unified_observer_callback))?;
   Ok(ObserverHandle::new(observer))
 }
 
-unsafe extern "C-unwind" fn observer_callback(
+/// Unified observer callback - handles both element-level and app-level notifications.
+///
+/// Dispatches based on context type:
+/// - Element context → element-level notifications (destruction, value change, title change)
+/// - Process context → app-level notifications (focus change, selection change)
+unsafe extern "C-unwind" fn unified_observer_callback(
   _observer: NonNull<AXObserver>,
   element: NonNull<AXUIElement>,
   notification: NonNull<CFString>,
@@ -517,14 +350,28 @@ unsafe extern "C-unwind" fn observer_callback(
       return;
     }
 
-    let Some(element_id) = lookup_observer_context(refcon as *const ObserverContextHandle) else {
+    let notification_str = notification.as_ref().to_string();
+    let element_ref = CFRetained::retain(element);
+
+    // Convert macOS string to our Notification type
+    let Some(notif) = notification_from_macos(&notification_str) else {
+      log::warn!("Unknown macOS notification: {}", notification_str);
       return;
     };
 
-    let notification_name = notification.as_ref().to_string();
-    let element_ref = CFRetained::retain(element);
+    // Look up unified context and dispatch based on type
+    let Some(ctx) = lookup_context(refcon as *const ObserverContextHandle) else {
+      return;
+    };
 
-    handle_notification(&element_id, &notification_name, element_ref);
+    match ctx {
+      ObserverContext::Element(element_id) => {
+        handle_element_notification(&element_id, notif, element_ref);
+      }
+      ObserverContext::Process(pid) => {
+        handle_process_notification(pid, notif, element_ref);
+      }
+    }
   }));
 
   if result.is_err() {
@@ -532,17 +379,14 @@ unsafe extern "C-unwind" fn observer_callback(
   }
 }
 
-fn handle_notification(
+/// Handle element-level notifications (destruction, value change, title change).
+fn handle_element_notification(
   element_id: &ElementId,
-  notification: &str,
+  notif: Notification,
   ax_element: CFRetained<AXUIElement>,
 ) {
-  let Ok(notification_type) = notification.parse::<AXNotification>() else {
-    return;
-  };
-
-  match notification_type {
-    AXNotification::ValueChanged => {
+  match notif {
+    Notification::ValueChanged => {
       let handle = ElementHandle::new(ax_element);
       let attrs = handle.get_attributes(None);
       if let Some(value) = attrs.value {
@@ -556,7 +400,7 @@ fn handle_notification(
       }
     }
 
-    AXNotification::TitleChanged => {
+    Notification::TitleChanged => {
       let handle = ElementHandle::new(ax_element);
       if let Some(label) = handle.get_string("AXTitle") {
         if !label.is_empty() {
@@ -571,12 +415,25 @@ fn handle_notification(
       }
     }
 
-    AXNotification::UIElementDestroyed => {
-      log::debug!("UIElementDestroyed notification for element {}", element_id);
+    Notification::Destroyed => {
+      log::debug!("Destroyed notification for element {}", element_id);
       crate::registry::remove_element(element_id);
       // Event is emitted by registry
     }
 
+    _ => {}
+  }
+}
+
+/// Handle app/process-level notifications (focus change, selection change).
+fn handle_process_notification(pid: u32, notif: Notification, ax_element: CFRetained<AXUIElement>) {
+  match notif {
+    Notification::FocusChanged => {
+      handle_app_focus_changed(pid, ax_element);
+    }
+    Notification::SelectionChanged => {
+      handle_app_selection_changed(pid, ax_element);
+    }
     _ => {}
   }
 }
@@ -595,8 +452,6 @@ pub fn build_element_from_handle(
   pid: u32,
   parent_id: Option<&ElementId>,
 ) -> Option<AXElement> {
-  ensure_app_observer(pid);
-
   // Fetch all attributes in ONE IPC call - safe method!
   let attrs = handle.get_attributes(None);
 
@@ -645,7 +500,9 @@ pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResu
 
   for child_handle in child_handles.into_iter().take(max_children) {
     // Skip children that were previously destroyed
-    if let Some(child) = build_element_from_handle(child_handle, &info.window_id, info.pid, Some(parent_id)) {
+    if let Some(child) =
+      build_element_from_handle(child_handle, &info.window_id, info.pid, Some(parent_id))
+    {
       child_ids.push(child.id);
       children.push(child);
     }
@@ -714,7 +571,7 @@ pub fn get_window_elements(pid: u32) -> AxioResult<Vec<ElementHandle>> {
 
   let windows = children
     .into_iter()
-    .filter(|child| child.get_string("AXRole").as_deref() == Some("AXWindow"))
+    .filter(|child| child.get_string("AXRole").as_deref() == Some(ax_role::WINDOW))
     .collect();
 
   Ok(windows)
@@ -775,14 +632,6 @@ pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
 // Element Operations
 // ============================================================================
 
-const WRITABLE_ROLES: &[&str] = &[
-  "AXTextField",
-  "AXTextArea",
-  "AXComboBox",
-  "AXSecureTextField",
-  "AXSearchField",
-];
-
 /// Get hash for element handle (for O(1) dedup lookup).
 pub fn element_hash(handle: &ElementHandle) -> u64 {
   CFHash(Some(handle.inner())) as u64
@@ -794,7 +643,9 @@ pub fn write_element_value(
   text: &str,
   platform_role: &str,
 ) -> AxioResult<()> {
-  if !WRITABLE_ROLES.contains(&platform_role) {
+  // Use Role::is_writable() for writability check
+  let role = crate::platform::macos_platform::mapping::role_from_macos(platform_role);
+  if !role.is_writable() {
     return Err(AxioError::NotSupported(format!(
       "Element with role '{platform_role}' is not writable"
     )));
@@ -808,66 +659,8 @@ pub fn write_element_value(
 /// Perform a click (press) action on an element.
 pub fn click_element(handle: &ElementHandle) -> AxioResult<()> {
   handle
-    .perform_action("AXPress")
+    .perform_action(ax_action::PRESS)
     .map_err(|e| AxioError::AccessibilityError(format!("AXPress failed: {e:?}")))
-}
-
-/// Register notifications for an element.
-pub fn subscribe_element_notifications(
-  element_id: &ElementId,
-  handle: &ElementHandle,
-  platform_role: &str,
-  observer: ObserverHandle,
-) -> AxioResult<(*mut ObserverContextHandle, Vec<AXNotification>)> {
-  let notifications = AXNotification::for_role(platform_role);
-  if notifications.is_empty() {
-    return Ok((std::ptr::null_mut(), Vec::new()));
-  }
-
-  let context_handle = register_observer_context(*element_id);
-
-  let mut registered = Vec::new();
-  for notification in &notifications {
-    let notif_cfstring = CFString::from_str(notification.as_str());
-    unsafe {
-      let result = observer.inner().add_notification(
-        handle.inner(),
-        &notif_cfstring,
-        context_handle as *mut c_void,
-      );
-      if result == AXError::Success {
-        registered.push(*notification);
-      }
-    }
-  }
-
-  if registered.is_empty() {
-    unregister_observer_context(context_handle);
-    return Err(AxioError::ObserverError(format!(
-      "Failed to register notifications for element (role: {platform_role})"
-    )));
-  }
-
-  Ok((context_handle, registered))
-}
-
-/// Unsubscribe from element notifications.
-pub fn unsubscribe_element_notifications(
-  handle: &ElementHandle,
-  observer: ObserverHandle,
-  context_handle: *mut ObserverContextHandle,
-  notifications: &[AXNotification],
-) {
-  for notification in notifications {
-    let notif_cfstring = CFString::from_str(notification.as_str());
-    unsafe {
-      let _ = observer
-        .inner()
-        .remove_notification(handle.inner(), &notif_cfstring);
-    }
-  }
-
-  unregister_observer_context(context_handle);
 }
 
 /// Subscribe to destruction notification only (lightweight tracking for all elements).
@@ -878,7 +671,8 @@ pub fn subscribe_destruction_notification(
 ) -> AxioResult<*mut ObserverContextHandle> {
   let context_handle = register_observer_context(*element_id);
 
-  let notif_cfstring = CFString::from_str(AXNotification::UIElementDestroyed.as_str());
+  let notif_str = notification_to_macos(Notification::Destroyed);
+  let notif_cfstring = CFString::from_str(notif_str);
   let result = unsafe {
     observer.inner().add_notification(
       handle.inner(),
@@ -903,7 +697,8 @@ pub fn unsubscribe_destruction_notification(
   observer: ObserverHandle,
   context_handle: *mut ObserverContextHandle,
 ) {
-  let notif_cfstring = CFString::from_str(AXNotification::UIElementDestroyed.as_str());
+  let notif_str = notification_to_macos(Notification::Destroyed);
+  let notif_cfstring = CFString::from_str(notif_str);
   unsafe {
     let _ = observer
       .inner()
@@ -913,13 +708,10 @@ pub fn unsubscribe_destruction_notification(
 }
 
 // =============================================================================
-// New Notification API (uses Notification enum from accessibility module)
+// Notification API
 // =============================================================================
 
-use crate::accessibility::Notification;
-use crate::platform::macos_platform::mapping::notification_to_macos;
-
-/// Subscribe to notifications for an element (using new Notification type).
+/// Subscribe to notifications for an element.
 pub fn subscribe_notifications(
   element_id: &ElementId,
   handle: &ElementHandle,
@@ -928,7 +720,9 @@ pub fn subscribe_notifications(
   notifications: &[Notification],
 ) -> AxioResult<*mut ObserverContextHandle> {
   if notifications.is_empty() {
-    return Err(AxioError::NotSupported("No notifications to subscribe".into()));
+    return Err(AxioError::NotSupported(
+      "No notifications to subscribe".into(),
+    ));
   }
 
   let context_handle = register_observer_context(*element_id);
@@ -977,6 +771,49 @@ pub fn unsubscribe_notifications(
   }
 
   unregister_observer_context(context_handle);
+}
+
+/// Subscribe to app-level notifications (focus, selection) on the application element.
+/// Returns a context handle for the subscription.
+pub fn subscribe_app_notifications(
+  pid: u32,
+  observer: &ObserverHandle,
+) -> AxioResult<*mut ObserverContextHandle> {
+  let app_el = app_element(pid);
+  let context_handle = register_process_context(pid);
+
+  // Subscribe to focus and selection changes on the app element
+  let notifications = [Notification::FocusChanged, Notification::SelectionChanged];
+  let mut registered = 0;
+
+  for notif in &notifications {
+    let notif_str = notification_to_macos(*notif);
+    let notif_cfstring = CFString::from_str(notif_str);
+    unsafe {
+      let result =
+        observer
+          .inner()
+          .add_notification(&app_el, &notif_cfstring, context_handle as *mut c_void);
+      if result == AXError::Success {
+        registered += 1;
+      }
+    }
+  }
+
+  if registered == 0 {
+    unregister_observer_context(context_handle);
+    return Err(AxioError::ObserverError(format!(
+      "Failed to subscribe to app notifications for PID {pid}"
+    )));
+  }
+
+  log::debug!(
+    "Subscribed to {}/{} app-level notifications for PID {}",
+    registered,
+    notifications.len(),
+    pid
+  );
+  Ok(context_handle)
 }
 
 /// Fetch an element handle for a window by matching bounds.
