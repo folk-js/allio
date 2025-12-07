@@ -11,17 +11,14 @@ use objc2_application_services::{
   AXValueType,
 };
 use objc2_core_foundation::{
-  kCFRunLoopDefaultMode, CFArray, CFBoolean, CFHash, CFNumber, CFRange, CFRetained, CFRunLoop,
-  CFString, CFType,
+  kCFRunLoopDefaultMode, CFBoolean, CFHash, CFNumber, CFRange, CFRetained, CFRunLoop, CFString,
 };
 use std::ffi::c_void;
 use std::ptr::NonNull;
 use uuid::Uuid;
 
 use super::handles::{ElementHandle, ObserverHandle};
-use crate::types::{
-  AXElement, AXRole, AXValue, AxioError, AxioResult, Bounds, ElementId, WindowId,
-};
+use crate::types::{AXElement, AXRole, AxioError, AxioResult, ElementId, WindowId};
 
 // ============================================================================
 // Safe Helpers
@@ -36,56 +33,13 @@ fn app_element(pid: u32) -> CFRetained<AXUIElement> {
 // ============================================================================
 // Accessibility Attribute Constants
 // ============================================================================
-// Attribute name constants using CFString::from_static_str for efficiency.
 
 mod ax_attrs {
   use objc2_core_foundation::{CFRetained, CFString};
 
-  macro_rules! ax_attr {
-    ($name:ident, $value:literal) => {
-      #[inline]
-      pub fn $name() -> CFRetained<CFString> {
-        CFString::from_static_str($value)
-      }
-    };
-  }
-
-  // Only define constants that are still used by legacy code
-  ax_attr!(value, "AXValue");
-  ax_attr!(position, "AXPosition");
-  ax_attr!(size, "AXSize");
-  ax_attr!(children, "AXChildren");
-  ax_attr!(window, "AXWindow");
-  ax_attr!(selected_text, "AXSelectedText");
-  ax_attr!(selected_text_range, "AXSelectedTextRange");
-}
-
-/// Fetch a raw CFType attribute from an AXUIElement.
-/// This is the core primitive - single attribute fetch.
-fn get_raw_attribute(element: &AXUIElement, attr_name: &CFString) -> Option<CFRetained<CFType>> {
-  unsafe {
-    let mut value: *const CFType = std::ptr::null();
-    let result = element.copy_attribute_value(attr_name, NonNull::new(&mut value)?);
-    if result != AXError::Success || value.is_null() {
-      return None;
-    }
-    Some(CFRetained::from_raw(NonNull::new_unchecked(
-      value as *mut _,
-    )))
-  }
-}
-
-// ============================================================================
-// Batch Attribute Fetching
-// ============================================================================
-
-/// Parse string from raw CFType
-fn parse_string(value: Option<&CFType>) -> Option<String> {
-  let s = value?.downcast_ref::<CFString>()?.to_string();
-  if s.is_empty() {
-    None
-  } else {
-    Some(s)
+  #[inline]
+  pub fn value() -> CFRetained<CFString> {
+    CFString::from_static_str("AXValue")
   }
 }
 
@@ -436,12 +390,13 @@ fn should_auto_watch(role: &crate::types::AXRole) -> bool {
 }
 
 fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
-  let window_id = match get_window_id_from_ax_element(&element) {
+  let handle = ElementHandle::new(element);
+  let window_id = match get_window_id_for_handle(&handle) {
     Some(id) => id,
     None => return,
   };
 
-  let ax_element = build_element(&element, &window_id, pid, None);
+  let ax_element = build_element_from_handle(handle, &window_id, pid, None);
   let new_is_watchable = should_auto_watch(&ax_element.role);
 
   let (previous_element_id, previous_was_watchable) = {
@@ -478,28 +433,27 @@ fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
 }
 
 fn handle_app_selection_changed(pid: u32, element: CFRetained<AXUIElement>) {
-  let window_id = match get_window_id_from_ax_element(&element) {
+  let handle = ElementHandle::new(element);
+  let window_id = match get_window_id_for_handle(&handle) {
     Some(id) => id,
     None => return,
   };
 
-  let ax_element = build_element(&element, &window_id, pid, None);
+  let ax_element = build_element_from_handle(handle.clone(), &window_id, pid, None);
 
-  let selected_text = get_raw_attribute(&element, &ax_attrs::selected_text())
-    .and_then(|v| parse_string(Some(&*v)))
-    .unwrap_or_default();
+  let selected_text = handle.get_string("AXSelectedText").unwrap_or_default();
   let range = if selected_text.is_empty() {
     None
   } else {
-    get_selected_text_range(&element)
+    get_selected_text_range(&handle)
   };
 
   crate::events::emit_selection_changed(&window_id, &ax_element.id, &selected_text, range.as_ref());
 }
 
-fn get_selected_text_range(element: &AXUIElement) -> Option<crate::types::TextRange> {
-  let attr_name = ax_attrs::selected_text_range();
-  let value = get_raw_attribute(element, &attr_name)?;
+fn get_selected_text_range(handle: &ElementHandle) -> Option<crate::types::TextRange> {
+  let attr_name = CFString::from_static_str("AXSelectedTextRange");
+  let value = handle.get_raw_attr_internal(&attr_name)?;
 
   let ax_value = value.downcast_ref::<AXValueRef>()?;
 
@@ -583,13 +537,6 @@ fn get_selection_from_handle(
   Some((selected_text, None))
 }
 
-fn get_window_id_from_ax_element(element: &AXUIElement) -> Option<WindowId> {
-  let value = get_raw_attribute(element, &ax_attrs::window())?;
-  let window_element = value.downcast::<AXUIElement>().ok()?;
-  let bounds = get_element_bounds(&window_element)?;
-  crate::window_registry::find_by_bounds(&bounds)
-}
-
 /// Create an observer for a process and add it to the main run loop.
 pub fn create_observer_for_pid(pid: u32) -> AxioResult<ObserverHandle> {
   let observer = unsafe {
@@ -645,7 +592,7 @@ unsafe extern "C-unwind" fn observer_callback(
     let notification_name = notification.as_ref().to_string();
     let element_ref = CFRetained::retain(element);
 
-    handle_notification(&element_id, &notification_name, &element_ref);
+    handle_notification(&element_id, &notification_name, element_ref);
   }));
 
   if result.is_err() {
@@ -653,7 +600,11 @@ unsafe extern "C-unwind" fn observer_callback(
   }
 }
 
-fn handle_notification(element_id: &ElementId, notification: &str, ax_element: &AXUIElement) {
+fn handle_notification(
+  element_id: &ElementId,
+  notification: &str,
+  ax_element: CFRetained<AXUIElement>,
+) {
   use crate::element_registry::ElementRegistry;
 
   let Some(notification_type) = AXNotification::from_str(notification) else {
@@ -662,8 +613,9 @@ fn handle_notification(element_id: &ElementId, notification: &str, ax_element: &
 
   match notification_type {
     AXNotification::ValueChanged => {
-      let role = get_string_attribute(ax_element, "AXRole");
-      if let Some(value) = get_typed_attribute(ax_element, "AXValue", role.as_deref()) {
+      let handle = ElementHandle::new(ax_element);
+      let attrs = handle.get_attributes(None);
+      if let Some(value) = attrs.value {
         if let Ok(mut element) = ElementRegistry::get(element_id) {
           element.value = Some(value);
           let _ = ElementRegistry::update(element_id, element.clone());
@@ -673,7 +625,8 @@ fn handle_notification(element_id: &ElementId, notification: &str, ax_element: &
     }
 
     AXNotification::TitleChanged => {
-      if let Some(label) = get_string_attribute(ax_element, "AXTitle") {
+      let handle = ElementHandle::new(ax_element);
+      if let Some(label) = handle.get_string("AXTitle") {
         if !label.is_empty() {
           if let Ok(mut element) = ElementRegistry::get(element_id) {
             element.label = Some(label);
@@ -695,31 +648,6 @@ fn handle_notification(element_id: &ElementId, notification: &str, ax_element: &
 
     _ => {}
   }
-}
-
-// ============================================================================
-// Attribute Helpers
-// ============================================================================
-
-fn get_string_attribute(element: &AXUIElement, attr_name: &str) -> Option<String> {
-  let attr = CFString::from_str(attr_name);
-  let value = get_raw_attribute(element, &attr)?;
-  let s = value.downcast_ref::<CFString>()?.to_string();
-  if s.is_empty() {
-    None
-  } else {
-    Some(s)
-  }
-}
-
-fn get_typed_attribute(
-  element: &AXUIElement,
-  attr_name: &str,
-  role: Option<&str>,
-) -> Option<AXValue> {
-  let attr = CFString::from_str(attr_name);
-  let value = get_raw_attribute(element, &attr)?;
-  extract_value(&value, role)
 }
 
 // ============================================================================
@@ -771,24 +699,6 @@ pub fn build_element_from_handle(
   ElementRegistry::register(element, handle, pid, &platform_role)
 }
 
-/// Build an AXElement from a macOS AXUIElement and register it.
-/// Legacy function - prefer build_element_from_handle for new code.
-pub fn build_element(
-  ax_element: &AXUIElement,
-  window_id: &WindowId,
-  pid: u32,
-  parent_id: Option<&ElementId>,
-) -> AXElement {
-  // Create handle by retaining the element
-  let handle = unsafe {
-    let retained = CFRetained::retain(NonNull::new_unchecked(
-      ax_element as *const _ as *mut AXUIElement,
-    ));
-    ElementHandle::new(retained)
-  };
-  build_element_from_handle(handle, window_id, pid, parent_id)
-}
-
 /// Discover and register children of an element.
 pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResult<Vec<AXElement>> {
   use crate::element_registry::ElementRegistry;
@@ -828,14 +738,6 @@ pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResu
   }
 
   Ok(children)
-}
-
-fn get_children_array(element: &AXUIElement) -> Option<CFRetained<CFArray<AXUIElement>>> {
-  let value = get_raw_attribute(element, &ax_attrs::children())?;
-  // Downcast to CFArray, then cast the element type (trusted from AX API)
-  let array = value.downcast::<CFArray>().ok()?;
-  // SAFETY: AXChildren attribute returns an array of AXUIElements
-  Some(unsafe { CFRetained::cast_unchecked(array) })
 }
 
 /// Refresh an element's attributes from the platform.
@@ -922,111 +824,20 @@ fn map_platform_role(platform_role: &str) -> AXRole {
 }
 
 // ============================================================================
-// Geometry Extraction
-// ============================================================================
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-struct CGPoint {
-  x: f64,
-  y: f64,
-}
-
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-struct CGSize {
-  width: f64,
-  height: f64,
-}
-
-fn get_element_bounds(element: &AXUIElement) -> Option<Bounds> {
-  let position = get_position_attribute(element)?;
-  let size = get_size_attribute(element)?;
-
-  Some(Bounds {
-    x: position.0,
-    y: position.1,
-    w: size.0,
-    h: size.1,
-  })
-}
-
-fn get_position_attribute(element: &AXUIElement) -> Option<(f64, f64)> {
-  let attr = ax_attrs::position();
-  let value = get_raw_attribute(element, &attr)?;
-  let ax_value = value.downcast_ref::<AXValueRef>()?;
-
-  unsafe {
-    if ax_value.r#type() != AXValueType::CGPoint {
-      return None;
-    }
-    let mut point = CGPoint { x: 0.0, y: 0.0 };
-    if ax_value.value(
-      AXValueType::CGPoint,
-      NonNull::new(&mut point as *mut _ as *mut c_void)?,
-    ) {
-      Some((point.x, point.y))
-    } else {
-      None
-    }
-  }
-}
-
-fn get_size_attribute(element: &AXUIElement) -> Option<(f64, f64)> {
-  let attr = ax_attrs::size();
-  let value = get_raw_attribute(element, &attr)?;
-  let ax_value = value.downcast_ref::<AXValueRef>()?;
-
-  unsafe {
-    if ax_value.r#type() != AXValueType::CGSize {
-      return None;
-    }
-    let mut size = CGSize {
-      width: 0.0,
-      height: 0.0,
-    };
-    if ax_value.value(
-      AXValueType::CGSize,
-      NonNull::new(&mut size as *mut _ as *mut c_void)?,
-    ) {
-      Some((size.width, size.height))
-    } else {
-      None
-    }
-  }
-}
-
-// ============================================================================
 // Window Elements
 // ============================================================================
 
-/// Get all window AXUIElements for a given PID
-pub fn get_window_elements(pid: u32) -> AxioResult<Vec<CFRetained<AXUIElement>>> {
-  let app_element = app_element(pid);
+/// Get all window ElementHandles for a given PID.
+pub fn get_window_elements(pid: u32) -> AxioResult<Vec<ElementHandle>> {
+  let app_handle = ElementHandle::new(app_element(pid));
+  let children = app_handle.get_children();
 
-  let children = get_children_array(&app_element);
-  let Some(children) = children else {
-    return Ok(Vec::new());
-  };
+  let windows = children
+    .into_iter()
+    .filter(|child| child.get_string("AXRole").as_deref() == Some("AXWindow"))
+    .collect();
 
-  let mut result = Vec::new();
-
-  for i in 0..children.len() {
-    if let Some(child_element) = children.get(i) {
-      let role_str = get_string_attribute(&child_element, "AXRole");
-      if role_str.as_deref() == Some("AXWindow") {
-        // Retain the element for the result
-        let retained = unsafe {
-          CFRetained::retain(NonNull::new_unchecked(
-            &*child_element as *const AXUIElement as *mut AXUIElement,
-          ))
-        };
-        result.push(retained);
-      }
-    }
-  }
-
-  Ok(result)
+  Ok(windows)
 }
 
 /// Get the root element for a window.
@@ -1091,53 +902,6 @@ pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
     pid,
     None,
   ))
-}
-
-// ============================================================================
-// Value Extraction
-// ============================================================================
-
-fn extract_value(cf_value: &CFType, role: Option<&str>) -> Option<AXValue> {
-  // Try CFString
-  if let Some(cf_string) = cf_value.downcast_ref::<CFString>() {
-    let s = cf_string.to_string();
-    return if s.is_empty() {
-      None
-    } else {
-      Some(AXValue::String(s))
-    };
-  }
-
-  // Try CFNumber
-  if let Some(cf_number) = cf_value.downcast_ref::<CFNumber>() {
-    // For toggle-like elements, convert 0/1 integers to booleans
-    if let Some(r) = role {
-      if r == "AXToggle"
-        || r == "AXCheckBox"
-        || r == "AXRadioButton"
-        || r.contains("Toggle")
-        || r.contains("CheckBox")
-        || r.contains("RadioButton")
-      {
-        if let Some(int_val) = cf_number.as_i64() {
-          return Some(AXValue::Boolean(int_val != 0));
-        }
-      }
-    }
-
-    if let Some(int_val) = cf_number.as_i64() {
-      return Some(AXValue::Integer(int_val));
-    } else if let Some(float_val) = cf_number.as_f64() {
-      return Some(AXValue::Float(float_val));
-    }
-  }
-
-  // Try CFBoolean
-  if let Some(cf_bool) = cf_value.downcast_ref::<CFBoolean>() {
-    return Some(AXValue::Boolean(cf_bool.as_bool()));
-  }
-
-  None
 }
 
 // ============================================================================
@@ -1273,18 +1037,16 @@ pub fn fetch_window_handle(window: &crate::AXWindow) -> Option<ElementHandle> {
   const MARGIN: f64 = 2.0;
 
   for element in window_elements.iter() {
-    let element_bounds = get_element_bounds(element);
-
-    if let Some(element_bounds) = element_bounds {
+    if let Some(element_bounds) = element.get_bounds() {
       if window.bounds.matches(&element_bounds, MARGIN) {
-        return Some(ElementHandle::new(element.clone()));
+        return Some(element.clone());
       }
     }
   }
 
   // Fallback: use only element if there's just one
   if window_elements.len() == 1 {
-    return Some(ElementHandle::new(window_elements[0].clone()));
+    return Some(window_elements[0].clone());
   }
 
   None
