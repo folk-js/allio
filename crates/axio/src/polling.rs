@@ -7,16 +7,8 @@ use std::time::{Duration, Instant};
 
 pub const DEFAULT_POLLING_INTERVAL_MS: u64 = 8;
 
-#[derive(Clone, Default)]
-pub struct WindowEnumOptions {
-  /// PID to exclude. Its window position is used as coordinate offset.
-  pub exclude_pid: Option<ProcessId>,
-  pub filter_fullscreen: bool,
-  pub filter_offscreen: bool,
-}
-
 /// Poll for current windows. Returns None if exclude_pid window isn't found.
-fn poll_windows(options: &WindowEnumOptions) -> Option<Vec<AXWindow>> {
+fn poll_windows(options: &PollingOptions) -> Option<Vec<AXWindow>> {
   let all_windows = platform::enumerate_windows();
 
   // Find offset from excluded window (e.g., our overlay)
@@ -73,16 +65,22 @@ fn poll_windows(options: &WindowEnumOptions) -> Option<Vec<AXWindow>> {
   Some(windows)
 }
 
+/// Window polling filters and interval.
 #[derive(Clone)]
-pub struct PollingConfig {
-  pub enum_options: WindowEnumOptions,
+pub struct PollingOptions {
+  /// PID to exclude. Its window position is used as coordinate offset.
+  pub exclude_pid: Option<ProcessId>,
+  pub filter_fullscreen: bool,
+  pub filter_offscreen: bool,
   pub interval_ms: u64,
 }
 
-impl Default for PollingConfig {
+impl Default for PollingOptions {
   fn default() -> Self {
     Self {
-      enum_options: WindowEnumOptions::default(),
+      exclude_pid: None,
+      filter_fullscreen: true,
+      filter_offscreen: true,
       interval_ms: DEFAULT_POLLING_INTERVAL_MS,
     }
   }
@@ -92,7 +90,7 @@ impl Default for PollingConfig {
 const CLEANUP_INTERVAL: u64 = 1250;
 
 /// Start background polling for windows and mouse position.
-pub fn start_polling(config: PollingConfig) {
+pub fn start_polling(config: PollingOptions) {
   use crate::window_registry;
 
   thread::spawn(move || {
@@ -114,7 +112,7 @@ pub fn start_polling(config: PollingConfig) {
         }
       }
 
-      if let Some(raw_windows) = poll_windows(&config.enum_options) {
+      if let Some(raw_windows) = poll_windows(&config) {
         let result = window_registry::update(raw_windows);
 
         // Emit events for removed windows

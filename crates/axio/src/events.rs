@@ -23,7 +23,6 @@ pub fn set_event_sink(new_sink: impl EventSink) -> bool {
   EVENT_SINK.set(Box::new(new_sink)).is_ok()
 }
 
-/// Emit an event to the configured sink (internal use only).
 pub(crate) fn emit(event: Event) {
   sink().emit(event);
 }

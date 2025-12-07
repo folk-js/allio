@@ -31,7 +31,7 @@ pub use api::{elements, screen, windows};
 pub use events::{set_event_sink, EventSink, NoopEventSink};
 
 // Polling config
-pub use polling::{PollingConfig, WindowEnumOptions};
+pub use polling::PollingOptions;
 
 /// Check if accessibility permissions are granted.
 pub fn verify_permissions() -> bool {
@@ -39,6 +39,6 @@ pub fn verify_permissions() -> bool {
 }
 
 /// Start background polling for windows and mouse position.
-pub fn start_polling(config: PollingConfig) {
+pub fn start_polling(config: PollingOptions) {
   polling::start_polling(config);
 }

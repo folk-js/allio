@@ -20,7 +20,7 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 #[cfg(target_os = "macos")]
 use tauri_nspanel::{tauri_panel, ManagerExt as _, PanelLevel, StyleMask, WebviewWindowExt as _};
 
-use axio::{PollingConfig, WindowEnumOptions};
+use axio::PollingOptions;
 use axio_ws::WebSocketState;
 
 // ============================================================================
@@ -530,13 +530,9 @@ fn main() {
       }
 
       // Start polling (handles windows + mouse position in one loop)
-      axio::start_polling(PollingConfig {
-        enum_options: WindowEnumOptions {
-          exclude_pid: Some(axio::ProcessId::new(std::process::id())),
-          filter_fullscreen: true,
-          filter_offscreen: true,
-        },
-        ..Default::default()
+      axio::start_polling(PollingOptions {
+        exclude_pid: Some(axio::ProcessId::new(std::process::id())),
+        ..PollingOptions::default()
       });
 
       let ws = ws_state.clone();
