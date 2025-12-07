@@ -499,6 +499,9 @@ fn setup_shortcuts(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 // ============================================================================
 
 fn main() {
+  // Initialize logging: RUST_LOG=debug cargo tauri dev
+  env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+
   let mut builder = tauri::Builder::default()
     .plugin(tauri_plugin_shell::init())
     .plugin(tauri_plugin_dialog::init());

@@ -169,8 +169,6 @@ impl Registry {
       return Ok(process_id);
     }
 
-    log::debug!("Creating process state for PID {} (new process)", pid);
-
     // Create observer for this process
     let observer = platform::create_observer_for_pid(pid)?;
 

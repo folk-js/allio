@@ -231,9 +231,7 @@ fn handle_element_notification(
     }
 
     Notification::Destroyed => {
-      log::debug!("Destroyed notification for element {}", element_id);
       crate::registry::remove_element(element_id);
-      // Event is emitted by registry
     }
 
     _ => {}

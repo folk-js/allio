@@ -172,11 +172,5 @@ pub fn subscribe_app_notifications(
     )));
   }
 
-  log::debug!(
-    "Subscribed to {}/{} app-level notifications for PID {}",
-    registered,
-    notifications.len(),
-    pid
-  );
   Ok(context_handle)
 }
