@@ -26,7 +26,7 @@ pub struct ElementAttributes {
 mod macos_impl {
   use super::ElementAttributes;
   use crate::accessibility::Value;
-  use crate::platform::macos_platform::mapping::action_from_macos;
+  use crate::platform::macos::mapping::action_from_macos;
   use crate::types::Bounds;
   use objc2_application_services::{
     AXCopyMultipleAttributeOptions, AXError, AXObserver, AXUIElement, AXValue as AXValueRef,

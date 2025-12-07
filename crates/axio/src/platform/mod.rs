@@ -6,27 +6,35 @@ pub use handles::{ElementHandle, ObserverHandle};
 
 // Platform-specific implementations
 #[cfg(target_os = "macos")]
-mod macos;
-#[cfg(target_os = "macos")]
 mod macos_cf;
 #[cfg(target_os = "macos")]
 mod macos_windows;
 
-// New organized macOS modules (migration in progress)
-// Will eventually replace macos.rs, macos_cf.rs, macos_windows.rs
+// macOS platform modules
 #[cfg(target_os = "macos")]
-pub mod macos_platform;
+pub mod macos;
 
 #[cfg(target_os = "macos")]
 pub use macos::{
   // Core functionality
-  check_accessibility_permissions, click_element, create_observer_for_pid,
-  discover_children, element_hash, enable_accessibility_for_pid, fetch_window_handle,
-  get_current_focus, get_element_at_position, get_window_root, refresh_element,
-  write_element_value,
+  check_accessibility_permissions,
+  click_element,
+  create_observer_for_pid,
+  discover_children,
+  element_hash,
+  enable_accessibility_for_pid,
+  fetch_window_handle,
+  get_current_focus,
+  get_element_at_position,
+  get_window_root,
+  refresh_element,
   // Notification subscriptions
-  subscribe_app_notifications, subscribe_destruction_notification, subscribe_notifications,
-  unsubscribe_destruction_notification, unsubscribe_notifications,
+  subscribe_app_notifications,
+  subscribe_destruction_notification,
+  subscribe_notifications,
+  unsubscribe_destruction_notification,
+  unsubscribe_notifications,
+  write_element_value,
   // Context management (re-exported for registry use)
   ObserverContextHandle,
 };

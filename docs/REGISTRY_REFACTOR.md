@@ -67,10 +67,16 @@
 - `handle_app_focus_changed()` / `handle_app_selection_changed()` called from unified callback
 - Focus/selection events use `focused_window` from registry (O(1) lookup, no extra IPC)
 
-### 🔲 Phase 3: Platform Organization (Future)
+### ✅ Phase 3: Platform Organization (Complete)
 
-- [ ] Split `macos.rs` into sub-modules (observer, element, windows, attributes)
-- [ ] Final cleanup pass
+- [x] Split `macos.rs` (~850 lines) into sub-modules:
+  - `observer.rs` - Context registry, observer creation, unified callback
+  - `element.rs` - Element building, discovery, refresh, operations
+  - `focus.rs` - Focus/selection handlers, window ID lookup
+  - `notifications.rs` - Subscription management
+  - `window.rs` - Window element operations
+  - `util.rs` - Shared utilities (app_element, check_permissions)
+- [x] Deleted old `macos.rs`
 
 ### 🔲 Future Exploration
 
@@ -138,7 +144,7 @@ Element (ElementId)
 
 ## File Structure
 
-### Current State
+### Current State (Complete)
 
 ```
 crates/axio/src/
@@ -163,40 +169,17 @@ crates/axio/src/
   platform/
     mod.rs                  # Re-exports
     handles.rs              # ElementHandle, ObserverHandle
-    macos.rs                # ~850 lines (to be split in Phase 3)
     macos_cf.rs             # CF helpers
-    macos_windows.rs        # Window enumeration
+    macos_windows.rs        # Window enumeration (CGWindowList)
     macos_platform/         # ✅ Organized macOS code
-      mod.rs
+      mod.rs                # Re-exports
       mapping.rs            # ax_role/ax_action/ax_notification constants + bidirectional mapping
-```
-
-### Target State (Phase 3)
-
-```
-crates/axio/src/
-  lib.rs
-  types.rs                  # IDs, Bounds, Event (slim)
-  registry.rs               # ✅ Done
-  events.rs
-  polling.rs
-
-  accessibility/            # ✅ Done
-    ...
-
-  api/                      # ✅ Done
-    ...
-
-  platform/
-    mod.rs
-    handles.rs
-    macos_platform/         # 🔲 TODO - Split macos.rs into sub-modules
-      mod.rs
-      mapping.rs            # ✅ Done
-      observer.rs           # AXObserver management & callbacks
-      element.rs            # Element handle operations
-      windows.rs            # Window enumeration (CGWindowList)
-      attributes.rs         # Attribute fetching
+      observer.rs           # Context registry, observer creation, unified callback
+      element.rs            # Element building, discovery, refresh, operations
+      focus.rs              # Focus/selection handlers, window ID lookup
+      notifications.rs      # Subscription management
+      window.rs             # Window element operations
+      util.rs               # Shared utilities (app_element, check_permissions)
 ```
 
 ## Key Types
@@ -745,7 +728,7 @@ For now, it's fine to have macOS-specific code that directly calls Registry. The
 5. ✅ **Wire up mapping constants** - `ax_action::PRESS`, `ax_role::WINDOW` used in platform code
 6. ✅ **Remove old registries** - `element_registry.rs` and `window_registry.rs` deleted
 7. ✅ **Unify observers** - One per process, unified callback, `APP_OBSERVERS` removed
-8. 🔲 **Refactor `platform/macos.rs`** into sub-modules (Phase 3)
+8. ✅ **Split `platform/macos.rs`** into sub-modules (observer, element, focus, notifications, window, util)
 9. 🔲 **Test thoroughly** - element lifecycle, focus tracking, cleanup
 
 ## Design Decisions
