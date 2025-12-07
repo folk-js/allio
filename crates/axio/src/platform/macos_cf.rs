@@ -1,7 +1,8 @@
-//! Core Foundation utilities for macOS.
-//!
-//! Clean, type-safe wrappers around CF types for dictionary access,
-//! number/string/boolean extraction, and window bounds parsing.
+/*! Core Foundation utilities for macOS.
+
+Clean, type-safe wrappers around CF types for dictionary access,
+number/string/boolean extraction, and window bounds parsing.
+*/
 
 use objc2_core_foundation::{
   CFBoolean, CFDictionary, CFNumber, CFNumberType, CFRetained, CFString, CGRect,

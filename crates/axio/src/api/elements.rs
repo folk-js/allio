@@ -1,6 +1,7 @@
-//! Element operations
-//!
-//! All functions for discovering, querying, and interacting with UI elements.
+/*! Element operations
+
+All functions for discovering, querying, and interacting with UI elements.
+*/
 
 use crate::element_registry::ElementRegistry;
 use crate::platform;

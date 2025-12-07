@@ -1,7 +1,8 @@
-//! Opaque platform handles with safe accessor methods.
-//!
-//! All platform-specific unsafe code is encapsulated here.
-//! The rest of the crate can interact with elements using safe methods.
+/*! Opaque platform handles with safe accessor methods.
+
+All platform-specific unsafe code is encapsulated here.
+The rest of the crate can interact with elements using safe methods.
+*/
 
 use crate::types::{AXAction, AXValue, Bounds};
 

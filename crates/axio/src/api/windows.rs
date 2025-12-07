@@ -1,6 +1,7 @@
-//! Window operations
-//!
-//! All functions for querying windows and their state.
+/*! Window operations
+
+All functions for querying windows and their state.
+*/
 
 use crate::platform;
 use crate::types::{AXElement, AXWindow, AxioResult, WindowId};
@@ -30,4 +31,3 @@ pub fn depth_order() -> Vec<WindowId> {
 pub fn root(window_id: &WindowId) -> AxioResult<AXElement> {
   platform::get_window_root(window_id)
 }
-

@@ -1,6 +1,7 @@
-//! Window enumeration for macOS.
-//!
-//! Uses CGWindowListCopyWindowInfo to enumerate on-screen windows.
+/*! Window enumeration for macOS.
+
+Uses CGWindowListCopyWindowInfo to enumerate on-screen windows.
+*/
 
 use super::macos_cf::{
   get_cf_boolean, get_cf_number, get_cf_string, get_cf_window_bounds, retain_cf_dictionary,

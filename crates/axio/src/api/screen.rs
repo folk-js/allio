@@ -1,6 +1,7 @@
-//! Screen utilities
-//!
-//! Cross-platform utilities for screen dimensions and mouse position.
+/*! Screen utilities
+
+Cross-platform utilities for screen dimensions and mouse position.
+*/
 
 use crate::platform;
 use crate::types::Point;
@@ -14,4 +15,3 @@ pub fn dimensions() -> (f64, f64) {
 pub fn mouse_position() -> Option<Point> {
   platform::get_mouse_position()
 }
-

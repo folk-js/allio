@@ -1,4 +1,4 @@
-//! Regenerate: `npm run typegen` or `cargo test -p axio export_bindings`
+/*! Regenerate: `npm run typegen` or `cargo test -p axio export_bindings` */
 
 use branded::Branded;
 use serde::{Deserialize, Serialize};

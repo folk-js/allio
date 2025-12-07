@@ -1,4 +1,4 @@
-//! Platform Abstraction Layer
+/*! Platform Abstraction Layer */
 
 // Opaque handle types (platform-specific implementations)
 mod handles;

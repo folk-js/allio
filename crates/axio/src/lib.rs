@@ -1,71 +1,39 @@
-//! AXIO - Accessibility I/O Layer
-//!
-//! Cross-platform accessibility API for discovering and interacting with UI elements.
-//!
-//! # Usage
-//!
-//! ```ignore
-//! use axio::{elements, windows};
-//!
-//! // Get all windows
-//! let all_windows = windows::all();
-//!
-//! // Get element at coordinates
-//! let element = elements::at(100.0, 200.0)?;
-//!
-//! // Get element children
-//! let children = elements::children(&element.id, 100)?;
-//! ```
+/*!
+AXIO - Accessibility I/O Layer
 
-// === Internal modules (not exposed) ===
-pub(crate) mod element_registry;
-pub(crate) mod platform;
-pub(crate) mod polling;
-pub(crate) mod window_registry;
+Cross-platform accessibility API for discovering and interacting with UI elements.
 
-// === Types ===
+```ignore
+use axio::{elements, windows, AXElement};
+
+let all_windows = windows::all();
+let element = elements::at(100.0, 200.0)?;
+let children = elements::children(&element.id, 100)?;
+```
+*/
+
+// Internal modules - not accessible outside this crate
+mod element_registry;
+mod events;
+mod platform;
+mod polling;
+mod window_registry;
+
+// Types - re-export everything at crate root
 mod types;
-pub use types::{
-  // Core data
-  AXAction,
-  AXElement,
-  AXRole,
-  AXValue,
-  AXWindow,
-  // Errors
-  AxioError,
-  AxioResult,
-  // Geometry
-  Bounds,
-  // IDs
-  ElementId,
-  // Events
-  Event,
-  Point,
-  ProcessId,
-  Selection,
-  SyncInit,
-  TextRange,
-  WindowId,
-};
+pub use types::*;
 
-// === Public API modules ===
+// Public API modules
 mod api;
-pub use api::elements;
-pub use api::screen;
-pub use api::windows;
+pub use api::{elements, screen, windows};
 
-// === Events ===
-pub(crate) mod events;
+// Events - just the sink setup, not emit()
 pub use events::{set_event_sink, EventSink, NoopEventSink};
 
-// === Polling configuration ===
+// Polling config
 pub use polling::{PollingConfig, WindowEnumOptions};
 
-// === Lifecycle ===
-
 /// Check if accessibility permissions are granted.
-/// Returns true if trusted, false otherwise.
 pub fn verify_permissions() -> bool {
   platform::check_accessibility_permissions()
 }
