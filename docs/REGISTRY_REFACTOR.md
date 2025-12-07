@@ -34,8 +34,11 @@
 - [x] Remove old `subscribe_element_notifications`, `unsubscribe_element_notifications`
 - [x] Subscribe app-level notifications (FocusChanged, SelectionChanged) when ProcessState created
 - [x] Unified context type: `ObserverContext::Element(id)` or `ObserverContext::Process(pid)`
-- [x] Focus tracking via `Registry::set_process_focus()` / `get_process_focus()`
-- [x] Cascading cleanup already implemented
+- [x] Focus tracking: per-process focused element + window-level `focused_window`
+- [x] Cascading cleanup implemented
+- [x] Unified Registry in `registry.rs` (replaced `element_registry.rs` + `window_registry.rs`)
+- [x] Wired up mapping constants (`ax_action::PRESS`, `ax_role::WINDOW`) in platform code
+- [x] Cleaned up dead code from `ProcessState` (removed unused `pid` and `app_context` fields)
 
 **Removed from `macos.rs`:**
 
@@ -51,12 +54,18 @@
 - `subscribe_element_notifications` fn
 - `unsubscribe_element_notifications` fn
 
+**Removed from crate:**
+
+- `element_registry.rs` (merged into `registry.rs`)
+- `window_registry.rs` (merged into `registry.rs`)
+
 **New architecture:**
 
 - Single `OBSERVER_CONTEXTS` registry with `ObserverContext` enum (Element or Process)
 - `unified_observer_callback` dispatches based on context type
 - `subscribe_app_notifications()` called when ProcessState created
 - `handle_app_focus_changed()` / `handle_app_selection_changed()` called from unified callback
+- Focus/selection events use `focused_window` from registry (O(1) lookup, no extra IPC)
 
 ### 🔲 Phase 3: Platform Organization (Future)
 
@@ -95,13 +104,16 @@ To implement:
 4. **Cleaner code organization** - Separate concerns into modules
 5. **Flexible for future platforms** - Even if we couple to macOS now, design should accommodate others
 
-## Current Problems
+## Solved Problems
 
-- **Two parallel registries**: `APP_OBSERVERS` and `ElementRegistry` with overlapping concerns
-- **Observer confusion**: AXObserver is per-PID, but stored per-window
-- **Unclear ownership**: Who owns what? When does cleanup happen?
-- **No explicit lifecycle**: Process/window/element creation/destruction not modeled
-- **Platform code is a grab bag**: `macos.rs` is ~1000 lines of unorganized functions
+- ✅ **Two parallel registries** → Unified `Registry` in `registry.rs`
+- ✅ **Observer confusion** → One `AXObserver` per process, stored in `ProcessState`
+- ✅ **Unclear ownership** → Clear hierarchy: Process → Window → Element with cascading cleanup
+- ✅ **No explicit lifecycle** → `ProcessState`, `WindowState`, `ElementState` with explicit creation/destruction
+
+## Remaining Work
+
+- **Platform code organization**: `macos.rs` is still ~850 lines (to be split in Phase 3)
 
 ## Core Entities & Lifecycles
 
@@ -132,53 +144,53 @@ Element (ElementId)
 crates/axio/src/
   lib.rs                    # Re-exports
   types.rs                  # AXElement, AXWindow, Event, IDs, Bounds, etc.
+  registry.rs               # ✅ Unified Registry (processes, windows, elements)
+  events.rs                 # Event emission
+  polling.rs                # Background polling for windows
 
-  accessibility/            # ✅ NEW - Cross-platform abstractions
+  accessibility/            # ✅ Cross-platform abstractions
     mod.rs
     role.rs                 # Role enum + metadata (writable, focusable, etc.)
     action.rs               # Action enum
-    notification.rs         # Notification types
+    notification.rs         # Notification types + is_app_level()
     value.rs                # Value types (String, Number, Boolean)
 
-  element_registry.rs       # Current registry (to be replaced)
-  window_registry.rs        # Window tracking
-  events.rs                 # Event emission
+  api/                      # Public API functions
+    mod.rs
+    elements.rs
+    windows.rs
 
   platform/
     mod.rs                  # Re-exports
     handles.rs              # ElementHandle, ObserverHandle
-    macos.rs                # ~960 lines (to be split)
+    macos.rs                # ~850 lines (to be split in Phase 3)
     macos_cf.rs             # CF helpers
     macos_windows.rs        # Window enumeration
-    macos_platform/         # ✅ NEW - organized macOS code
+    macos_platform/         # ✅ Organized macOS code
       mod.rs
       mapping.rs            # ax_role/ax_action/ax_notification constants + bidirectional mapping
 ```
 
-### Target State
+### Target State (Phase 3)
 
 ```
 crates/axio/src/
   lib.rs
   types.rs                  # IDs, Bounds, Event (slim)
+  registry.rs               # ✅ Done
+  events.rs
+  polling.rs
 
   accessibility/            # ✅ Done
-    mod.rs
-    role.rs
-    action.rs
-    notification.rs
-    value.rs
+    ...
 
-  registry/                 # 🔲 TODO - Unified state management
-    mod.rs                  # Registry struct + public API
-    process.rs              # ProcessState
-    window.rs               # WindowState
-    element.rs              # ElementState (internal)
+  api/                      # ✅ Done
+    ...
 
   platform/
     mod.rs
     handles.rs
-    macos_platform/         # 🔲 TODO - Complete migration
+    macos_platform/         # 🔲 TODO - Split macos.rs into sub-modules
       mod.rs
       mapping.rs            # ✅ Done
       observer.rs           # AXObserver management & callbacks
@@ -358,8 +370,7 @@ impl Value {
 
 ## Registry Design
 
-> Note: The unified Registry is not yet implemented. This section describes the target design.
-> Current state uses `element_registry.rs` + `APP_OBSERVERS` in `macos.rs`.
+> Note: The unified Registry is now implemented in `registry.rs`.
 
 ### Design Decisions (Updated)
 
@@ -378,7 +389,7 @@ impl Value {
    - Window removal cascades to all elements in that window
    - Process removal cascades to all windows, which cascade to elements
 
-### registry/mod.rs (Planned)
+### registry.rs (Implemented)
 
 ```rust
 pub struct Registry {
@@ -394,27 +405,33 @@ pub struct Registry {
   // Dead tracking (prevent re-registration of destroyed elements)
   // Note: Pruned on window removal. May explore removing entirely in future.
   dead_hashes: HashSet<u64>,
+  hash_to_window: HashMap<u64, WindowId>,  // For cleanup
 
-  // Current focus
-  focused_element: Option<ElementId>,
+  // Focus tracking
+  active_window: Option<WindowId>,   // Sticky - last valid focused window
+  focused_window: Option<WindowId>,  // Current OS state, can be None when desktop focused
 }
 
 struct ProcessState {
-  pid: u32,
-  observer: ObserverHandle,  // One per process
+  observer: ObserverHandle,          // One per process
+  focused_element: Option<ElementId>, // Per-process focused element
 }
 
 struct WindowState {
   process_id: ProcessId,
-  title: Option<String>,
+  info: AXWindow,
+  handle: Option<ElementHandle>,
 }
 
 struct ElementState {
-  element: Element,
-  handle: ElementHandle,  // Platform handle (generic type from platform/handles.rs)
+  element: AXElement,
+  handle: ElementHandle,             // Platform handle
   hash: u64,
-  pid: u32,  // For observer operations
-  subscriptions: HashSet<Notification>,  // Logical subscription state
+  pid: u32,                          // For observer operations
+  platform_role: String,             // Original macOS role string
+  subscriptions: HashSet<Notification>,
+  destruction_context: Option<*mut c_void>,  // Always set
+  watch_context: Option<*mut c_void>,        // When watched
 }
 ```
 
@@ -724,11 +741,12 @@ For now, it's fine to have macOS-specific code that directly calls Registry. The
 1. ✅ **Create `accessibility/` module** with Role, Action, Notification, Value
 2. ✅ **Create `platform/macos_platform/mapping.rs`** with constants and bidirectional mapping
 3. ✅ **Migrate types** - AXElement now uses Role, Action, Value; old types removed
-4. 🔲 **Create `registry/` module** with the new unified Registry
-5. 🔲 **Refactor `platform/macos/`** into sub-modules (observer, element, windows, etc.)
-6. 🔲 **Update API layer** to use new Registry
-7. 🔲 **Remove old `element_registry.rs`** and clean up `APP_OBSERVERS` usage
-8. 🔲 **Test thoroughly** - element lifecycle, focus tracking, cleanup
+4. ✅ **Create unified `registry.rs`** with ProcessState, WindowState, ElementState
+5. ✅ **Wire up mapping constants** - `ax_action::PRESS`, `ax_role::WINDOW` used in platform code
+6. ✅ **Remove old registries** - `element_registry.rs` and `window_registry.rs` deleted
+7. ✅ **Unify observers** - One per process, unified callback, `APP_OBSERVERS` removed
+8. 🔲 **Refactor `platform/macos.rs`** into sub-modules (Phase 3)
+9. 🔲 **Test thoroughly** - element lifecycle, focus tracking, cleanup
 
 ## Design Decisions
 
@@ -736,19 +754,21 @@ For now, it's fine to have macOS-specific code that directly calls Registry. The
 
 Registry stores:
 
-- Element data (`Element`)
+- Element data (`AXElement`)
 - Platform handle (`ElementHandle` - generic, not macOS-specific)
 - Subscriptions (`HashSet<Notification>`)
-- Context pointer for callbacks
+- Context pointers for observer callbacks (destruction + watch)
 
 ```rust
 struct ElementState {
-  element: Element,
+  element: AXElement,
   handle: ElementHandle,
   hash: u64,
   pid: u32,
+  platform_role: String,
   subscriptions: HashSet<Notification>,
-  context_handle: *mut c_void,  // For observer callbacks
+  destruction_context: Option<*mut c_void>,  // Always set for all elements
+  watch_context: Option<*mut c_void>,        // Set when watched
 }
 ```
 
@@ -758,19 +778,22 @@ This keeps everything in one place:
 - API can answer "is element X watched?" directly
 - Cleanup is straightforward (remove element = remove everything)
 
-**Note:** Destruction notification is always implicitly subscribed for all elements.
-Registry can represent this with a method rather than storing it:
+**Note:** Destruction notification is always subscribed for all registered elements.
+The `destruction_context` is set on registration; `watch_context` is set when explicitly watched.
 
-```rust
-impl Registry {
-  pub fn is_destruction_tracked(&self, id: ElementId) -> bool {
-    self.elements.contains_key(&id)  // All registered elements are tracked
-  }
-}
-```
+### Focus Tracking
+
+Two levels of focus tracking:
+
+1. **Window-level**: `focused_window` updated by polling, can be `None` when desktop focused
+2. **Element-level**: Per-process `focused_element` in `ProcessState`
+
+Focus/selection events use `focused_window` to determine which window the event belongs to,
+avoiding extra IPC calls.
 
 ### Other Decisions
 
 - **Window-less elements**: Not tracked (filtered in window polling already)
 - **ElementId stability**: Not stable across restarts (generated fresh)
 - **Process info to frontend**: No, frontend only sees windows and elements
+- **ProcessState minimal**: Only stores `observer` and `focused_element` (no redundant `pid`)
