@@ -392,8 +392,6 @@ fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
   }
 
   emit(ServerEvent::FocusElement {
-    window_id,
-    element_id: ax_element.id.clone(),
     element: ax_element,
     previous_element_id,
   });

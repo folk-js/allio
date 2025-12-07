@@ -421,8 +421,6 @@ pub enum ServerEvent {
   // Element focus (from Tier 1 app-level observer)
   #[serde(rename = "focus:element")]
   FocusElement {
-    window_id: WindowId,
-    element_id: ElementId,
     element: AXElement,
     previous_element_id: Option<ElementId>,
   },
