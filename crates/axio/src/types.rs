@@ -400,7 +400,7 @@ pub enum Event {
   #[serde(rename = "element:changed")]
   ElementChanged { element: AXElement },
   #[serde(rename = "element:removed")]
-  ElementRemoved { element: AXElement },
+  ElementRemoved { element_id: ElementId },
 
   // Window focus (from polling)
   #[serde(rename = "focus:changed")]

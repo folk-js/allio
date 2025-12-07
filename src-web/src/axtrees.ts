@@ -3,14 +3,20 @@
  * Uses the new AXIO architecture: elements are primary, trees are views.
  */
 
-import { AXIO, AXElement, AxioPassthrough } from "@axio/client";
+import {
+  AXIO,
+  AXElement,
+  AxioPassthrough,
+  ElementId,
+  WindowId,
+} from "@axio/client";
 
 class AXTreeOverlay {
   private container: HTMLElement;
   private axio: AXIO;
 
   // Minimal local state
-  private expanded = new Set<string>();
+  private expanded = new Set<ElementId>();
   private treeEl: HTMLElement | null = null;
   private outlineEl: HTMLElement | null = null;
 
@@ -60,7 +66,7 @@ class AXTreeOverlay {
   }
 
   /** Fetch root element and its immediate children for a window */
-  private async fetchWindowRoot(windowId: string): Promise<void> {
+  private async fetchWindowRoot(windowId: WindowId): Promise<void> {
     try {
       const root = await this.axio.windowRoot(windowId);
       // Also fetch immediate children so tree is usable
@@ -226,7 +232,7 @@ class AXTreeOverlay {
       const node = target.closest(".tree-node") as HTMLElement;
       if (!node) return;
 
-      const id = node.dataset.id!;
+      const id = parseInt(node.dataset.id!);
       const action = target.dataset.action;
 
       if (action === "toggle") {
@@ -269,7 +275,7 @@ class AXTreeOverlay {
         const node = target.closest(".tree-node") as HTMLElement;
         if (node?.dataset.id) {
           try {
-            await this.axio.write(node.dataset.id, target.value);
+            await this.axio.write(parseInt(node.dataset.id!), target.value);
             console.log(`✅ Wrote "${target.value}"`);
           } catch (err) {
             console.error("Failed to write:", err);
@@ -292,7 +298,7 @@ class AXTreeOverlay {
       ) as HTMLElement;
       if (node?.dataset.id) {
         try {
-          const el = await this.axio.refresh(node.dataset.id);
+          const el = await this.axio.refresh(parseInt(node.dataset.id!));
           if (el.bounds) {
             const { x, y, w, h } = el.bounds;
             this.showOutline(x, y, w, h);

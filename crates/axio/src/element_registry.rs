@@ -1,7 +1,7 @@
 use crate::platform::{self, AXNotification, ElementHandle, ObserverContextHandle, ObserverHandle};
 use crate::types::{AXElement, AxioError, AxioResult, ElementId, WindowId};
 use parking_lot::Mutex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::sync::LazyLock;
 
@@ -22,8 +22,15 @@ pub struct StoredElement {
   pub pid: u32,
   /// Platform role string (for watch notifications)
   pub platform_role: String,
-  /// Watch state if subscribed
+  /// Watch state if subscribed (for value/title changes)
   watch_state: Option<WatchState>,
+  /// Destruction tracking state (separate from watch - always registered when observer exists)
+  destruction_state: Option<DestructionState>,
+}
+
+/// Lightweight destruction tracking state.
+struct DestructionState {
+  context_handle: *mut c_void,
 }
 
 /// Per-window state: elements and shared observer.
@@ -40,6 +47,8 @@ static ELEMENT_REGISTRY: LazyLock<Mutex<ElementRegistry>> =
 pub struct ElementRegistry {
   windows: HashMap<WindowId, WindowState>,
   element_to_window: HashMap<ElementId, WindowId>,
+  /// Hashes of elements that have been destroyed (prevents re-registration of dead elements)
+  dead_hashes: HashSet<u64>,
 }
 
 // SAFETY: ElementRegistry is protected by a Mutex, and the raw pointers it contains
@@ -53,6 +62,7 @@ impl ElementRegistry {
     Self {
       windows: HashMap::new(),
       element_to_window: HashMap::new(),
+      dead_hashes: HashSet::new(),
     }
   }
 
@@ -66,14 +76,21 @@ impl ElementRegistry {
 
   /// Register element, returning existing if equivalent (stable IDs).
   /// Uses CFHash for O(1) duplicate detection.
+  /// Returns None if the element's hash is in the dead set (element was previously destroyed).
   pub fn register(
     element: AXElement,
     handle: ElementHandle,
     pid: u32,
     platform_role: &str,
-  ) -> AXElement {
+  ) -> Option<AXElement> {
     Self::with(|registry| {
       let window_id = element.window_id;
+
+      // O(1) check: reject if this element was previously destroyed
+      let hash = platform::element_hash(&handle);
+      if registry.dead_hashes.contains(&hash) {
+        return None;
+      }
 
       let window_state = registry
         .windows
@@ -85,27 +102,58 @@ impl ElementRegistry {
         });
 
       // O(1) duplicate check via CFHash
-      let hash = platform::element_hash(&handle);
       if let Some(existing_id) = window_state.by_hash.get(&hash) {
         if let Some(stored) = window_state.elements.get(existing_id) {
-          return stored.element.clone();
+          return Some(stored.element.clone());
         }
       }
 
-      // Store element
-      let stored = StoredElement {
+      // Eagerly create observer if it doesn't exist - this enables destruction tracking
+      let observer = match &window_state.observer {
+        Some(obs) => obs.clone(),
+        None => match platform::create_observer_for_pid(pid) {
+          Ok(obs) => {
+            let obs_clone = obs.clone();
+            window_state.observer = Some(obs);
+            obs_clone
+          }
+          Err(e) => {
+            log::warn!("Failed to create observer for PID {}: {:?}", pid, e);
+            // Continue without observer - element still gets registered
+            let stored = StoredElement {
+              element: element.clone(),
+              handle,
+              pid,
+              platform_role: platform_role.to_string(),
+              watch_state: None,
+              destruction_state: None,
+            };
+            window_state.by_hash.insert(hash, element.id);
+            window_state.elements.insert(element.id, stored);
+            registry.element_to_window.insert(element.id, window_id);
+            return Some(element);
+          }
+        },
+      };
+
+      // Store element with destruction tracking
+      let mut stored = StoredElement {
         element: element.clone(),
         handle,
         pid,
         platform_role: platform_role.to_string(),
         watch_state: None,
+        destruction_state: None,
       };
+
+      // Register destruction tracking immediately
+      register_destruction_tracking(&mut stored, observer);
 
       window_state.by_hash.insert(hash, element.id);
       window_state.elements.insert(element.id, stored);
       registry.element_to_window.insert(element.id, window_id);
 
-      element
+      Some(element)
     })
   }
 
@@ -223,12 +271,14 @@ impl ElementRegistry {
       };
 
       if let Some(mut stored) = window_state.elements.remove(element_id) {
-        // Remove from hash index
+        // Remove from hash index and add to dead set
         let hash = platform::element_hash(&stored.handle);
         window_state.by_hash.remove(&hash);
+        registry.dead_hashes.insert(hash);
 
         if let Some(ref observer) = window_state.observer {
           unwatch_element(&mut stored, observer.clone());
+          unregister_destruction_tracking(&mut stored, observer.clone());
         }
       }
     });
@@ -243,6 +293,7 @@ impl ElementRegistry {
       if let Some(ref observer) = window_state.observer {
         for (_, mut stored) in window_state.elements.drain() {
           unwatch_element(&mut stored, observer.clone());
+          unregister_destruction_tracking(&mut stored, observer.clone());
         }
       }
 
@@ -277,7 +328,8 @@ impl ElementRegistry {
 
       let pid = stored.pid;
 
-      // Get or create observer using get_or_insert_with pattern
+      // Get or create observer
+      let observer_is_new = window_state.observer.is_none();
       let observer = match &window_state.observer {
         Some(obs) => obs.clone(),
         None => {
@@ -285,6 +337,13 @@ impl ElementRegistry {
           window_state.observer.insert(obs).clone()
         }
       };
+
+      // If we just created the observer, register destruction tracking for ALL elements
+      if observer_is_new {
+        for stored in window_state.elements.values_mut() {
+          register_destruction_tracking(stored, observer.clone());
+        }
+      }
 
       // Re-borrow as mutable after observer setup
       let stored = window_state
@@ -360,5 +419,46 @@ fn unwatch_element(stored: &mut StoredElement, observer: ObserverHandle) {
     observer,
     watch_state.context_handle as *mut ObserverContextHandle,
     &watch_state.notifications,
+  );
+}
+
+/// Register for destruction notification only (lightweight - no value/title tracking).
+fn register_destruction_tracking(stored: &mut StoredElement, observer: ObserverHandle) {
+  if stored.destruction_state.is_some() {
+    return;
+  }
+
+  match platform::subscribe_destruction_notification(&stored.element.id, &stored.handle, observer) {
+    Ok(context_handle) => {
+      log::trace!(
+        "Registered destruction tracking for element {} (role: {})",
+        stored.element.id,
+        stored.platform_role
+      );
+      stored.destruction_state = Some(DestructionState {
+        context_handle: context_handle as *mut c_void,
+      });
+    }
+    Err(e) => {
+      log::debug!(
+        "Failed to register destruction for element {} (role: {}): {:?}",
+        stored.element.id,
+        stored.platform_role,
+        e
+      );
+    }
+  }
+}
+
+/// Unregister destruction tracking.
+fn unregister_destruction_tracking(stored: &mut StoredElement, observer: ObserverHandle) {
+  let Some(destruction_state) = stored.destruction_state.take() else {
+    return;
+  };
+
+  platform::unsubscribe_destruction_notification(
+    &stored.handle,
+    observer,
+    destruction_state.context_handle as *mut ObserverContextHandle,
   );
 }

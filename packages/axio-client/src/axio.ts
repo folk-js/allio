@@ -282,6 +282,10 @@ export class AXIO extends EventEmitter<AxioEvents> {
     // Event - apply to state and emit
     if (!msg.event) return;
 
+    if (msg.event !== "mouse:position") {
+      this.log(JSON.stringify(msg, null, 2));
+    }
+
     const event = msg as Event;
     switch (event.event) {
       case "sync:init": {
@@ -356,9 +360,9 @@ export class AXIO extends EventEmitter<AxioEvents> {
       }
 
       case "element:removed": {
-        const { element } = event.data;
-        this.elements.delete(element.id);
-        this.watchCallbacks.delete(element.id);
+        const { element_id } = event.data;
+        this.elements.delete(element_id);
+        this.watchCallbacks.delete(element_id);
         break;
       }
 

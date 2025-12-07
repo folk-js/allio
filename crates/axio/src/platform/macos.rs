@@ -54,15 +54,23 @@ impl AXNotification {
     }
   }
 
-  /// Get notifications appropriate for a given macOS accessibility role
+  /// Get notifications appropriate for a given macOS accessibility role.
+  /// Always includes UIElementDestroyed for proper element lifecycle tracking.
   pub fn for_role(role: &str) -> Vec<Self> {
+    // Always watch for destruction
+    let mut notifs = vec![Self::UIElementDestroyed];
+
+    // Role-specific value/title tracking
     match role {
       "AXTextField" | "AXTextArea" | "AXComboBox" | "AXSearchField" => {
-        vec![Self::ValueChanged, Self::UIElementDestroyed]
+        notifs.push(Self::ValueChanged);
       }
-      "AXWindow" => vec![Self::TitleChanged, Self::UIElementDestroyed],
-      _ => vec![],
+      "AXWindow" => {
+        notifs.push(Self::TitleChanged);
+      }
+      _ => {}
     }
+    notifs
   }
 }
 
@@ -348,7 +356,9 @@ fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
     None => return,
   };
 
-  let ax_element = build_element_from_handle(handle, &window_id, pid, None);
+  let Some(ax_element) = build_element_from_handle(handle, &window_id, pid, None) else {
+    return; // Element was previously destroyed
+  };
   let new_is_watchable = should_auto_watch(&ax_element.role);
 
   let (previous_element_id, previous_was_watchable) = {
@@ -389,7 +399,9 @@ fn handle_app_selection_changed(pid: u32, element: CFRetained<AXUIElement>) {
     None => return,
   };
 
-  let ax_element = build_element_from_handle(handle.clone(), &window_id, pid, None);
+  let Some(ax_element) = build_element_from_handle(handle.clone(), &window_id, pid, None) else {
+    return; // Element was previously destroyed
+  };
 
   let selected_text = handle.get_string("AXSelectedText").unwrap_or_default();
   let range = if selected_text.is_empty() {
@@ -451,7 +463,10 @@ pub fn get_current_focus(
     None => return (None, None),
   };
 
-  let element = build_element_from_handle(focused_handle.clone(), &window_id, pid, None);
+  let Some(element) = build_element_from_handle(focused_handle.clone(), &window_id, pid, None)
+  else {
+    return (None, None); // Element was previously destroyed
+  };
 
   // Get selection using handle method
   let selection =
@@ -568,14 +583,11 @@ fn handle_notification(
     }
 
     AXNotification::UIElementDestroyed => {
-      if let Ok(element) = ElementRegistry::get(element_id) {
-        ElementRegistry::remove_element(element_id);
-        emit(Event::ElementRemoved {
-          element: element.clone(),
-        });
-      } else {
-        ElementRegistry::remove_element(element_id);
-      }
+      log::debug!("UIElementDestroyed notification for element {}", element_id);
+      ElementRegistry::remove_element(element_id);
+      emit(Event::ElementRemoved {
+        element_id: *element_id,
+      });
     }
 
     _ => {}
@@ -589,12 +601,13 @@ fn handle_notification(
 /// Build an AXElement from an ElementHandle and register it.
 /// Uses batch attribute fetching for ~10x faster element creation.
 /// All unsafe code is encapsulated in ElementHandle methods.
+/// Returns None if the element's hash is in the dead set (was previously destroyed).
 pub fn build_element_from_handle(
   handle: ElementHandle,
   window_id: &WindowId,
   pid: u32,
   parent_id: Option<&ElementId>,
-) -> AXElement {
+) -> Option<AXElement> {
   use crate::element_registry::ElementRegistry;
 
   ensure_app_observer(pid);
@@ -650,9 +663,11 @@ pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResu
   let mut child_ids = Vec::new();
 
   for child_handle in child_handles.into_iter().take(max_children) {
-    let child = build_element_from_handle(child_handle, &window_id, pid, Some(parent_id));
-    child_ids.push(child.id);
-    children.push(child);
+    // Skip children that were previously destroyed
+    if let Some(child) = build_element_from_handle(child_handle, &window_id, pid, Some(parent_id)) {
+      child_ids.push(child.id);
+      children.push(child);
+    }
   }
 
   ElementRegistry::set_children(parent_id, child_ids)?;
@@ -781,12 +796,8 @@ pub fn get_window_root(window_id: &WindowId) -> AxioResult<AXElement> {
     handle.ok_or_else(|| AxioError::Internal(format!("Window {window_id} has no AX element")))?;
 
   // Clone handle for safe method use
-  Ok(build_element_from_handle(
-    window_handle.clone(),
-    window_id,
-    window.process_id.0,
-    None,
-  ))
+  build_element_from_handle(window_handle.clone(), window_id, window.process_id.0, None)
+    .ok_or_else(|| AxioError::Internal("Window root element was previously destroyed".to_string()))
 }
 
 /// Enable accessibility for an Electron app
@@ -822,12 +833,9 @@ pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
     AxioError::AccessibilityError(format!("No element found at ({x}, {y}) in app {pid}"))
   })?;
 
-  Ok(build_element_from_handle(
-    element_handle,
-    &window_id,
-    pid,
-    None,
-  ))
+  build_element_from_handle(element_handle, &window_id, pid, None).ok_or_else(|| {
+    AxioError::AccessibilityError(format!("Element at ({x}, {y}) was previously destroyed"))
+  })
 }
 
 // ============================================================================
@@ -926,6 +934,48 @@ pub fn unsubscribe_element_notifications(
     }
   }
 
+  unregister_observer_context(context_handle);
+}
+
+/// Subscribe to destruction notification only (lightweight tracking for all elements).
+pub fn subscribe_destruction_notification(
+  element_id: &ElementId,
+  handle: &ElementHandle,
+  observer: ObserverHandle,
+) -> AxioResult<*mut ObserverContextHandle> {
+  let context_handle = register_observer_context(*element_id);
+
+  let notif_cfstring = CFString::from_str(AXNotification::UIElementDestroyed.as_str());
+  let result = unsafe {
+    observer.inner().add_notification(
+      handle.inner(),
+      &notif_cfstring,
+      context_handle as *mut c_void,
+    )
+  };
+
+  if result != AXError::Success {
+    unregister_observer_context(context_handle);
+    return Err(AxioError::ObserverError(format!(
+      "Failed to register destruction notification for element {element_id}: {result:?}"
+    )));
+  }
+
+  Ok(context_handle)
+}
+
+/// Unsubscribe from destruction notification.
+pub fn unsubscribe_destruction_notification(
+  handle: &ElementHandle,
+  observer: ObserverHandle,
+  context_handle: *mut ObserverContextHandle,
+) {
+  let notif_cfstring = CFString::from_str(AXNotification::UIElementDestroyed.as_str());
+  unsafe {
+    let _ = observer
+      .inner()
+      .remove_notification(handle.inner(), &notif_cfstring);
+  }
   unregister_observer_context(context_handle);
 }
 
