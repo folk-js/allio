@@ -13,7 +13,7 @@ use std::ptr::NonNull;
 
 use super::handles::{ElementHandle, ObserverHandle};
 use crate::events::emit;
-use crate::types::{AXElement, AXRole, AxioError, AxioResult, ElementId, Event, WindowId};
+use crate::types::{AXElement, AxioError, AxioResult, ElementId, Event, WindowId};
 
 /// Create an AXUIElement for an application by PID.
 /// Encapsulates the unsafe FFI call.
@@ -336,17 +336,8 @@ unsafe extern "C-unwind" fn app_observer_callback(
   }
 }
 
-fn should_auto_watch(role: &crate::types::AXRole) -> bool {
-  use crate::types::AXRole;
-  matches!(
-    role,
-    AXRole::Textbox
-      | AXRole::Searchbox
-      | AXRole::Checkbox
-      | AXRole::Radio
-      | AXRole::Toggle
-      | AXRole::Slider
-  )
+fn should_auto_watch(role: &crate::accessibility::Role) -> bool {
+  role.auto_watch_on_focus() || role.is_writable()
 }
 
 fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
@@ -616,9 +607,9 @@ pub fn build_element_from_handle(
   let attrs = handle.get_attributes(None);
 
   let platform_role = attrs.role.clone().unwrap_or_else(|| "Unknown".to_string());
-  let role = map_platform_role(&platform_role);
+  let role = crate::platform::macos_platform::mapping::role_from_macos(&platform_role);
 
-  let subrole = if matches!(role, AXRole::Unknown) {
+  let subrole = if matches!(role, crate::accessibility::Role::Unknown) {
     Some(platform_role.clone())
   } else {
     attrs.subrole
@@ -705,8 +696,8 @@ pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
   // Use safe ElementHandle method for batch attribute fetch
   let attrs = handle.get_attributes(Some(&platform_role));
 
-  let role = map_platform_role(&platform_role);
-  let subrole = if matches!(role, AXRole::Unknown) {
+  let role = crate::platform::macos_platform::mapping::role_from_macos(&platform_role);
+  let subrole = if matches!(role, crate::accessibility::Role::Unknown) {
     Some(platform_role.to_string())
   } else {
     attrs.subrole
@@ -731,43 +722,6 @@ pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
 
   ElementRegistry::update(element_id, updated.clone())?;
   Ok(updated)
-}
-
-/// Map macOS AX* roles to ARIA-based AXIO roles
-fn map_platform_role(platform_role: &str) -> AXRole {
-  let role = platform_role
-    .strip_prefix("AX")
-    .unwrap_or(platform_role)
-    .to_lowercase();
-
-  match role.as_str() {
-    "application" => AXRole::Application,
-    "window" | "standardwindow" => AXRole::Window,
-    "group" | "scrollarea" => AXRole::Group,
-    "button" | "defaultbutton" => AXRole::Button,
-    "checkbox" => AXRole::Checkbox,
-    "radiobutton" => AXRole::Radio,
-    "toggle" => AXRole::Toggle,
-    "textfield" | "textarea" | "textbox" | "securetextfield" | "combobox" => AXRole::Textbox,
-    "searchfield" => AXRole::Searchbox,
-    "slider" => AXRole::Slider,
-    "menu" => AXRole::Menu,
-    "menuitem" => AXRole::Menuitem,
-    "menubar" => AXRole::Menubar,
-    "link" => AXRole::Link,
-    "tab" => AXRole::Tab,
-    "tabgroup" => AXRole::Tablist,
-    "statictext" | "text" => AXRole::Text,
-    "heading" => AXRole::Heading,
-    "image" => AXRole::Image,
-    "list" => AXRole::List,
-    "listitem" | "row" => AXRole::Listitem,
-    "table" => AXRole::Table,
-    "cell" => AXRole::Cell,
-    "progressindicator" => AXRole::Progressbar,
-    "scrollbar" => AXRole::Scrollbar,
-    _ => AXRole::Unknown,
-  }
 }
 
 // ============================================================================

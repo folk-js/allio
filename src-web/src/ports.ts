@@ -4,13 +4,14 @@ import {
   AXWindow,
   AxioOcclusion,
   AxioPassthrough,
+  WindowId,
 } from "@axio/client";
 
 type PortType = "input" | "output";
 
 interface Port {
   id: string;
-  windowId: string;
+  windowId: WindowId;
   element: AXElement;
   type: PortType;
   x: number;
@@ -43,9 +44,9 @@ class PortsDemo {
   private ports = new Map<string, Port>();
   private connections: Connection[] = [];
   private portElements = new Map<string, HTMLElement>();
-  private windowContainers = new Map<string, HTMLElement>();
+  private windowContainers = new Map<WindowId, HTMLElement>();
   private edgeGroups = new Map<
-    string,
+    WindowId,
     { left: HTMLElement; right: HTMLElement }
   >();
 
@@ -519,7 +520,7 @@ class PortsDemo {
     });
   }
 
-  private createPort(windowId: string, element: AXElement, type: PortType) {
+  private createPort(windowId: WindowId, element: AXElement, type: PortType) {
     // Check if already exists
     const exists = [...this.ports.values()].some(
       (p) => p.element.id === element.id && p.type === type

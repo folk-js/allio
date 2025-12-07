@@ -65,67 +65,7 @@ pub enum AxioError {
 
 pub type AxioResult<T> = Result<T, AxioError>;
 
-// === Value and geometry types ===
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
-#[serde(tag = "type", content = "value")]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
-pub enum AXValue {
-  String(String),
-  Integer(i64),
-  Float(f64),
-  Boolean(bool),
-}
-
-impl AXValue {
-  pub fn as_str(&self) -> Option<&str> {
-    match self {
-      AXValue::String(s) => Some(s),
-      _ => None,
-    }
-  }
-
-  pub fn as_string(&self) -> Option<String> {
-    match self {
-      AXValue::String(s) => Some(s.clone()),
-      AXValue::Integer(i) => Some(i.to_string()),
-      AXValue::Float(f) => Some(f.to_string()),
-      AXValue::Boolean(b) => Some(b.to_string()),
-    }
-  }
-
-  pub fn as_i64(&self) -> Option<i64> {
-    match self {
-      AXValue::Integer(i) => Some(*i),
-      AXValue::Float(f) => Some(*f as i64),
-      _ => None,
-    }
-  }
-
-  pub fn as_f64(&self) -> Option<f64> {
-    match self {
-      AXValue::Float(f) => Some(*f),
-      AXValue::Integer(i) => Some(*i as f64),
-      _ => None,
-    }
-  }
-
-  pub fn as_bool(&self) -> Option<bool> {
-    match self {
-      AXValue::Boolean(b) => Some(*b),
-      _ => None,
-    }
-  }
-
-  pub fn is_truthy(&self) -> bool {
-    match self {
-      AXValue::Boolean(b) => *b,
-      AXValue::Integer(i) => *i != 0,
-      AXValue::Float(f) => *f != 0.0,
-      AXValue::String(s) => !s.is_empty(),
-    }
-  }
-}
+// === Geometry types ===
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, TS)]
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
@@ -178,127 +118,6 @@ impl Point {
   }
 }
 
-// === ARIA role subset ===
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, TS)]
-#[serde(rename_all = "lowercase")]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
-pub enum AXRole {
-  Application,
-  Document,
-  Window,
-  Group,
-  Button,
-  Checkbox,
-  Radio,
-  Toggle,
-  Textbox,
-  Searchbox,
-  Slider,
-  Menu,
-  Menuitem,
-  Menubar,
-  Link,
-  Tab,
-  Tablist,
-  Text,
-  Heading,
-  Image,
-  List,
-  Listitem,
-  Table,
-  Row,
-  Cell,
-  Progressbar,
-  Scrollbar,
-  Unknown,
-}
-
-impl AXRole {
-  /// Can user interact with this element (click, type, etc)?
-  pub fn is_interactive(&self) -> bool {
-    matches!(
-      self,
-      Self::Button
-        | Self::Checkbox
-        | Self::Radio
-        | Self::Toggle
-        | Self::Textbox
-        | Self::Searchbox
-        | Self::Slider
-        | Self::Link
-        | Self::Tab
-        | Self::Menuitem
-    )
-  }
-
-  /// Does this element typically contain other elements?
-  pub fn is_container(&self) -> bool {
-    matches!(
-      self,
-      Self::Application
-        | Self::Document
-        | Self::Window
-        | Self::Group
-        | Self::Menu
-        | Self::Menubar
-        | Self::Tablist
-        | Self::List
-        | Self::Table
-        | Self::Row
-    )
-  }
-
-  /// Can this element have a text/numeric value?
-  pub fn can_have_value(&self) -> bool {
-    matches!(
-      self,
-      Self::Textbox
-        | Self::Searchbox
-        | Self::Slider
-        | Self::Progressbar
-        | Self::Checkbox
-        | Self::Radio
-        | Self::Toggle
-    )
-  }
-
-  /// Is this a text input element?
-  pub fn is_text_input(&self) -> bool {
-    matches!(self, Self::Textbox | Self::Searchbox)
-  }
-
-  /// Is this element typically focusable?
-  pub fn is_focusable(&self) -> bool {
-    self.is_interactive() || matches!(self, Self::Application | Self::Document | Self::Window)
-  }
-}
-
-// === Action types ===
-
-/// Platform-agnostic action enum.
-/// Maps to macOS kAX*Action constants and Windows UIA patterns.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, TS)]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
-pub enum AXAction {
-  /// Primary activation (click, press). macOS: AXPress, Windows: Invoke
-  Press,
-  /// Show context menu. macOS: AXShowMenu
-  ShowMenu,
-  /// Increase value. macOS: AXIncrement, Windows: RangeValue
-  Increment,
-  /// Decrease value. macOS: AXDecrement, Windows: RangeValue
-  Decrement,
-  /// Confirm/submit. macOS: AXConfirm
-  Confirm,
-  /// Cancel operation. macOS: AXCancel
-  Cancel,
-  /// Bring to front. macOS: AXRaise, Windows: SetFocus
-  Raise,
-  /// Pick from list. macOS: AXPick
-  Pick,
-}
-
 // === Core types ===
 
 /// Window info from x-win + accessibility.
@@ -328,17 +147,17 @@ pub struct AXElement {
   pub parent_id: Option<ElementId>,
   /// Child element IDs. None = not yet fetched, Some([]) = no children
   pub children: Option<Vec<ElementId>>,
-  pub role: AXRole,
+  pub role: crate::accessibility::Role,
   pub subrole: Option<String>,
   pub label: Option<String>,
-  pub value: Option<AXValue>,
+  pub value: Option<crate::accessibility::Value>,
   pub description: Option<String>,
   pub placeholder: Option<String>,
   pub bounds: Option<Bounds>,
   pub focused: Option<bool>,
   pub enabled: Option<bool>,
   /// Available actions for this element
-  pub actions: Vec<AXAction>,
+  pub actions: Vec<crate::accessibility::Action>,
 }
 
 // === Events ===

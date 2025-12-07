@@ -4,14 +4,16 @@
 //! Platform-specific role strings are mapped in `platform/*/mapping.rs`.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// Semantic UI role (cross-platform).
 ///
 /// These roles are inspired by WAI-ARIA but simplified for our use case.
 /// Platform mappings (macOS AXRole strings, Windows UIA ControlTypes) are
 /// handled by the platform layer. See `platform::map_role_from_platform`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub enum Role {
   // === Structural / Containers ===
   Application,

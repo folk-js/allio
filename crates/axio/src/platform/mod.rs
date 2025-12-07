@@ -18,9 +18,6 @@ mod macos_windows;
 pub mod macos_platform;
 
 #[cfg(target_os = "macos")]
-pub use macos_platform::mapping as macos_mapping;
-
-#[cfg(target_os = "macos")]
 pub use macos::{
   check_accessibility_permissions, cleanup_dead_observers, click_element, create_observer_for_pid,
   discover_children, element_hash, enable_accessibility_for_pid, fetch_window_handle,

@@ -5,13 +5,15 @@
 
 use super::Role;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// Notifications we can subscribe to for an element.
 ///
 /// Platform mappings (macOS kAX*Notification, Windows UIA events) are handled
 /// by the platform layer. See `platform::notification_to_platform_string`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub enum Notification {
   /// Element was destroyed and is no longer valid.
   /// This is ALWAYS subscribed for all registered elements.

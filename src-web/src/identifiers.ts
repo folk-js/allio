@@ -1,4 +1,4 @@
-import { AXIO, AXWindow } from "@axio/client";
+import { AXIO, AXWindow, WindowId } from "@axio/client";
 
 interface Rectangle {
   x: number;
@@ -14,9 +14,9 @@ interface Point {
 class WindowOverlay {
   private axio = new AXIO();
   private container = document.getElementById("windowContainer")!;
-  private labels = new Map<string, HTMLElement>();
+  private labels = new Map<WindowId, HTMLElement>();
   private svg: SVGSVGElement;
-  private borders = new Map<string, SVGPathElement>();
+  private borders = new Map<WindowId, SVGPathElement>();
 
   constructor() {
     this.svg = this.createSVG();
@@ -108,7 +108,7 @@ class WindowOverlay {
           group.some((w) => w.focused)
         );
         this.svg.appendChild(path);
-        this.borders.set(`group-${i}`, path);
+        this.borders.set(i, path);
 
         // Hide labels inside polygon (except focused)
         if (group.length > 1) {
@@ -129,7 +129,7 @@ class WindowOverlay {
 
   private groupOverlapping(windows: AXWindow[]): AXWindow[][] {
     const groups: AXWindow[][] = [];
-    const visited = new Set<string>();
+    const visited = new Set<WindowId>();
 
     for (const w of windows) {
       if (visited.has(w.id)) continue;

@@ -4,14 +4,16 @@
 //! Platform-specific action strings are mapped in `platform/*/mapping.rs`.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// Platform-agnostic action that can be performed on an element.
 ///
 /// Platform mappings (macOS kAX*Action, Windows UIA patterns) are handled
 /// by the platform layer, not here. See `platform::map_action_from_platform`
 /// and `platform::action_to_platform_string`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub enum Action {
   /// Primary activation (click, press).
   Press,

@@ -155,7 +155,7 @@ class AXTreeOverlay {
 
     // Count
     const count = notDiscovered ? "?" : hasChildIds ? el.children!.length : 0;
-    const isTextInput = el.role === "textbox" || el.role === "searchbox";
+    const isTextInput = el.role === "textfield" || el.role === "searchfield" || el.role === "textarea";
 
     return `
       <div class="tree-node" data-id="${el.id}">

@@ -4,6 +4,7 @@
 //! text content, numeric positions, boolean states, etc.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// Typed value for an accessibility element.
 ///
@@ -12,8 +13,9 @@ use serde::{Deserialize, Serialize};
 /// - Checkbox, Switch: Boolean
 /// - Slider: Float
 /// - Stepper: Integer
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", content = "value")]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub enum Value {
   /// Text content (text fields, labels)
   String(String),

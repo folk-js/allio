@@ -4,7 +4,8 @@ All platform-specific unsafe code is encapsulated here.
 The rest of the crate can interact with elements using safe methods.
 */
 
-use crate::types::{AXAction, AXValue, Bounds};
+use crate::accessibility::{Action, Value};
+use crate::types::Bounds;
 
 /// All commonly-needed element attributes, fetched in a batch for performance.
 #[derive(Debug, Default)]
@@ -12,19 +13,21 @@ pub struct ElementAttributes {
   pub role: Option<String>,
   pub subrole: Option<String>,
   pub title: Option<String>,
-  pub value: Option<AXValue>,
+  pub value: Option<Value>,
   pub description: Option<String>,
   pub placeholder: Option<String>,
   pub bounds: Option<Bounds>,
   pub focused: Option<bool>,
   pub enabled: Option<bool>,
-  pub actions: Vec<AXAction>,
+  pub actions: Vec<Action>,
 }
 
 #[cfg(target_os = "macos")]
 mod macos_impl {
   use super::ElementAttributes;
-  use crate::types::{AXAction, AXValue, Bounds};
+  use crate::accessibility::Value;
+  use crate::platform::macos_platform::mapping::action_from_macos;
+  use crate::types::Bounds;
   use objc2_application_services::{
     AXCopyMultipleAttributeOptions, AXError, AXObserver, AXUIElement, AXValue as AXValueRef,
     AXValueType,
@@ -259,15 +262,7 @@ mod macos_impl {
       let action_strs = self.get_actions();
       let actions = action_strs
         .into_iter()
-        .filter_map(|s| match s.as_str() {
-          "AXPress" => Some(AXAction::Press),
-          "AXCancel" => Some(AXAction::Cancel),
-          "AXConfirm" => Some(AXAction::Confirm),
-          "AXIncrement" => Some(AXAction::Increment),
-          "AXDecrement" => Some(AXAction::Decrement),
-          "AXShowMenu" => Some(AXAction::ShowMenu),
-          _ => None,
-        })
+        .filter_map(|s| action_from_macos(&s))
         .collect();
 
       ElementAttributes {
@@ -306,15 +301,15 @@ mod macos_impl {
       self.get_raw_attr_internal(attr)
     }
 
-    // Internal: extract AXValue from CFType
-    fn extract_value(cf_value: &CFType, role: Option<&str>) -> Option<AXValue> {
+    // Internal: extract Value from CFType
+    fn extract_value(cf_value: &CFType, role: Option<&str>) -> Option<Value> {
       // Try CFString
       if let Some(cf_string) = cf_value.downcast_ref::<CFString>() {
         let s = cf_string.to_string();
         return if s.is_empty() {
           None
         } else {
-          Some(AXValue::String(s))
+          Some(Value::String(s))
         };
       }
 
@@ -330,20 +325,20 @@ mod macos_impl {
             || r.contains("RadioButton")
           {
             if let Some(int_val) = cf_number.as_i64() {
-              return Some(AXValue::Boolean(int_val != 0));
+              return Some(Value::Boolean(int_val != 0));
             }
           }
         }
         if let Some(int_val) = cf_number.as_i64() {
-          return Some(AXValue::Integer(int_val));
+          return Some(Value::Integer(int_val));
         } else if let Some(float_val) = cf_number.as_f64() {
-          return Some(AXValue::Float(float_val));
+          return Some(Value::Float(float_val));
         }
       }
 
       // Try CFBoolean
       if let Some(cf_bool) = cf_value.downcast_ref::<CFBoolean>() {
-        return Some(AXValue::Boolean(cf_bool.as_bool()));
+        return Some(Value::Boolean(cf_bool.as_bool()));
       }
 
       None
