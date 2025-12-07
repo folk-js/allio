@@ -77,6 +77,18 @@ impl Notification {
 
     notifs
   }
+
+  /// Whether this notification is subscribed at app/process level.
+  ///
+  /// App-level notifications are subscribed on the application element itself,
+  /// not on individual UI elements. The callback receives the newly-focused
+  /// or selection-changed element directly.
+  ///
+  /// Element-level notifications (the default) are subscribed per-element
+  /// and the callback context identifies which element changed.
+  pub fn is_app_level(&self) -> bool {
+    matches!(self, Self::FocusChanged | Self::SelectionChanged)
+  }
 }
 
 #[cfg(test)]

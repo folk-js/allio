@@ -20,22 +20,47 @@
 - [x] Updated `handles.rs` to use new types + `action_from_macos()`
 - [x] Updated `macos.rs` to use `role_from_macos()` and `Role` methods
 
-### 🔲 Phase 2: Registry Unification (Next)
+### 🔲 Phase 2: Observer & Registry Unification (Next)
 
-- [ ] Create `registry/` module with unified Registry
-- [ ] Migrate from `ElementRegistry` + `APP_OBSERVERS` to single Registry
-- [ ] Migrate `AXNotification` → use `Notification` type + mapping functions
-- [ ] Registry stores handles (generic `ElementHandle`, not macOS-specific)
+**Goal:** Consolidate to ONE observer per process with unified callback routing.
+
+- [ ] Add `Notification::is_app_level()` method for clean dispatch
+- [ ] Unify callbacks: one callback that converts macOS string → `Notification`, then dispatches
+- [ ] Remove `AXNotification` enum (replaced by `Notification` + mapping)
+- [ ] Remove `APP_OBSERVERS` (observer moves to `ProcessState` in Registry)
+- [ ] Remove `AppState`, `APP_CONTEXTS`, `app_observer_callback`
+- [ ] Remove `WRITABLE_ROLES` (replaced by `Role::is_writable()`)
+- [ ] Remove `ensure_app_observer`, `cleanup_dead_observers`
+- [ ] Subscribe app-level notifications (FocusChanged, SelectionChanged) when ProcessState created
+- [ ] Keep element contexts for element-level notification callbacks
 - [ ] Implement cascading cleanup:
   - Individual element removal
   - Window removal → cascades to all elements in window
   - Process removal → cascades to all windows → cascades to elements
 - [ ] Dead hash cleanup on window removal (+ note: explore if dead_hashes needed at all)
 
+**Removed from `macos.rs`:**
+
+- `AXNotification` enum
+- `APP_CONTEXTS` + `register_app_context`, `unregister_app_context`, `lookup_app_context`
+- `AppState` struct
+- `APP_OBSERVERS` static
+- `cleanup_dead_observers` fn
+- `ensure_app_observer` fn
+- `create_app_observer` fn
+- `app_observer_callback` fn
+- `WRITABLE_ROLES` const
+
+**Kept (possibly simplified):**
+
+- `ELEMENT_CONTEXTS` + element context functions (still needed for element callbacks)
+- `create_observer_raw` (low-level helper)
+- Core functions: `build_element_from_handle`, `discover_children`, `element_hash`, etc.
+
 ### 🔲 Phase 3: Platform Organization (Future)
 
-- [ ] Split `macos.rs` (~960 lines) into sub-modules
-- [ ] Clean up observer management
+- [ ] Split `macos.rs` into sub-modules (observer, element, windows, attributes)
+- [ ] Final cleanup pass
 
 ## Goals
 
@@ -226,16 +251,15 @@ pub enum Notification {
   FocusChanged,
   SelectionChanged,
   BoundsChanged,
+  ChildrenChanged,
 }
 
 impl Notification {
   /// Notifications to ALWAYS subscribe for any registered element
-  pub const fn always() -> &'static [Self] {
-    &[Self::Destroyed]
-  }
+  pub const ALWAYS: &'static [Self] = &[Self::Destroyed];
 
   /// Additional notifications based on role (when watching)
-  pub fn for_role(role: Role) -> Vec<Self> {
+  pub fn for_watching(role: Role) -> Vec<Self> {
     let mut notifs = vec![];
 
     if role.is_writable() {
@@ -247,6 +271,14 @@ impl Notification {
     }
 
     notifs
+  }
+
+  /// Whether this notification is subscribed at app/process level.
+  ///
+  /// App-level notifications are subscribed on the application element itself.
+  /// Element-level notifications are subscribed per UI element.
+  pub fn is_app_level(&self) -> bool {
+    matches!(self, Self::FocusChanged | Self::SelectionChanged)
   }
 }
 ```
@@ -543,37 +575,73 @@ fn handle_focus_notification(ax_element: CFRetained<AXUIElement>, pid: u32) {
 }
 ```
 
-### Destruction Notification Flow
+### Unified Observer Callback
+
+One observer per process, one callback that dispatches based on notification type.
+Uses `Notification::is_app_level()` for clean platform-agnostic routing.
 
 ```rust
 // platform/macos/observer.rs
 
-unsafe extern "C-unwind" fn observer_callback(...) {
-  let element_id = lookup_context(refcon)?;
+unsafe extern "C-unwind" fn unified_callback(
+  _observer: NonNull<AXObserver>,
+  element: NonNull<AXUIElement>,
+  notification: NonNull<CFString>,
+  refcon: *mut c_void,
+) {
   let notification_str = notification.as_ref().to_string();
 
-  // Use mapping to convert macOS string → Notification enum
+  // Convert macOS string → our Notification type (platform boundary)
   let Some(notif) = notification_from_macos(&notification_str) else {
+    log::warn!("Unknown notification: {}", notification_str);
     return;
   };
 
-  with_registry(|registry| {
-    match notif {
-      Notification::Destroyed => {
-        // Registry removes element, adds to dead_hashes, emits event
-        registry.handle_destroyed(element_id);
-      }
+  let element_ref = CFRetained::retain(element);
 
-      Notification::ValueChanged => {
-        if let Some(handle) = registry.get_handle(element_id) {
-          if let Some(value) = handle.get_value() {
-            registry.update_value(element_id, value);
-          }
-        }
-      }
-      // ...
+  // Dispatch based on notification level (uses our abstraction, not platform strings)
+  if notif.is_app_level() {
+    // App-level: context is PID, element comes from callback param
+    let Some(pid) = lookup_pid_context(refcon) else { return };
+    handle_app_notification(pid, notif, element_ref);
+  } else {
+    // Element-level: context is ElementId
+    let Some(element_id) = lookup_element_context(refcon) else { return };
+    handle_element_notification(element_id, notif, element_ref);
+  }
+}
+
+fn handle_app_notification(pid: u32, notif: Notification, ax_element: CFRetained<AXUIElement>) {
+  match notif {
+    Notification::FocusChanged => {
+      // Register element if new, then emit FocusElement event
+      handle_focus_changed(pid, ax_element);
     }
-  });
+    Notification::SelectionChanged => {
+      // Get selected text, emit SelectionChanged event
+      handle_selection_changed(pid, ax_element);
+    }
+    _ => {}
+  }
+}
+
+fn handle_element_notification(element_id: ElementId, notif: Notification, ax_element: CFRetained<AXUIElement>) {
+  match notif {
+    Notification::Destroyed => {
+      // Registry removes element, adds to dead_hashes, emits event
+      registry.handle_destroyed(element_id);
+    }
+    Notification::ValueChanged => {
+      // Refresh value, emit ElementChanged event
+      if let Some(value) = ElementHandle::new(ax_element).get_value() {
+        registry.update_value(element_id, value);
+      }
+    }
+    Notification::TitleChanged => {
+      // Refresh title, emit ElementChanged event
+    }
+    _ => {}
+  }
 }
 ```
 
