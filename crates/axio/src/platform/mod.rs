@@ -12,6 +12,14 @@ mod macos_cf;
 #[cfg(target_os = "macos")]
 mod macos_windows;
 
+// New organized macOS modules (migration in progress)
+// Will eventually replace macos.rs, macos_cf.rs, macos_windows.rs
+#[cfg(target_os = "macos")]
+pub mod macos_platform;
+
+#[cfg(target_os = "macos")]
+pub use macos_platform::mapping as macos_mapping;
+
 #[cfg(target_os = "macos")]
 pub use macos::{
   check_accessibility_permissions, cleanup_dead_observers, click_element, create_observer_for_pid,

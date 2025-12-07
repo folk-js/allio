@@ -19,6 +19,9 @@ mod platform;
 mod polling;
 mod window_registry;
 
+// Cross-platform accessibility abstractions (new)
+pub mod accessibility;
+
 // Types - re-export everything at crate root
 mod types;
 pub use types::*;
