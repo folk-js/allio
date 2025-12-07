@@ -92,6 +92,18 @@
         flex-shrink: 0;
       }
 
+      .tree-indicator.watched {
+        color: #34c759;
+      }
+
+      .tree-indicator.clickable {
+        cursor: pointer;
+      }
+
+      .tree-indicator.clickable:hover {
+        color: #007aff;
+      }
+
       .tree-children {
         padding-left: 16px;
       }
@@ -113,6 +125,11 @@
       .tree-label {
         color: #34c759;
         font-style: italic;
+      }
+
+      .tree-value {
+        color: #ff9f0a;
+        font-size: 10px;
       }
 
       .tree-value-string {
@@ -151,6 +168,18 @@
         font-size: 10px;
       }
 
+      .tree-state {
+        color: #34c759;
+        font-size: 9px;
+        font-weight: 600;
+      }
+
+      .tree-actions {
+        color: #bf5af2;
+        font-size: 9px;
+        opacity: 0.8;
+      }
+
       .tree-state-focused {
         color: #34c759;
         font-size: 9px;
@@ -166,6 +195,13 @@
       .tree-count {
         color: #8e8e93;
         font-size: 9px;
+      }
+
+      .tree-loading {
+        color: #8e8e93;
+        font-size: 11px;
+        padding: 20px;
+        text-align: center;
       }
 
       /* Live text input styles */

@@ -2,271 +2,550 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{
-    fs,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Mutex,
-    },
-    thread,
+  path::PathBuf,
+  sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+  },
+  thread,
 };
-use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
-use tauri::tray::TrayIconBuilder;
-use tauri::Manager;
+use tauri::{
+  image::Image,
+  menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
+  tray::TrayIconBuilder,
+  AppHandle, Manager,
+};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
-mod axio;
-mod element_registry;
-mod mouse;
-mod platform;
-mod protocol;
-mod ui_element;
-mod websocket;
-mod window_manager;
-mod windows;
+#[cfg(target_os = "macos")]
+use tauri_nspanel::{tauri_panel, ManagerExt as _, PanelLevel, StyleMask, WebviewWindowExt as _};
 
-use websocket::WebSocketState;
-use windows::{get_all_windows_with_focus, get_main_screen_dimensions, window_polling_loop};
+use axio::get_main_screen_dimensions;
+use axio::windows::{PollingConfig, WindowEnumOptions};
+use axio_ws::WebSocketState;
 
-// Dynamic overlay handling
-fn get_overlay_files() -> Vec<String> {
-    let exe_path = std::env::current_exe().unwrap();
-    let exe_dir = exe_path.parent().unwrap();
+// ============================================================================
+// macOS Panel Configuration
+// ============================================================================
 
-    // In development: src-tauri/target/debug -> go up 3 levels to project root
-    // In production: executable location varies
-    let project_root = if exe_dir.ends_with("debug") || exe_dir.ends_with("release") {
-        exe_dir
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-    } else {
-        exe_dir
-    };
-
-    let overlays_path = project_root.join("src-web").join("overlays");
-    let mut overlays = Vec::new();
-
-    if overlays_path.exists() {
-        if let Ok(entries) = fs::read_dir(&overlays_path) {
-            for entry in entries.flatten() {
-                if let Some(file_name) = entry.file_name().to_str() {
-                    if file_name.ends_with(".html") {
-                        overlays.push(file_name.to_string());
-                    }
-                }
-            }
+#[cfg(target_os = "macos")]
+tauri_panel! {
+    panel!(AxioPanel {
+        config: {
+            can_become_key_window: true,
+            is_floating_panel: true
         }
-    }
+    })
+}
 
-    overlays.sort();
-    overlays
+// ============================================================================
+// App State
+// ============================================================================
+
+#[derive(Default)]
+struct AppState {
+  clickthrough_enabled: AtomicBool,
+  current_overlay: Mutex<String>,
+}
+
+// ============================================================================
+// Utility Functions
+// ============================================================================
+
+fn is_dev_mode() -> bool {
+  let exe_path = std::env::current_exe().unwrap_or_default();
+  let exe_dir = exe_path.parent().unwrap_or(std::path::Path::new(""));
+  exe_dir.ends_with("debug") || exe_dir.ends_with("release")
+}
+
+fn get_main_window(app: &AppHandle) -> Result<tauri::WebviewWindow, &'static str> {
+  app
+    .get_webview_window("main")
+    .ok_or("Main window not found")
 }
 
 fn get_overlay_url(filename: &str) -> String {
+  if is_dev_mode() {
     format!("http://localhost:1420/src-web/overlays/{}", filename)
+  } else {
+    format!("tauri://localhost/{}", filename)
+  }
 }
 
-// Helper function to get main window
-fn get_main_window(
-    app: &tauri::AppHandle,
-) -> Result<tauri::WebviewWindow, Box<dyn std::error::Error>> {
-    app.get_webview_window("main")
-        .ok_or("Main window not found".into())
+// ============================================================================
+// Overlay Discovery
+// ============================================================================
+
+const DEFAULT_OVERLAYS: &[&str] = &[
+  "axtrees.html",
+  "identifiers.html",
+  "ports.html",
+  "sand.html",
+  "windows-debug.html",
+];
+
+fn get_overlay_files() -> Vec<String> {
+  if is_dev_mode() {
+    return DEFAULT_OVERLAYS.iter().map(|s| s.to_string()).collect();
+  }
+
+  let mut overlays: Vec<String> = get_dist_directory()
+    .and_then(|dir| std::fs::read_dir(dir).ok())
+    .map(|entries| {
+      entries
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|name| name.ends_with(".html"))
+        .collect()
+    })
+    .unwrap_or_default();
+
+  if overlays.is_empty() {
+    overlays = DEFAULT_OVERLAYS.iter().map(|s| s.to_string()).collect();
+  }
+  overlays.sort();
+  overlays
 }
 
-// App State
-#[derive(Default)]
-struct AppState {
-    clickthrough_enabled: AtomicBool,
-    current_overlay: Mutex<String>,
+fn get_dist_directory() -> Option<PathBuf> {
+  let exe_path = std::env::current_exe().ok()?;
+  let exe_dir = exe_path.parent()?;
+
+  #[cfg(target_os = "macos")]
+  return exe_dir.parent().map(|p| p.join("Resources"));
+
+  #[cfg(not(target_os = "macos"))]
+  return Some(exe_dir.to_path_buf());
 }
 
-// Consolidated clickthrough toggle logic
-fn toggle_clickthrough_internal(
-    app: &tauri::AppHandle,
-) -> Result<bool, Box<dyn std::error::Error>> {
-    let state = app.state::<AppState>();
-    let window = get_main_window(app)?;
+// ============================================================================
+// Tray Icon Management
+// ============================================================================
 
-    let current_ignore = state.clickthrough_enabled.load(Ordering::Relaxed);
-    let new_ignore = !current_ignore;
+fn get_icon_path(passthrough: bool) -> PathBuf {
+  let icon_name = if passthrough {
+    "32x32-passthrough.png"
+  } else {
+    "32x32.png"
+  };
 
-    window.set_ignore_cursor_events(new_ignore)?;
-    state
-        .clickthrough_enabled
-        .store(new_ignore, Ordering::Relaxed);
+  if is_dev_mode() {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+      .join("icons")
+      .join(icon_name)
+  } else {
+    let exe_path = std::env::current_exe().unwrap_or_default();
+    let exe_dir = exe_path.parent().unwrap_or(std::path::Path::new(""));
 
-    Ok(new_ignore)
+    #[cfg(target_os = "macos")]
+    let icons_dir = exe_dir
+      .parent()
+      .map(|p| p.join("Resources/icons"))
+      .unwrap_or_default();
+
+    #[cfg(not(target_os = "macos"))]
+    let icons_dir = exe_dir.join("icons");
+
+    icons_dir.join(icon_name)
+  }
 }
 
-// Function to switch to a specific overlay
-fn switch_overlay(
-    app: &tauri::AppHandle,
-    filename: &str,
+fn get_tray_icon(passthrough: bool) -> Option<Image<'static>> {
+  Image::from_path(get_icon_path(passthrough)).ok()
+}
+
+// ============================================================================
+// Tray Menu
+// ============================================================================
+
+fn build_tray_menu(
+  app: &AppHandle,
+  overlay_files: &[String],
+  current_overlay: &str,
+  passthrough_enabled: bool,
+) -> Result<tauri::menu::Menu<tauri::Wry>, Box<dyn std::error::Error>> {
+  let mut menu = MenuBuilder::new(app);
+
+  // Overlay items
+  if overlay_files.is_empty() {
+    menu = menu.item(
+      &MenuItemBuilder::new("No overlays found")
+        .id("no_overlays")
+        .enabled(false)
+        .build(app)?,
+    );
+  } else {
+    for filename in overlay_files {
+      let display_name = filename.trim_end_matches(".html");
+      let item = CheckMenuItemBuilder::new(display_name)
+        .id(filename)
+        .checked(current_overlay == filename)
+        .build(app)?;
+      menu = menu.item(&item);
+    }
+  }
+
+  menu = menu.item(&PredefinedMenuItem::separator(app)?);
+
+  // Load options
+  menu = menu.item(
+    &MenuItemBuilder::new("Load URL...")
+      .id("load_url")
+      .build(app)?,
+  );
+  menu = menu.item(
+    &MenuItemBuilder::new("Load File...")
+      .id("load_file")
+      .build(app)?,
+  );
+
+  menu = menu.item(&PredefinedMenuItem::separator(app)?);
+
+  // Passthrough toggle
+  let passthrough_text = if passthrough_enabled {
+    "Disable Passthrough"
+  } else {
+    "Enable Passthrough"
+  };
+  menu = menu.item(
+    &MenuItemBuilder::new(passthrough_text)
+      .id("toggle_passthrough")
+      .build(app)?,
+  );
+
+  menu = menu.item(&PredefinedMenuItem::separator(app)?);
+  menu = menu.item(&MenuItemBuilder::new("Quit").id("quit").build(app)?);
+
+  menu.build().map_err(Into::into)
+}
+
+fn build_or_update_tray(
+  app: &AppHandle,
+  overlay_files: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let state = app.state::<AppState>();
-    let mut current_overlay = state.current_overlay.lock().unwrap();
-    *current_overlay = filename.to_string();
-    drop(current_overlay);
+  let state = app.state::<AppState>();
+  let current_overlay = state.current_overlay.lock().unwrap().clone();
+  let passthrough_enabled = state.clickthrough_enabled.load(Ordering::Relaxed);
 
-    let window = get_main_window(app)?;
-    let url = get_overlay_url(filename);
-    window.navigate(url.parse().unwrap())?;
-    Ok(())
+  let menu = build_tray_menu(app, overlay_files, &current_overlay, passthrough_enabled)?;
+
+  if let Some(tray) = app.tray_by_id("main-tray") {
+    // Update existing tray menu and icon
+    tray.set_menu(Some(menu))?;
+    if let Some(icon) = get_tray_icon(passthrough_enabled) {
+      let _ = tray.set_icon(Some(icon));
+    }
+  } else {
+    // Create new tray
+    let icon = get_tray_icon(passthrough_enabled)
+      .unwrap_or_else(|| app.default_window_icon().unwrap().clone());
+
+    TrayIconBuilder::with_id("main-tray")
+      .menu(&menu)
+      .icon(icon)
+      .on_menu_event(handle_tray_event)
+      .build(app)?;
+  }
+
+  Ok(())
 }
 
-// Build tray menu with overlay options
-fn build_overlay_tray(
-    app: &tauri::AppHandle,
-    overlay_files: &[String],
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut menu_builder = MenuBuilder::new(app);
+fn handle_tray_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
+  let id = event.id().0.clone();
+  let handle = app.clone();
 
-    // Add overlay options
-    if overlay_files.is_empty() {
-        let no_overlays_item = MenuItemBuilder::new("No overlays found")
-            .id("no_overlays")
-            .enabled(false)
-            .build(app)?;
-        menu_builder = menu_builder.item(&no_overlays_item);
-    } else {
-        for filename in overlay_files {
-            let menu_item = MenuItemBuilder::new(filename).id(filename).build(app)?;
-            menu_builder = menu_builder.item(&menu_item);
-        }
+  // IMPORTANT: Defer execution to avoid use-after-free.
+  // The menu is rebuilt during these handlers, but muda is still
+  // accessing the old menu item strings. Deferring ensures the
+  // event handler completes before we replace the menu.
+  thread::spawn(move || {
+    let app = handle.clone();
+    let _ = handle.run_on_main_thread(move || match id.as_str() {
+      "toggle_passthrough" => {
+        let _ = toggle_passthrough(&app);
+      }
+      "load_url" => show_url_dialog(&app),
+      "load_file" => show_file_dialog(&app),
+      "quit" => app.exit(0),
+      "no_overlays" => {}
+      id => {
+        let _ = switch_overlay(&app, id);
+      }
+    });
+  });
+}
+
+// ============================================================================
+// Core Actions
+// ============================================================================
+
+fn toggle_passthrough(app: &AppHandle) -> Result<bool, Box<dyn std::error::Error>> {
+  let state = app.state::<AppState>();
+  let window = get_main_window(app)?;
+
+  let was_enabled = state.clickthrough_enabled.load(Ordering::Relaxed);
+  let now_enabled = !was_enabled;
+
+  window.set_ignore_cursor_events(now_enabled)?;
+  state
+    .clickthrough_enabled
+    .store(now_enabled, Ordering::Relaxed);
+
+  build_or_update_tray(app, &get_overlay_files())?;
+  Ok(now_enabled)
+}
+
+fn switch_overlay(app: &AppHandle, filename: &str) -> Result<(), Box<dyn std::error::Error>> {
+  let state = app.state::<AppState>();
+  *state.current_overlay.lock().unwrap() = filename.to_string();
+
+  let window = get_main_window(app)?;
+  window.navigate(
+    get_overlay_url(filename)
+      .parse()
+      .expect("Invalid overlay URL"),
+  )?;
+
+  build_or_update_tray(app, &get_overlay_files())?;
+  Ok(())
+}
+
+fn show_url_dialog(app: &AppHandle) {
+  // Disable passthrough so user can interact with the dialog
+  let state = app.state::<AppState>();
+  if state.clickthrough_enabled.load(Ordering::Relaxed) {
+    let _ = toggle_passthrough(app);
+  }
+
+  if let Ok(window) = get_main_window(app) {
+    let url = get_overlay_url("url-input.html");
+    let _ = window.navigate(
+      url
+        .parse()
+        .unwrap_or_else(|_| "about:blank".parse().unwrap()),
+    );
+  }
+}
+
+fn show_file_dialog(app: &AppHandle) {
+  use tauri_plugin_dialog::DialogExt;
+
+  let app_clone = app.clone();
+  app
+    .dialog()
+    .file()
+    .add_filter("HTML Files", &["html", "htm"])
+    .add_filter("All Files", &["*"])
+    .pick_file(move |result| {
+      if let Some(path) = result.and_then(|p| p.as_path().map(|p| p.to_path_buf())) {
+        let _ = load_file(&app_clone, &path);
+      }
+    });
+}
+
+fn load_file(app: &AppHandle, path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+  let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+  *app.state::<AppState>().current_overlay.lock().unwrap() = format!("file: {}", file_name);
+
+  let url = format!("file://{}", path.display());
+  get_main_window(app)?.navigate(url.parse()?)?;
+  Ok(())
+}
+
+// ============================================================================
+// WebSocket RPC Handler
+// ============================================================================
+
+fn create_rpc_handler(app_handle: AppHandle) -> axio_ws::CustomRpcHandler {
+  let last_state = std::sync::Arc::new(AtomicBool::new(true));
+
+  std::sync::Arc::new(move |method, args| {
+    if method != "set_passthrough" && method != "set_clickthrough" {
+      return None;
     }
 
-    // Add separator
-    let separator = PredefinedMenuItem::separator(app)?;
-    menu_builder = menu_builder.item(&separator);
+    let enabled = args["enabled"].as_bool().unwrap_or(false);
 
-    // Add toggle clickthrough option
-    let state = app.state::<AppState>();
-    let clickthrough_enabled = state.clickthrough_enabled.load(Ordering::Relaxed);
-    let clickthrough_text = if clickthrough_enabled {
-        "🔓 Disable Clickthrough"
-    } else {
-        "🔒 Enable Clickthrough"
-    };
+    // Skip if no change
+    if last_state.swap(enabled, Ordering::SeqCst) == enabled {
+      return Some(serde_json::json!({ "result": { "enabled": enabled, "changed": false } }));
+    }
 
-    let toggle_clickthrough_item = MenuItemBuilder::new(clickthrough_text)
-        .id("toggle_clickthrough")
-        .build(app)?;
-    menu_builder = menu_builder.item(&toggle_clickthrough_item);
+    // Update AppState so tray reflects the change
+    app_handle
+      .state::<AppState>()
+      .clickthrough_enabled
+      .store(enabled, Ordering::Relaxed);
 
-    let menu = menu_builder.build()?;
-
-    let _tray = TrayIconBuilder::new()
-        .menu(&menu)
-        .icon(app.default_window_icon().unwrap().clone())
-        .on_menu_event(move |app_handle, event| {
-            let event_id = event.id().0.clone();
-            match event_id.as_str() {
-                "toggle_clickthrough" => {
-                    let _ = toggle_clickthrough_internal(&app_handle);
-                    // Note: Menu text will update on next app restart
-                }
-                "no_overlays" => {
-                    // Do nothing for disabled item
-                }
-                _ => {
-                    // Handle overlay selection
-                    let _ = switch_overlay(&app_handle, &event_id);
-                }
+    #[cfg(target_os = "macos")]
+    {
+      let handle = app_handle.clone();
+      thread::spawn(move || {
+        let h = handle.clone();
+        let _ = handle.run_on_main_thread(move || {
+          if let Ok(panel) = h.get_webview_panel("main") {
+            panel.set_ignores_mouse_events(enabled);
+            if enabled {
+              panel.resign_key_window();
+            } else {
+              panel.make_key_window();
             }
-        })
-        .build(app)?;
+          }
+          let _ = build_or_update_tray(&h, &get_overlay_files());
+        });
+      });
+      return Some(serde_json::json!({ "result": { "enabled": enabled, "changed": true } }));
+    }
 
-    Ok(())
+    #[cfg(not(target_os = "macos"))]
+    {
+      let result = app_handle
+        .get_webview_window("main")
+        .ok_or("Window not found")
+        .and_then(|w| w.set_ignore_cursor_events(enabled).map_err(|_| "Failed"));
+
+      let _ = build_or_update_tray(&app_handle, &get_overlay_files());
+
+      Some(match result {
+        Ok(_) => serde_json::json!({ "result": { "enabled": enabled } }),
+        Err(e) => serde_json::json!({ "error": e }),
+      })
+    }
+  })
 }
 
+// ============================================================================
+// Window Setup
+// ============================================================================
+
+fn setup_main_window(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+  let (width, height) = get_main_screen_dimensions();
+  let window = app
+    .get_webview_window("main")
+    .ok_or("Main window not found")?;
+
+  window.set_size(tauri::LogicalSize::new(width, height))?;
+  window.set_position(tauri::LogicalPosition::new(0.0, 0.0))?;
+  window.set_ignore_cursor_events(true)?;
+
+  #[cfg(target_os = "macos")]
+  setup_macos_panel(&window)?;
+
+  #[cfg(not(target_os = "macos"))]
+  window.show()?;
+
+  Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn setup_macos_panel(window: &tauri::WebviewWindow) -> Result<(), Box<dyn std::error::Error>> {
+  let panel = window.to_panel::<AxioPanel>()?;
+
+  panel.set_style_mask(StyleMask::empty().nonactivating_panel().into());
+  panel.set_level(PanelLevel::Floating.into());
+  panel.set_becomes_key_only_if_needed(true);
+  panel.set_hides_on_deactivate(false);
+  panel.set_floating_panel(true);
+  panel.set_ignores_mouse_events(true);
+  panel.show();
+
+  Ok(())
+}
+
+fn setup_shortcuts(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+  let toggle = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyE);
+  let devtools = Shortcut::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::KeyI);
+
+  app.handle().plugin(
+    tauri_plugin_global_shortcut::Builder::new()
+      .with_handler(move |app, shortcut, event| {
+        if event.state() != ShortcutState::Pressed {
+          return;
+        }
+
+        if shortcut == &toggle {
+          let _ = toggle_passthrough(app);
+        } else if shortcut == &devtools {
+          if let Some(w) = app.get_webview_window("main") {
+            if w.is_devtools_open() {
+              w.close_devtools();
+            } else {
+              w.open_devtools();
+            }
+          }
+        }
+      })
+      .build(),
+  )?;
+
+  app.global_shortcut().register(toggle)?;
+  app.global_shortcut().register(devtools)?;
+
+  Ok(())
+}
+
+// ============================================================================
+// Main Entry Point
+// ============================================================================
+
 fn main() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
-        .manage(AppState::default())
-        .setup(|app| {
-            // Initialize WebSocket state
-            let ws_state = WebSocketState::new(app.handle().clone());
+  let mut builder = tauri::Builder::default()
+    .plugin(tauri_plugin_shell::init())
+    .plugin(tauri_plugin_dialog::init());
 
-            // Initialize ElementRegistry with broadcast sender
-            element_registry::ElementRegistry::initialize(ws_state.sender());
+  #[cfg(target_os = "macos")]
+  {
+    builder = builder.plugin(tauri_nspanel::init());
+  }
 
-            let (screen_width, screen_height) = get_main_screen_dimensions();
-            if let Some(window) = app.get_webview_window("main") {
-                window
-                    .set_size(tauri::LogicalSize::new(screen_width, screen_height))
-                    .ok();
-                window
-                    .set_position(tauri::LogicalPosition::new(0.0, 0.0))
-                    .ok();
-                window.set_ignore_cursor_events(false).ok();
-                window.show().ok();
-            }
+  builder
+    .manage(AppState::default())
+    .setup(|app| {
+      // WebSocket setup
+      let (sender, _) = tokio::sync::broadcast::channel(1000);
+      let ws_state = WebSocketState::new(std::sync::Arc::new(sender))
+        .with_custom_handler(create_rpc_handler(app.handle().clone()));
+      axio::set_event_sink(ws_state.clone());
+      axio::api::initialize();
 
-            // Set up global shortcut with proper state handling
-            #[cfg(desktop)]
-            {
-                let toggle_shortcut =
-                    Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyE);
+      // Window setup
+      setup_main_window(app)?;
 
-                app.handle().plugin(
-                    tauri_plugin_global_shortcut::Builder::new()
-                        .with_handler(move |app_handle, shortcut, event| {
-                            if event.state() == ShortcutState::Pressed {
-                                if shortcut == &toggle_shortcut {
-                                    let _ = toggle_clickthrough_internal(&app_handle);
-                                }
-                            }
-                        })
-                        .build(),
-                )?;
+      // Shortcuts
+      #[cfg(desktop)]
+      setup_shortcuts(app)?;
 
-                app.global_shortcut().register(toggle_shortcut)?;
-            }
+      // Tray setup
+      let overlays = get_overlay_files();
+      build_or_update_tray(&app.handle(), &overlays)?;
 
-            // Get overlay files once and reuse
-            let overlay_files = get_overlay_files();
+      // Load first overlay
+      if let Some(first) = overlays.first() {
+        *app.state::<AppState>().current_overlay.lock().unwrap() = first.clone();
+        if let Some(w) = app.get_webview_window("main") {
+          w.navigate(get_overlay_url(first).parse().expect("Invalid URL"))?;
+        }
+      }
 
-            // Build overlay tray
-            build_overlay_tray(&app.handle(), &overlay_files)?;
+      // Start polling (handles windows + mouse position in one loop)
+      axio::start_polling(PollingConfig {
+        enum_options: WindowEnumOptions {
+          exclude_pid: Some(axio::ProcessId::new(std::process::id())),
+          filter_fullscreen: true,
+          filter_offscreen: true,
+        },
+        ..Default::default()
+      });
 
-            // Load the first overlay if any exist
-            if let Some(first_overlay) = overlay_files.first() {
-                let _ = switch_overlay(&app.handle(), first_overlay);
-            }
+      let ws = ws_state.clone();
+      thread::spawn(move || {
+        tokio::runtime::Runtime::new()
+          .expect("Failed to create runtime")
+          .block_on(axio_ws::start_ws_server(ws));
+      });
 
-            // Start global mouse tracking (for automatic clickthrough)
-            mouse::start_mouse_tracking(ws_state.clone());
-
-            // Start WebSocket server and window polling
-            let ws_state_clone = ws_state.clone();
-            thread::spawn(move || {
-                // Do an initial window poll to populate the state
-                let current_windows = get_all_windows_with_focus();
-
-                // Update WebSocket state with initial windows
-                let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-                rt.block_on(async move {
-                    // Only update if we got a valid window list (overlay is visible)
-                    if let Some(windows) = current_windows {
-                        ws_state.update_windows(&windows).await;
-                    }
-
-                    // Start the WebSocket server
-                    tokio::spawn(async move {
-                        websocket::start_websocket_server(ws_state_clone).await;
-                    });
-
-                    // Continue with the polling loop
-                    window_polling_loop(ws_state);
-                });
-            });
-
-            Ok(())
-        })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+      Ok(())
+    })
+    .run(tauri::generate_context!())
+    .expect("error while running tauri application");
 }

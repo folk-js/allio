@@ -3,20 +3,21 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "dev": "tauri dev",
     "build": "tsc && vite build",
-    "preview": "vite preview",
-    "tauri": "tauri",
-    "client:dev": "vite --config vite.client.config.ts",
-    "client:build": "vite build --config vite.client.config.ts",
-    "client:preview": "vite preview --config vite.client.config.ts"
+    "typegen": "TS_RS_EXPORT_DIR=$PWD cargo test -p axio -p axio-ws export_bindings",
+    "profile:build": "tauri build && echo '\n✅ App built! Now open Instruments.app and profile:\n   target/release/bundle/macos/axio.app'",
+    "profile:leaks": "./scripts/check-leaks.sh",
+    "profile:watch": "./scripts/watch-memory.sh"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.5.0",
+    "@types/node": "^20.0.0",
     "typescript": "^5.2.2",
-    "vite": "^5.3.1",
-    "vite-plugin-top-level-await": "^1.6.0",
-    "vite-plugin-wasm": "^3.5.0"
+    "vite": "^5.3.1"
   }
 }

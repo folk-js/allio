@@ -1,6 +1,23 @@
 import { defineConfig } from "vite";
-import wasm from "vite-plugin-wasm";
-import topLevelAwait from "vite-plugin-top-level-await";
+import * as path from "node:path";
+import * as fs from "node:fs";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Get all HTML files from overlays folder
+const overlaysDir = path.resolve(__dirname, "src-web/overlays");
+const htmlFiles = fs.existsSync(overlaysDir)
+  ? fs.readdirSync(overlaysDir).filter((f) => f.endsWith(".html"))
+  : [];
+
+if (htmlFiles.length === 0) {
+  console.warn("Warning: No overlay HTML files found in", overlaysDir);
+}
+
+const input = Object.fromEntries(
+  htmlFiles.map((f) => [f.replace(".html", ""), path.join(overlaysDir, f)])
+);
 
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
@@ -17,5 +34,18 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
-  plugins: [wasm(), topLevelAwait()],
+  // Path aliases
+  resolve: {
+    alias: {
+      "@axio/client": path.resolve(__dirname, "packages/axio-client/src"),
+    },
+  },
+  // Build config for multi-page app
+  build: {
+    outDir: path.resolve(__dirname, "dist"),
+    emptyOutDir: true,
+    rollupOptions: {
+      input,
+    },
+  },
 }));

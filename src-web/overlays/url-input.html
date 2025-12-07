@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Load URL</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text",
+          "Helvetica Neue", sans-serif;
+        background: rgba(242, 242, 247, 0.98);
+        color: #000;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        padding: 20px;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        body {
+          background: rgba(28, 28, 30, 0.98);
+          color: #fff;
+        }
+      }
+
+      .container {
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 10px;
+        padding: 20px 24px;
+        width: 400px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        .container {
+          background: rgba(44, 44, 46, 0.95);
+        }
+      }
+
+      h1 {
+        font-size: 13px;
+        font-weight: 600;
+        margin-bottom: 16px;
+        color: #000;
+        text-align: center;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        h1 {
+          color: #fff;
+        }
+      }
+
+      input[type="url"] {
+        width: 100%;
+        padding: 8px 10px;
+        background: rgba(255, 255, 255, 1);
+        border: 1px solid rgba(0, 0, 0, 0.1);
+        border-radius: 6px;
+        color: #000;
+        font-size: 13px;
+        outline: none;
+        margin-bottom: 16px;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Mono", monospace;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        input[type="url"] {
+          background: rgba(58, 58, 60, 1);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          color: #fff;
+        }
+      }
+
+      input[type="url"]:focus {
+        border-color: rgba(0, 122, 255, 0.6);
+        box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.1);
+      }
+
+      .button-group {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+
+      button {
+        padding: 6px 16px;
+        border: none;
+        border-radius: 6px;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text",
+          sans-serif;
+      }
+
+      .btn-primary {
+        background: rgba(0, 122, 255, 1);
+        color: white;
+      }
+
+      .btn-primary:hover {
+        background: rgba(0, 112, 240, 1);
+      }
+
+      .btn-primary:active {
+        background: rgba(0, 102, 230, 1);
+      }
+
+      .btn-secondary {
+        background: rgba(142, 142, 147, 0.12);
+        color: #000;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        .btn-secondary {
+          background: rgba(142, 142, 147, 0.24);
+          color: #fff;
+        }
+      }
+
+      .btn-secondary:hover {
+        background: rgba(142, 142, 147, 0.2);
+      }
+
+      .btn-secondary:active {
+        background: rgba(142, 142, 147, 0.3);
+      }
+    </style>
+    <script type="module">
+      // Force passthrough OFF when this page loads
+    </script>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Load Custom URL</h1>
+      <form id="urlForm">
+        <input
+          type="url"
+          id="urlInput"
+          placeholder="http://localhost:3000"
+          required
+          autofocus
+        />
+        <div class="button-group">
+          <button type="button" class="btn-secondary" id="cancelBtn">
+            Cancel
+          </button>
+          <button type="submit" class="btn-primary">Load</button>
+        </div>
+      </form>
+    </div>
+
+    <script type="module">
+      const form = document.getElementById("urlForm");
+      const urlInput = document.getElementById("urlInput");
+      const cancelBtn = document.getElementById("cancelBtn");
+
+      // Load the last used URL from localStorage
+      const lastUrl = localStorage.getItem("lastCustomUrl");
+      if (lastUrl) {
+        urlInput.value = lastUrl;
+        // Select all text for easy editing
+        setTimeout(() => urlInput.select(), 0);
+      }
+
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const url = urlInput.value.trim();
+
+        if (url) {
+          try {
+            // Validate URL
+            new URL(url);
+
+            // Save to localStorage
+            localStorage.setItem("lastCustomUrl", url);
+
+            // Use location.replace to avoid adding to history
+            window.location.replace(url);
+          } catch (err) {
+            alert(
+              "Invalid URL. Please enter a valid URL (e.g., http://localhost:3000)"
+            );
+          }
+        }
+      });
+
+      cancelBtn.addEventListener("click", () => {
+        // Navigate to first available overlay
+        const overlays = [
+          "axtrees.html",
+          "identifiers.html",
+          "ports.html",
+          "sand.html",
+          "windows-debug.html",
+        ];
+        const baseUrl =
+          window.location.origin +
+          window.location.pathname.replace("url-input.html", "");
+        window.location.replace(baseUrl + overlays[0]);
+      });
+
+      // Allow Escape key to cancel
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          cancelBtn.click();
+        }
+      });
+    </script>
+  </body>
+</html>

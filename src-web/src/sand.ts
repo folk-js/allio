@@ -1,4 +1,4 @@
-import { AXIO } from "./axio.js";
+import { AXIO, AxioPassthrough } from "@axio/client";
 import {
   collisionFragmentShader,
   collisionVertexShader,
@@ -194,8 +194,6 @@ export class FolkSand extends HTMLElement {
   }
 
   #initializeSimulation() {
-    console.log("initializing", vertexShader);
-    console.log("initializingfrag", simulationShader);
     // Create shaders and programs
     this.#program = this.#createProgramFromStrings({
       vertex: vertexShader,
@@ -485,9 +483,7 @@ export class FolkSand extends HTMLElement {
     // Scale coordinates relative to canvas size
     this.#pointer.x = (x / rect.width) * this.#canvas.width;
     this.#pointer.y = (y / rect.height) * this.#canvas.height;
-
-    // Dynamic clickthrough: transparent over windows, solid elsewhere
-    this.#updateClickthrough(event.clientX, event.clientY);
+    // Note: Clickthrough is handled globally via mouse:position event
   };
 
   #handlePointerDown = (event: PointerEvent) => {
@@ -877,9 +873,6 @@ export class FolkSand extends HTMLElement {
     vertex: string;
     fragment: string;
   }): WebGLProgram | undefined {
-    console.log("utils", WebGLUtils);
-    console.log("gl", this.#gl);
-    console.log(vertex);
     const vertexShader = WebGLUtils.createShader(
       this.#gl,
       this.#gl.VERTEX_SHADER,
@@ -902,23 +895,21 @@ export class FolkSand extends HTMLElement {
   // Add method to setup WebSocket connection
   async #setupWebSocketConnection() {
     try {
-      // Set up window update handler to refresh collision data
-      this.#axio.onWindowUpdate(() => {
-        console.log(
-          `Sand overlay received window update: ${
-            this.#axio.windows.length
-          } windows`
-        );
+      // Set up window update handlers to refresh collision data
+      const handleWindowUpdate = () => {
         this.#handleShapeTransform();
-      });
+      };
 
-      // Set up global mouse position handler for clickthrough (works even when unfocused)
-      this.#axio.onMousePosition((x, y) => {
-        this.#updateClickthrough(x, y);
-      });
+      this.#axio.on("sync:init", handleWindowUpdate);
+      this.#axio.on("window:added", handleWindowUpdate);
+      this.#axio.on("window:removed", handleWindowUpdate);
+      this.#axio.on("window:changed", handleWindowUpdate);
+
+      // Use "outside" mode: capture events in empty space (for drawing sand),
+      // pass through when over windows (so clicks reach underlying apps)
+      new AxioPassthrough(this.#axio, { mode: "outside" });
 
       await this.#axio.connect();
-      console.log("AXIO connected for folk-sand");
 
       // Initial shape transform with current windows
       this.#handleShapeTransform();
@@ -933,11 +924,8 @@ export class FolkSand extends HTMLElement {
     let vertexOffset = 0;
 
     // Use AXIO windows (always up-to-date)
-    this.#axio.windows.forEach((win) => {
-      const x = win.x;
-      const y = win.y;
-      const w = win.w;
-      const h = win.h;
+    this.#axio.windows.forEach((win, _id) => {
+      const { x, y, w, h } = win.bounds;
 
       // Convert window coordinates to buffer coordinates
       const bufferPoints = [
@@ -1029,37 +1017,6 @@ export class FolkSand extends HTMLElement {
     // Recollect and update all shape data when any shape changes
     this.#collectShapeData();
     this.#updateCollisionTexture();
-  }
-
-  /**
-   * Check if a screen point (clientX, clientY) is inside any window
-   */
-  #isPointInWindow(x: number, y: number): boolean {
-    for (const win of this.#axio.windows) {
-      if (
-        x >= win.x &&
-        x <= win.x + win.w &&
-        y >= win.y &&
-        y <= win.y + win.h
-      ) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Toggle clickthrough based on mouse position:
-   * - Transparent (clickthrough enabled) if mouse is over a window
-   * - Solid (clickthrough disabled) if mouse is in empty space
-   */
-  #updateClickthrough(clientX: number, clientY: number) {
-    const overWindow = this.#isPointInWindow(clientX, clientY);
-
-    // Enable clickthrough when over a window, disable when in empty space
-    this.#axio.setClickthrough(overWindow).catch((err) => {
-      console.error("Failed to set clickthrough:", err);
-    });
   }
 }
 
