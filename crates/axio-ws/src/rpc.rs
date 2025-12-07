@@ -41,7 +41,8 @@ fn default_max_children() -> usize {
 #[serde(untagged)]
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub enum RpcResponse {
-  Element(AXElement),
+  /// Single element (boxed to reduce enum size - AXElement is 288 bytes)
+  Element(Box<AXElement>),
   Elements(Vec<AXElement>),
   Null,
 }
@@ -65,17 +66,17 @@ pub fn dispatch(request: RpcRequest) -> Result<RpcResponse, String> {
   match request {
     RpcRequest::ElementAt { x, y } => {
       let element = elements::at(x, y).map_err(|e| e.to_string())?;
-      Ok(RpcResponse::Element(element))
+      Ok(RpcResponse::Element(Box::new(element)))
     }
 
     RpcRequest::Get { element_id } => {
       let element = elements::get(&element_id).map_err(|e| e.to_string())?;
-      Ok(RpcResponse::Element(element))
+      Ok(RpcResponse::Element(Box::new(element)))
     }
 
     RpcRequest::WindowRoot { window_id } => {
       let element = windows::root(&window_id).map_err(|e| e.to_string())?;
-      Ok(RpcResponse::Element(element))
+      Ok(RpcResponse::Element(Box::new(element)))
     }
 
     RpcRequest::Children {
@@ -88,7 +89,7 @@ pub fn dispatch(request: RpcRequest) -> Result<RpcResponse, String> {
 
     RpcRequest::Refresh { element_id } => {
       let element = elements::refresh(&element_id).map_err(|e| e.to_string())?;
-      Ok(RpcResponse::Element(element))
+      Ok(RpcResponse::Element(Box::new(element)))
     }
 
     RpcRequest::Write { element_id, text } => {
