@@ -9,8 +9,7 @@ license = "MIT"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-branded = { version = "0.1", features = ["serde"] }
-uuid = { version = "1", features = ["v4"] }
+derive_more = { version = "1", features = ["display", "from", "into"] }
 log = "0.4"
 parking_lot = "0.12"
 thiserror = "1.0"

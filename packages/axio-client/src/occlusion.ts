@@ -20,8 +20,8 @@ export class AxioOcclusion {
   private axio: AXIO;
   private svgDefs: SVGDefsElement;
   private svg: SVGSVGElement;
-  private clipPaths = new Map<string, SVGClipPathElement>();
-  private absoluteClipPaths = new Map<string, SVGClipPathElement>();
+  private clipPaths = new Map<WindowId, SVGClipPathElement>();
+  private absoluteClipPaths = new Map<WindowId, SVGClipPathElement>();
 
   constructor(axio: AXIO) {
     this.axio = axio;

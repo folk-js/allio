@@ -107,7 +107,7 @@ fn enumerate_windows_inner() -> Vec<AXWindow> {
     let z_index = windows.len() as u32;
 
     windows.push(AXWindow {
-      id: WindowId::new(id.to_string()),
+      id: WindowId::from(id as u32),
       title,
       app_name,
       bounds: Bounds {
@@ -117,7 +117,7 @@ fn enumerate_windows_inner() -> Vec<AXWindow> {
         h: cg_bounds.size.height,
       },
       focused,
-      process_id: ProcessId::new(process_id as u32),
+      process_id: ProcessId::from(process_id as u32),
       z_index,
     });
   }

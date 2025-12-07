@@ -61,10 +61,7 @@ fn poll_windows(options: &PollingOptions) -> Option<Vec<AXWindow>> {
 
   // Find offset from excluded window (e.g., our overlay)
   let (offset_x, offset_y) = if let Some(exclude_pid) = options.exclude_pid {
-    match all_windows
-      .iter()
-      .find(|w| w.process_id.as_u32() == exclude_pid.as_u32())
-    {
+    match all_windows.iter().find(|w| w.process_id.0 == exclude_pid.0) {
       Some(overlay_window) => (overlay_window.bounds.x, overlay_window.bounds.y),
       None => return None,
     }
@@ -80,7 +77,7 @@ fn poll_windows(options: &PollingOptions) -> Option<Vec<AXWindow>> {
       // Exclude our own window
       if options
         .exclude_pid
-        .is_some_and(|pid| w.process_id.as_u32() == pid.as_u32())
+        .is_some_and(|pid| w.process_id.0 == pid.0)
       {
         return false;
       }
@@ -202,23 +199,23 @@ pub fn start_polling(config: PollingOptions) -> PollingHandle {
         // Focus tracking
         let windows = window_registry::get_windows();
         let focused_window = windows.iter().find(|w| w.focused);
-        let current_focused_id = focused_window.map(|w| w.id.clone());
+        let current_focused_id = focused_window.map(|w| w.id);
 
         if current_focused_id != last_focused_id {
           emit(Event::FocusChanged {
-            window_id: current_focused_id.clone(),
+            window_id: current_focused_id,
           });
-          last_focused_id = current_focused_id.clone();
+          last_focused_id = current_focused_id;
         }
 
         // Active window tracking
-        if let Some(ref focused_id) = current_focused_id {
-          if last_active_id.as_ref() != Some(focused_id) {
-            window_registry::set_active(Some(focused_id.clone()));
+        if let Some(focused_id) = current_focused_id {
+          if last_active_id.as_ref() != Some(&focused_id) {
+            window_registry::set_active(Some(focused_id));
             emit(Event::ActiveChanged {
-              window_id: focused_id.clone(),
+              window_id: focused_id,
             });
-            last_active_id = Some(focused_id.clone());
+            last_active_id = Some(focused_id);
           }
         }
 

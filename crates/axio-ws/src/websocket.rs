@@ -88,7 +88,7 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
     // Query focused element and selection for the active window's app
     let (focused_element, selection) = if let Some(ref window_id) = active {
       if let Some(window) = windows::get(window_id) {
-        elements::focus(window.process_id.as_u32())
+        elements::focus(window.process_id.0)
       } else {
         (None, None)
       }

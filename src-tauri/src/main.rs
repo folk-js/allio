@@ -542,7 +542,7 @@ fn main() {
 
       // Start polling (handles windows + mouse position in one loop)
       let polling_handle = axio::start_polling(PollingOptions {
-        exclude_pid: Some(axio::ProcessId::new(std::process::id())),
+        exclude_pid: Some(axio::ProcessId::from(std::process::id())),
         ..PollingOptions::default()
       });
       *app.state::<AppState>().polling_handle.lock().unwrap() = Some(polling_handle);

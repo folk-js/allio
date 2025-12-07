@@ -1,54 +1,44 @@
-/*! Regenerate: `npm run typegen` or `cargo test -p axio export_bindings` */
+/*! Regenerate: `npm run typegen` */
 
-use branded::Branded;
+use derive_more::{Display, From, Into};
 use serde::{Deserialize, Serialize};
-use std::borrow::Borrow;
+use std::sync::atomic::{AtomicU32, Ordering};
 use ts_rs::TS;
 
-// === Branded ID types ===
-
-#[derive(Branded, TS)]
-#[branded(serde)]
+#[derive(
+  Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, Display, From, Into,
+)]
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
-pub struct ElementId(pub String);
+pub struct WindowId(pub u32);
 
-impl Borrow<str> for ElementId {
-  fn borrow(&self) -> &str {
-    &self.0
+#[derive(
+  Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, Display, From, Into,
+)]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+pub struct ElementId(pub u32);
+
+/// Global counter for ElementId generation. Starts at 1 (0 could be confused with "null").
+static ELEMENT_COUNTER: AtomicU32 = AtomicU32::new(1);
+
+impl ElementId {
+  /// Generate a new unique ElementId.
+  pub fn new() -> Self {
+    Self(ELEMENT_COUNTER.fetch_add(1, Ordering::Relaxed))
   }
 }
 
-#[derive(Branded, TS)]
-#[branded(serde)]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
-pub struct WindowId(pub String);
-
-impl Borrow<str> for WindowId {
-  fn borrow(&self) -> &str {
-    &self.0
+impl Default for ElementId {
+  fn default() -> Self {
+    Self::new()
   }
 }
 
 /// Process ID - branded type to distinguish from other u32 values.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(
+  Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, Display, From, Into,
+)]
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub struct ProcessId(pub u32);
-
-impl ProcessId {
-  pub fn new(pid: u32) -> Self {
-    Self(pid)
-  }
-
-  pub fn as_u32(&self) -> u32 {
-    self.0
-  }
-}
-
-impl std::fmt::Display for ProcessId {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    write!(f, "{}", self.0)
-  }
-}
 
 // === Error types ===
 

@@ -10,7 +10,6 @@ use objc2_core_foundation::{
 };
 use std::ffi::c_void;
 use std::ptr::NonNull;
-use uuid::Uuid;
 
 use super::handles::{ElementHandle, ObserverHandle};
 use crate::events::emit;
@@ -197,7 +196,7 @@ pub fn cleanup_dead_observers(active_pids: &std::collections::HashSet<crate::Pro
   let mut observers = APP_OBSERVERS.lock();
   let dead_pids: Vec<u32> = observers
     .keys()
-    .filter(|pid| !active_pids.iter().any(|p| p.as_u32() == **pid))
+    .filter(|pid| !active_pids.iter().any(|p| p.0 == **pid))
     .copied()
     .collect();
 
@@ -355,9 +354,9 @@ fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
   let (previous_element_id, previous_was_watchable) = {
     let mut observers = APP_OBSERVERS.lock();
     if let Some(state) = observers.get_mut(&pid) {
-      let prev_id = state.focused_element_id.clone();
+      let prev_id = state.focused_element_id;
       let prev_was_watchable = state.focused_is_watchable;
-      state.focused_element_id = Some(ax_element.id.clone());
+      state.focused_element_id = Some(ax_element.id);
       state.focused_is_watchable = new_is_watchable;
       (prev_id, prev_was_watchable)
     } else {
@@ -457,7 +456,7 @@ pub fn get_current_focus(
   // Get selection using handle method
   let selection =
     get_selection_from_handle(&focused_handle).map(|(text, range)| crate::types::Selection {
-      element_id: element.id.clone(),
+      element_id: element.id,
       text,
       range,
     });
@@ -469,7 +468,7 @@ pub fn get_current_focus(
 fn get_window_id_for_handle(handle: &ElementHandle) -> Option<WindowId> {
   let window_handle = handle.get_element("AXWindow")?;
   let window_id_num = get_window_id_from_element(&window_handle)?;
-  Some(WindowId::new(window_id_num.to_string()))
+  Some(WindowId::from(window_id_num as u32))
 }
 
 /// Get window ID number from an ElementHandle representing a window.
@@ -613,9 +612,9 @@ pub fn build_element_from_handle(
   };
 
   let element = AXElement {
-    id: ElementId::new(Uuid::new_v4().to_string()),
-    window_id: window_id.clone(),
-    parent_id: parent_id.cloned(),
+    id: ElementId::new(),
+    window_id: *window_id,
+    parent_id: parent_id.copied(),
     children: None,
     role,
     subrole,
@@ -637,11 +636,7 @@ pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResu
   use crate::element_registry::ElementRegistry;
 
   let (parent_handle, window_id, pid) = ElementRegistry::with_stored(parent_id, |stored| {
-    (
-      stored.handle.clone(),
-      stored.element.window_id.clone(),
-      stored.pid,
-    )
+    (stored.handle.clone(), stored.element.window_id, stored.pid)
   })?;
 
   // Use safe ElementHandle method
@@ -656,11 +651,11 @@ pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResu
 
   for child_handle in child_handles.into_iter().take(max_children) {
     let child = build_element_from_handle(child_handle, &window_id, pid, Some(parent_id));
-    child_ids.push(child.id.clone());
+    child_ids.push(child.id);
     children.push(child);
   }
 
-  ElementRegistry::set_children(parent_id, child_ids.clone())?;
+  ElementRegistry::set_children(parent_id, child_ids)?;
 
   for child in &children {
     emit(Event::ElementAdded {
@@ -685,8 +680,8 @@ pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
     ElementRegistry::with_stored(element_id, |stored| {
       (
         stored.handle.clone(),
-        stored.element.window_id.clone(),
-        stored.element.parent_id.clone(),
+        stored.element.window_id,
+        stored.element.parent_id,
         stored.element.children.clone(),
         stored.platform_role.clone(),
       )
@@ -703,7 +698,7 @@ pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
   };
 
   let updated = AXElement {
-    id: element_id.clone(),
+    id: *element_id,
     window_id,
     parent_id,
     children,
@@ -780,7 +775,7 @@ pub fn get_window_elements(pid: u32) -> AxioResult<Vec<ElementHandle>> {
 /// Get the root element for a window.
 pub fn get_window_root(window_id: &WindowId) -> AxioResult<AXElement> {
   let (window, handle) = crate::window_registry::get_with_handle(window_id)
-    .ok_or_else(|| AxioError::WindowNotFound(window_id.clone()))?;
+    .ok_or_else(|| AxioError::WindowNotFound(*window_id))?;
 
   let window_handle =
     handle.ok_or_else(|| AxioError::Internal(format!("Window {window_id} has no AX element")))?;
@@ -789,14 +784,14 @@ pub fn get_window_root(window_id: &WindowId) -> AxioResult<AXElement> {
   Ok(build_element_from_handle(
     window_handle.clone(),
     window_id,
-    window.process_id.as_u32(),
+    window.process_id.0,
     None,
   ))
 }
 
 /// Enable accessibility for an Electron app
 pub fn enable_accessibility_for_pid(pid: crate::ProcessId) {
-  let raw_pid = pid.as_u32();
+  let raw_pid = pid.0;
   let app_element = app_element(raw_pid);
   let attr_name = CFString::from_static_str("AXManualAccessibility");
   let value = CFBoolean::new(true);
@@ -818,8 +813,8 @@ pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
     AxioError::AccessibilityError(format!("No tracked window found at position ({x}, {y})"))
   })?;
 
-  let window_id = window.id.clone();
-  let pid = window.process_id.as_u32();
+  let window_id = window.id;
+  let pid = window.process_id.0;
 
   // Use safe ElementHandle method
   let app_handle = ElementHandle::new(app_element(pid));
@@ -888,7 +883,7 @@ pub fn subscribe_element_notifications(
     return Ok((std::ptr::null_mut(), Vec::new()));
   }
 
-  let context_handle = register_observer_context(element_id.clone());
+  let context_handle = register_observer_context(*element_id);
 
   let mut registered = Vec::new();
   for notification in &notifications {
@@ -936,7 +931,7 @@ pub fn unsubscribe_element_notifications(
 
 /// Fetch an element handle for a window by matching bounds.
 pub fn fetch_window_handle(window: &crate::AXWindow) -> Option<ElementHandle> {
-  let window_elements = get_window_elements(window.process_id.as_u32()).ok()?;
+  let window_elements = get_window_elements(window.process_id.0).ok()?;
 
   if window_elements.is_empty() {
     return None;

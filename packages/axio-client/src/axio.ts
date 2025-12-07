@@ -62,12 +62,12 @@ export class AXIO extends EventEmitter<AxioEvents> {
   private ws: WebSocket | null = null;
   private requestId = 0;
   private pending = new Map<number, Pending>();
-  private watchCallbacks = new Map<string, Set<WatchCallback>>();
+  private watchCallbacks = new Map<ElementId, Set<WatchCallback>>();
 
   // === State (mirrors Registry) ===
-  readonly windows = new Map<string, AXWindow>();
-  readonly elements = new Map<string, AXElement>();
-  readonly watched = new Set<string>();
+  readonly windows = new Map<WindowId, AXWindow>();
+  readonly elements = new Map<ElementId, AXElement>();
+  readonly watched = new Set<ElementId>();
   activeWindow: WindowId | null = null;
 
   /** Window IDs sorted by z-order (front to back) */
@@ -133,7 +133,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
   // === State access (derived queries, local only) ===
 
   /** Get element by ID from local cache */
-  get(id: string): AXElement | undefined {
+  get(id: ElementId): AXElement | undefined {
     return this.elements.get(id);
   }
 

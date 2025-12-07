@@ -4,5 +4,4 @@
 export * from "./types";
 export { AXIO } from "./axio";
 export { AxioOcclusion } from "./occlusion";
-export { AxioPassthrough } from "./passthrough";
-export type { PassthroughMode } from "./passthrough";
+export { AxioPassthrough, type PassthroughMode } from "./passthrough";

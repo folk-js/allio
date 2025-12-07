@@ -6,8 +6,6 @@
 
 INTERVAL=2
 
-echo "Memory Monitor for axio"
-
 # Find the debug build process (not the bundled release app)
 find_axio_pid() {
     # Look for the debug binary specifically

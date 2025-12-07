@@ -73,11 +73,11 @@ impl ElementRegistry {
     platform_role: &str,
   ) -> AXElement {
     Self::with(|registry| {
-      let window_id = element.window_id.clone();
+      let window_id = element.window_id;
 
       let window_state = registry
         .windows
-        .entry(window_id.clone())
+        .entry(window_id)
         .or_insert_with(|| WindowState {
           elements: HashMap::new(),
           by_hash: HashMap::new(),
@@ -101,11 +101,9 @@ impl ElementRegistry {
         watch_state: None,
       };
 
-      window_state.by_hash.insert(hash, element.id.clone());
-      window_state.elements.insert(element.id.clone(), stored);
-      registry
-        .element_to_window
-        .insert(element.id.clone(), window_id);
+      window_state.by_hash.insert(hash, element.id);
+      window_state.elements.insert(element.id, stored);
+      registry.element_to_window.insert(element.id, window_id);
 
       element
     })
@@ -117,14 +115,14 @@ impl ElementRegistry {
       let window_id = registry
         .element_to_window
         .get(element_id)
-        .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))?;
+        .ok_or_else(|| AxioError::ElementNotFound(*element_id))?;
 
       registry
         .windows
         .get(window_id)
         .and_then(|w| w.elements.get(element_id))
         .map(|s| s.element.clone())
-        .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))
+        .ok_or_else(|| AxioError::ElementNotFound(*element_id))
     })
   }
 
@@ -165,31 +163,30 @@ impl ElementRegistry {
       let window_id = registry
         .element_to_window
         .get(element_id)
-        .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))?;
+        .ok_or_else(|| AxioError::ElementNotFound(*element_id))?;
 
       registry
         .windows
         .get(window_id)
         .and_then(|w| w.elements.get(element_id))
         .map(f)
-        .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))
+        .ok_or_else(|| AxioError::ElementNotFound(*element_id))
     })
   }
 
   /// Update element's cached data (e.g., after refresh).
   pub fn update(element_id: &ElementId, updated: AXElement) -> AxioResult<()> {
     Self::with(|registry| {
-      let window_id = registry
+      let window_id = *registry
         .element_to_window
         .get(element_id)
-        .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))?
-        .clone();
+        .ok_or_else(|| AxioError::ElementNotFound(*element_id))?;
 
       let stored = registry
         .windows
         .get_mut(&window_id)
         .and_then(|w| w.elements.get_mut(element_id))
-        .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))?;
+        .ok_or_else(|| AxioError::ElementNotFound(*element_id))?;
 
       stored.element = updated;
       Ok(())
@@ -199,17 +196,16 @@ impl ElementRegistry {
   /// Update children for an element.
   pub fn set_children(element_id: &ElementId, children: Vec<ElementId>) -> AxioResult<()> {
     Self::with(|registry| {
-      let window_id = registry
+      let window_id = *registry
         .element_to_window
         .get(element_id)
-        .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))?
-        .clone();
+        .ok_or_else(|| AxioError::ElementNotFound(*element_id))?;
 
       let stored = registry
         .windows
         .get_mut(&window_id)
         .and_then(|w| w.elements.get_mut(element_id))
-        .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))?;
+        .ok_or_else(|| AxioError::ElementNotFound(*element_id))?;
 
       stored.element.children = Some(children);
       Ok(())
@@ -264,21 +260,20 @@ impl ElementRegistry {
 
   pub fn watch(element_id: &ElementId) -> AxioResult<()> {
     Self::with(|registry| {
-      let window_id = registry
+      let window_id = *registry
         .element_to_window
         .get(element_id)
-        .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))?
-        .clone();
+        .ok_or_else(|| AxioError::ElementNotFound(*element_id))?;
 
       let window_state = registry
         .windows
         .get_mut(&window_id)
-        .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))?;
+        .ok_or_else(|| AxioError::ElementNotFound(*element_id))?;
 
       let stored = window_state
         .elements
         .get(element_id)
-        .ok_or_else(|| AxioError::ElementNotFound(element_id.clone()))?;
+        .ok_or_else(|| AxioError::ElementNotFound(*element_id))?;
 
       let pid = stored.pid;
 

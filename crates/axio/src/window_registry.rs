@@ -60,7 +60,7 @@ pub fn get_window(window_id: &WindowId) -> Option<AXWindow> {
 
 /// Get the active window ID (preserved when desktop is focused).
 pub fn get_active() -> Option<WindowId> {
-  REGISTRY.read().active.clone()
+  REGISTRY.read().active
 }
 
 /// Get window IDs in depth order (front to back).
@@ -103,10 +103,10 @@ pub(crate) fn update(new_windows: Vec<AXWindow>) -> UpdateResult {
   let mut changed = Vec::new();
 
   // Find removed windows
-  let new_ids: std::collections::HashSet<&WindowId> = new_windows.iter().map(|w| &w.id).collect();
+  let new_ids: std::collections::HashSet<WindowId> = new_windows.iter().map(|w| w.id).collect();
   for existing_id in registry.windows.keys() {
     if !new_ids.contains(existing_id) {
-      removed.push(existing_id.clone());
+      removed.push(*existing_id);
     }
   }
 
@@ -118,12 +118,12 @@ pub(crate) fn update(new_windows: Vec<AXWindow>) -> UpdateResult {
 
   // Process new/existing windows
   for window_info in new_windows {
-    let window_id = window_info.id.clone();
+    let window_id = window_info.id;
 
     if let Some(existing) = registry.windows.get_mut(&window_id) {
       // Check if changed
       if existing.info != window_info {
-        changed.push(window_id.clone());
+        changed.push(window_id);
       }
 
       existing.info = window_info;
@@ -134,7 +134,7 @@ pub(crate) fn update(new_windows: Vec<AXWindow>) -> UpdateResult {
       }
     } else {
       // New window
-      added.push(window_id.clone());
+      added.push(window_id);
       let handle = platform::fetch_window_handle(&window_info);
       registry.windows.insert(
         window_id,
@@ -149,7 +149,7 @@ pub(crate) fn update(new_windows: Vec<AXWindow>) -> UpdateResult {
   // Update depth order - build once, store reference
   let mut windows: Vec<_> = registry.windows.values().map(|s| &s.info).collect();
   windows.sort_by_key(|w| w.z_index);
-  let depth_order: Vec<WindowId> = windows.into_iter().map(|w| w.id.clone()).collect();
+  let depth_order: Vec<WindowId> = windows.into_iter().map(|w| w.id).collect();
   registry.depth_order.clone_from(&depth_order);
 
   UpdateResult {
