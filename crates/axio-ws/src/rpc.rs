@@ -26,7 +26,10 @@ pub enum RpcRequest {
   /// Refresh element attributes from macOS
   Refresh { element_id: ElementId },
   /// Write typed value to element (string, boolean, integer, or float)
-  Write { element_id: ElementId, value: AXValue },
+  Write {
+    element_id: ElementId,
+    value: AXValue,
+  },
   /// Click element
   Click { element_id: ElementId },
   /// Watch element for changes

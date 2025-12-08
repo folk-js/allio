@@ -16,8 +16,12 @@
     "profile:leaks": "./scripts/check-leaks.sh",
     "profile:watch": "./scripts/watch-memory.sh"
   },
+  "dependencies": {
+    "d3-force": "^3.0.0"
+  },
   "devDependencies": {
     "@tauri-apps/cli": "^2.5.0",
+    "@types/d3-force": "^3.0.10",
     "@types/node": "^20.0.0",
     "typescript": "^5.2.2",
     "vite": "^5.3.1"

@@ -132,7 +132,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
   focusedWindow: WindowId | null = null;
   focusedElement: AXElement | null = null;
   selection: Selection | null = null;
-  clickthrough = false;
+  passthrough = false;
 
   // === Options ===
   debug: boolean;
@@ -306,7 +306,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
    */
   async setPassthrough(enabled: boolean): Promise<void> {
     await this.rawCall("set_passthrough", { enabled });
-    this.clickthrough = enabled;
+    this.passthrough = enabled;
   }
 
   // === Raw RPC ===
