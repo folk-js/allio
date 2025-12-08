@@ -40,6 +40,12 @@ pub fn verify_permissions() -> bool {
   platform::check_accessibility_permissions()
 }
 
+/// Get a snapshot of the current registry state for sync.
+/// Note: `accessibility_enabled` field will be `false` - caller should set it.
+pub fn snapshot() -> SyncInit {
+  registry::snapshot()
+}
+
 /// Start background polling for windows and mouse position.
 ///
 /// Returns a [`PollingHandle`] that controls the polling lifetime.

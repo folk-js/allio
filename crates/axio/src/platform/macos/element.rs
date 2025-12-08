@@ -10,7 +10,7 @@
 use objc2_core_foundation::CFHash;
 
 use crate::platform::handles::ElementHandle;
-use crate::types::{AXElement, AxioError, AxioResult, ElementId, ProcessId, WindowId};
+use crate::types::{AXElement, AxioError, AxioResult, ElementId, ParentRef, ProcessId, WindowId};
 
 use super::mapping::{ax_action, role_from_macos};
 use crate::accessibility::Role;
@@ -62,23 +62,31 @@ pub fn build_element_from_handle(
     attrs.subrole
   };
 
-  // Determine if this is a window root element.
+  // Determine parent reference.
   // In macOS, even windows have AXParent (the application element).
   // We consider an element a "root" if its parent is the application.
-  let root = handle
+  let is_root = handle
     .get_element("AXParent")
     .and_then(|p| p.get_string("AXRole"))
     .as_deref()
     == Some("AXApplication");
 
+  let parent = if is_root {
+    ParentRef::Root
+  } else if let Some(pid) = parent_id {
+    ParentRef::Linked { id: *pid }
+  } else {
+    ParentRef::Orphan
+  };
+
   let element = AXElement {
     id: ElementId::new(),
     window_id: *window_id,
     pid: ProcessId(pid),
-    root,
-    parent_id: parent_id.copied(),
+    parent,
     children: None,
     role,
+    value_type: role.value_type(),
     subrole,
     label: attrs.title,
     value: attrs.value,
@@ -175,10 +183,10 @@ pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
     id: *element_id,
     window_id: info.window_id,
     pid: ProcessId(info.pid),
-    root: info.root,
-    parent_id: info.parent_id,
+    parent: info.parent,
     children: info.children,
     role,
+    value_type: role.value_type(),
     subrole,
     label: attrs.title,
     value: attrs.value,
@@ -207,10 +215,10 @@ pub fn element_hash(handle: &ElementHandle) -> u64 {
 // Element Operations
 // =============================================================================
 
-/// Write a text value to an element.
+/// Write a typed value to an element.
 pub fn write_element_value(
   handle: &ElementHandle,
-  text: &str,
+  value: &crate::accessibility::Value,
   platform_role: &str,
 ) -> AxioResult<()> {
   // Use Role::is_writable() for writability check
@@ -222,7 +230,7 @@ pub fn write_element_value(
   }
 
   handle
-    .set_value(text)
+    .set_typed_value(value)
     .map_err(|e| AxioError::AccessibilityError(format!("Failed to set value: {e:?}")))
 }
 

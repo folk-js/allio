@@ -10,5 +10,5 @@ mod value;
 
 pub use action::Action;
 pub use notification::Notification;
-pub use role::{Role, WritableAs};
+pub use role::{Role, ValueType};
 pub use value::Value;

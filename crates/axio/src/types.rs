@@ -135,6 +135,34 @@ pub struct AXWindow {
   pub z_index: u32,
 }
 
+/// Parent reference for an element - discriminated union for clean semantics.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+pub enum ParentRef {
+  /// Window root element (parent is AXApplication, not tracked)
+  Root,
+  /// Parent is loaded in registry
+  Linked { id: ElementId },
+  /// Has parent in OS but not loaded in registry yet
+  Orphan,
+}
+
+impl ParentRef {
+  /// Check if this is a root element
+  pub fn is_root(&self) -> bool {
+    matches!(self, ParentRef::Root)
+  }
+
+  /// Get the parent ID if linked
+  pub fn parent_id(&self) -> Option<ElementId> {
+    match self {
+      ParentRef::Linked { id } => Some(*id),
+      _ => None,
+    }
+  }
+}
+
 /// The unified element type - stored in registry and returned from API.
 /// Flat structure: children are IDs, not nested. Trees derived client-side.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -145,14 +173,13 @@ pub struct AXElement {
   pub window_id: WindowId,
   /// Process that owns this element (may differ from window's process for helper processes)
   pub pid: ProcessId,
-  /// True if this is a window root element (has no parent in the OS tree)
-  #[serde(default)]
-  pub root: bool,
-  /// None = root (if root=true) or parent not yet loaded (if root=false)
-  pub parent_id: Option<ElementId>,
+  /// Parent reference: Root, Linked(id), or Orphan
+  pub parent: ParentRef,
   /// Child element IDs. None = not yet fetched, Some([]) = no children
   pub children: Option<Vec<ElementId>>,
   pub role: crate::accessibility::Role,
+  /// Expected value type for this role (computed from role)
+  pub value_type: crate::accessibility::ValueType,
   pub subrole: Option<String>,
   /// Display label (AXTitle). None = no label or empty label
   pub label: Option<String>,

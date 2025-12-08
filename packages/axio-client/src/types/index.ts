@@ -8,9 +8,11 @@ export type { ElementId } from "./generated/ElementId";
 
 // Accessibility types (cross-platform)
 export type { Role } from "./generated/Role";
+export type { ValueType } from "./generated/ValueType";
 export type { Action } from "./generated/Action";
 export type { Value } from "./generated/Value";
 export type { Notification } from "./generated/Notification";
+export type { ParentRef } from "./generated/ParentRef";
 
 // Core types
 export type { AXElement } from "./generated/AXElement";

@@ -37,9 +37,9 @@ pub fn refresh(element_id: &ElementId) -> AxioResult<AXElement> {
   platform::refresh_element(element_id)
 }
 
-/// Write text to an element.
-pub fn write(element_id: &ElementId, text: &str) -> AxioResult<()> {
-  registry::write_element_value(element_id, text)
+/// Write a typed value to an element.
+pub fn write(element_id: &ElementId, value: &crate::accessibility::Value) -> AxioResult<()> {
+  registry::write_element_value(element_id, value)
 }
 
 /// Click an element.

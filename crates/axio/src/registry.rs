@@ -36,7 +36,7 @@ use crate::accessibility::Notification;
 use crate::events;
 use crate::platform::{self, ElementHandle, ObserverHandle};
 use crate::types::{
-  AXElement, AXWindow, AxioError, AxioResult, ElementId, Event, ProcessId, WindowId,
+  AXElement, AXWindow, AxioError, AxioResult, ElementId, Event, ParentRef, ProcessId, WindowId,
 };
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
@@ -410,8 +410,8 @@ impl Registry {
     }
 
     // Get parent hash from OS (for lazy linking)
-    // element.root is already set correctly by build_element_from_handle based on AXParent
-    let parent_hash = if element.root {
+    // element.parent is already set by build_element_from_handle
+    let parent_hash = if element.parent.is_root() {
       None // Root elements have no parent
     } else {
       handle
@@ -419,11 +419,11 @@ impl Registry {
         .map(|parent_handle| platform::element_hash(&parent_handle))
     };
 
-    // Try to link to parent if it exists in registry (and not already set by caller)
-    if element.parent_id.is_none() {
+    // Try to link to parent if orphan (caller didn't provide parent)
+    if matches!(element.parent, ParentRef::Orphan) {
       if let Some(ref ph) = parent_hash {
         if let Some(&parent_id) = self.hash_to_element.get(ph) {
-          element.parent_id = Some(parent_id);
+          element.parent = ParentRef::Linked { id: parent_id };
         }
       }
     }
@@ -454,15 +454,17 @@ impl Registry {
     self.hash_to_window.insert(hash, window_id);
 
     // Add to parent's children (if parent exists)
-    if let Some(parent_id) = element.parent_id {
+    if let Some(parent_id) = element.parent.parent_id() {
       self.add_child_to_parent(parent_id, element_id);
-    } else if let Some(ref ph) = parent_hash {
+    } else if matches!(element.parent, ParentRef::Orphan) {
       // Parent not in registry yet - add to waiting list
-      self
-        .waiting_for_parent
-        .entry(*ph)
-        .or_default()
-        .push(element_id);
+      if let Some(ref ph) = parent_hash {
+        self
+          .waiting_for_parent
+          .entry(*ph)
+          .or_default()
+          .push(element_id);
+      }
     }
 
     // Check if any orphans are waiting for us as their parent
@@ -482,9 +484,9 @@ impl Registry {
 
   /// Link an orphan element to its newly-discovered parent.
   fn link_orphan_to_parent(&mut self, orphan_id: ElementId, parent_id: ElementId) {
-    // Update orphan's parent_id
+    // Update orphan's parent
     if let Some(orphan_state) = self.elements.get_mut(&orphan_id) {
-      orphan_state.element.parent_id = Some(parent_id);
+      orphan_state.element.parent = ParentRef::Linked { id: parent_id };
       // Emit ElementChanged for the orphan
       events::emit(Event::ElementChanged {
         element: orphan_state.element.clone(),
@@ -547,7 +549,7 @@ impl Registry {
     };
 
     // Remove from parent's children list
-    if let Some(parent_id) = state.element.parent_id {
+    if let Some(parent_id) = state.element.parent.parent_id() {
       self.remove_child_from_parent(parent_id, *element_id, &mut events);
     }
 
@@ -784,6 +786,45 @@ pub fn get_depth_order() -> Vec<WindowId> {
   Registry::with(|r| r.depth_order.clone())
 }
 
+/// Get a snapshot of the current registry state for sync.
+/// Note: `accessibility_enabled` must be set by caller (platform-specific check).
+pub fn snapshot() -> crate::types::SyncInit {
+  Registry::with(|r| {
+    // Get focused element and selection for the focused window's process
+    let (focused_element, selection) = r
+      .focused_window
+      .and_then(|window_id| {
+        let window = r.windows.get(&window_id)?;
+        let process = r.processes.get(&window.process_id)?;
+
+        let focused_elem = process
+          .focused_element
+          .and_then(|id| r.elements.get(&id).map(|s| s.element.clone()));
+
+        let sel = process.last_selection.as_ref().map(|(elem_id, text)| {
+          crate::types::Selection {
+            element_id: *elem_id,
+            text: text.clone(),
+            range: None, // Range not tracked in registry
+          }
+        });
+
+        Some((focused_elem, sel))
+      })
+      .unwrap_or((None, None));
+
+    crate::types::SyncInit {
+      windows: r.windows.values().map(|w| w.info.clone()).collect(),
+      elements: r.elements.values().map(|s| s.element.clone()).collect(),
+      focused_window: r.focused_window,
+      focused_element,
+      selection,
+      depth_order: r.depth_order.clone(),
+      accessibility_enabled: false, // Caller must set this
+    }
+  })
+}
+
 /// Find window at a point.
 pub fn find_window_at_point(x: f64, y: f64) -> Option<AXWindow> {
   Registry::with(|r| {
@@ -974,8 +1015,7 @@ pub struct StoredElementInfo {
   pub window_id: WindowId,
   pub pid: u32,
   pub platform_role: String,
-  pub root: bool,
-  pub parent_id: Option<ElementId>,
+  pub parent: ParentRef,
   pub children: Option<Vec<ElementId>>,
 }
 
@@ -991,17 +1031,19 @@ pub fn get_stored_element_info(element_id: &ElementId) -> AxioResult<StoredEleme
       window_id: state.element.window_id,
       pid: state.pid,
       platform_role: state.platform_role.clone(),
-      root: state.element.root,
-      parent_id: state.element.parent_id,
+      parent: state.element.parent.clone(),
       children: state.element.children.clone(),
     })
   })
 }
 
-/// Write value to element.
-pub fn write_element_value(element_id: &ElementId, text: &str) -> AxioResult<()> {
+/// Write typed value to element.
+pub fn write_element_value(
+  element_id: &ElementId,
+  value: &crate::accessibility::Value,
+) -> AxioResult<()> {
   with_element_handle(element_id, |handle, platform_role| {
-    platform::write_element_value(handle, text, platform_role)
+    platform::write_element_value(handle, value, platform_role)
   })?
 }
 

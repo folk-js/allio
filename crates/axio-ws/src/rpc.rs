@@ -1,6 +1,7 @@
+use axio::accessibility::Value as AXValue;
 use axio::{elements, windows, AXElement, ElementId, WindowId};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Value as JsonValue};
 use ts_rs::TS;
 
 /// RPC request - deserialize from `{ method, args }` format
@@ -24,8 +25,8 @@ pub enum RpcRequest {
   Parent { element_id: ElementId },
   /// Refresh element attributes from macOS
   Refresh { element_id: ElementId },
-  /// Write text to element
-  Write { element_id: ElementId, text: String },
+  /// Write typed value to element (string, boolean, integer, or float)
+  Write { element_id: ElementId, value: AXValue },
   /// Click element
   Click { element_id: ElementId },
   /// Watch element for changes
@@ -52,7 +53,7 @@ pub enum RpcResponse {
 }
 
 /// Dispatch a raw JSON request
-pub fn dispatch_json(method: &str, args: &Value) -> Value {
+pub fn dispatch_json(method: &str, args: &JsonValue) -> JsonValue {
   // Reconstruct tagged format for serde
   let request_value = json!({ "method": method, "args": args });
 
@@ -101,8 +102,8 @@ pub fn dispatch(request: RpcRequest) -> Result<RpcResponse, String> {
       Ok(RpcResponse::Element(Box::new(element)))
     }
 
-    RpcRequest::Write { element_id, text } => {
-      elements::write(&element_id, &text).map_err(|e| e.to_string())?;
+    RpcRequest::Write { element_id, value } => {
+      elements::write(&element_id, &value).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Null)
     }
 

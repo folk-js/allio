@@ -14,7 +14,63 @@ import type {
   ElementId,
   WindowId,
   Selection,
+  Value,
 } from "./types";
+
+// === Type guards for Value types ===
+
+/** Type guard: element expects string values */
+export function isStringElement(
+  el: AXElement
+): el is AXElement & { value_type: "string" } {
+  return el.value_type === "string";
+}
+
+/** Type guard: element expects boolean values */
+export function isBooleanElement(
+  el: AXElement
+): el is AXElement & { value_type: "boolean" } {
+  return el.value_type === "boolean";
+}
+
+/** Type guard: element expects integer values */
+export function isIntegerElement(
+  el: AXElement
+): el is AXElement & { value_type: "integer" } {
+  return el.value_type === "integer";
+}
+
+/** Type guard: element expects float values */
+export function isFloatElement(
+  el: AXElement
+): el is AXElement & { value_type: "float" } {
+  return el.value_type === "float";
+}
+
+/** Type guard: element is writable (has a value type other than "none") */
+export function isWritable(el: AXElement): boolean {
+  return el.value_type !== "none";
+}
+
+/** Create a Value from a primitive, using the element's expected type */
+export function createValue(
+  el: AXElement,
+  primitive: string | number | boolean
+): Value {
+  switch (el.value_type) {
+    case "string":
+      return { type: "String", value: String(primitive) };
+    case "boolean":
+      return { type: "Boolean", value: Boolean(primitive) };
+    case "integer":
+      return { type: "Integer", value: BigInt(Math.round(Number(primitive))) };
+    case "float":
+      return { type: "Float", value: Number(primitive) };
+    default:
+      // Fallback to string
+      return { type: "String", value: String(primitive) };
+  }
+}
 
 // === Type helpers ===
 type RpcMethod = RpcRequest["method"];
@@ -43,7 +99,6 @@ type EventNamespace =
   | "window"
   | "element"
   | "focus"
-  | "active"
   | "selection"
   | "sync"
   | "mouse";
@@ -151,10 +206,10 @@ export class AXIO extends EventEmitter<AxioEvents> {
     );
   }
 
-  /** Get root elements for a window (elements with root=true) */
+  /** Get root element for a window (element with parent.kind === "root") */
   getRootElement(windowId: WindowId): AXElement | undefined {
     return Array.from(this.elements.values()).find(
-      (el) => el.window_id === windowId && el.root
+      (el) => el.window_id === windowId && el.parent.kind === "root"
     );
   }
 
@@ -187,9 +242,18 @@ export class AXIO extends EventEmitter<AxioEvents> {
   /** Force re-fetch element from OS */
   refresh = (element_id: ElementId) => this.call("refresh", { element_id });
 
-  /** Write text to element */
-  write = (element_id: ElementId, text: string) =>
-    this.call("write", { element_id, text });
+  /** Write typed value to element */
+  write = (element_id: ElementId, value: Value) =>
+    this.call("write", { element_id, value });
+
+  /** Write a primitive value, auto-converting to the element's expected type */
+  writeValue = async (
+    element: AXElement,
+    primitive: string | number | boolean
+  ) => {
+    const value = createValue(element, primitive);
+    return this.write(element.id, value);
+  };
 
   /** Click element */
   click = (element_id: ElementId) => this.call("click", { element_id });

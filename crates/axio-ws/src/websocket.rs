@@ -1,4 +1,4 @@
-use axio::{elements, windows, Event, EventSink, SyncInit};
+use axio::{Event, EventSink};
 use axum::{
   extract::{
     ws::{Message, WebSocket, WebSocketUpgrade},
@@ -81,30 +81,9 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
 
   // Send initial state as sync:init (run on blocking thread pool)
   let init_result = tokio::task::spawn_blocking(|| {
-    let focused = windows::focused();
-    let all_windows = windows::all();
-    let depth_order = windows::depth_order();
-
-    // Query focused element and selection for the focused window's app
-    let (focused_element, selection) = if let Some(ref window_id) = focused {
-      if let Some(window) = windows::get(window_id) {
-        elements::focus(window.process_id.0)
-      } else {
-        (None, None)
-      }
-    } else {
-      (None, None)
-    };
-
-    SyncInit {
-      windows: all_windows,
-      elements: elements::all(),
-      focused_window: focused,
-      focused_element,
-      selection,
-      depth_order,
-      accessibility_enabled: axio::verify_permissions(),
-    }
+    let mut init = axio::snapshot();
+    init.accessibility_enabled = axio::verify_permissions();
+    init
   })
   .await;
 

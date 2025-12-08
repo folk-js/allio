@@ -2,9 +2,11 @@
 import type { Action } from "./Action";
 import type { Bounds } from "./Bounds";
 import type { ElementId } from "./ElementId";
+import type { ParentRef } from "./ParentRef";
 import type { ProcessId } from "./ProcessId";
 import type { Role } from "./Role";
 import type { Value } from "./Value";
+import type { ValueType } from "./ValueType";
 import type { WindowId } from "./WindowId";
 
 /**
@@ -21,17 +23,17 @@ window_id: WindowId,
  */
 pid: ProcessId, 
 /**
- * True if this is a window root element (has no parent in the OS tree)
+ * Parent reference: Root, Linked(id), or Orphan
  */
-root: boolean, 
-/**
- * None = root (if root=true) or parent not yet loaded (if root=false)
- */
-parent_id: ElementId | null, 
+parent: ParentRef, 
 /**
  * Child element IDs. None = not yet fetched, Some([]) = no children
  */
-children: Array<ElementId> | null, role: Role, subrole: string | null, 
+children: Array<ElementId> | null, role: Role, 
+/**
+ * Expected value type for this role (computed from role)
+ */
+value_type: ValueType, subrole: string | null, 
 /**
  * Display label (AXTitle). None = no label or empty label
  */

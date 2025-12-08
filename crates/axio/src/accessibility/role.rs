@@ -66,43 +66,46 @@ pub enum Role {
   Unknown,
 }
 
-/// What kind of value can be written to an element with this role.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WritableAs {
-  /// Element does not accept value input
-  NotWritable,
-  /// Text input (TextField, TextArea, SearchField, ComboBox)
+/// Expected value type for elements with a given role.
+/// Used for type-safe value handling in TypeScript.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+pub enum ValueType {
+  /// Element does not have a meaningful value
+  None,
+  /// Text value (TextField, TextArea, SearchField, ComboBox)
   String,
-  /// Integer stepper
+  /// Integer value (Stepper)
   Integer,
-  /// Floating point slider
+  /// Floating point value (Slider, ProgressBar)
   Float,
-  /// Boolean toggle (Checkbox, Switch, RadioButton)
+  /// Boolean value (Checkbox, Switch, RadioButton)
   Boolean,
 }
 
 impl Role {
-  /// What kind of value can be written to elements with this role.
-  pub fn writable_as(&self) -> WritableAs {
+  /// Expected value type for elements with this role.
+  pub fn value_type(&self) -> ValueType {
     match self {
-      Self::TextField | Self::TextArea | Self::SearchField | Self::ComboBox => WritableAs::String,
-      Self::Checkbox | Self::Switch | Self::RadioButton => WritableAs::Boolean,
-      Self::Slider | Self::ProgressBar => WritableAs::Float,
-      Self::Stepper => WritableAs::Integer,
-      _ => WritableAs::NotWritable,
+      Self::TextField | Self::TextArea | Self::SearchField | Self::ComboBox => ValueType::String,
+      Self::Checkbox | Self::Switch | Self::RadioButton => ValueType::Boolean,
+      Self::Slider | Self::ProgressBar => ValueType::Float,
+      Self::Stepper => ValueType::Integer,
+      _ => ValueType::None,
     }
   }
 
   /// Can values be written to elements with this role?
   pub fn is_writable(&self) -> bool {
-    !matches!(self.writable_as(), WritableAs::NotWritable)
+    !matches!(self.value_type(), ValueType::None)
   }
 
   /// Should we automatically watch for value changes when this element is focused?
   ///
   /// True for text inputs where we want to track typing in real-time.
   pub fn auto_watch_on_focus(&self) -> bool {
-    matches!(self.writable_as(), WritableAs::String)
+    matches!(self.value_type(), ValueType::String)
   }
 
   /// Can elements with this role typically receive keyboard focus?
@@ -197,23 +200,23 @@ mod tests {
   use super::*;
 
   #[test]
-  fn text_fields_are_writable_as_string() {
-    assert_eq!(Role::TextField.writable_as(), WritableAs::String);
-    assert_eq!(Role::TextArea.writable_as(), WritableAs::String);
-    assert_eq!(Role::SearchField.writable_as(), WritableAs::String);
+  fn text_fields_have_string_value_type() {
+    assert_eq!(Role::TextField.value_type(), ValueType::String);
+    assert_eq!(Role::TextArea.value_type(), ValueType::String);
+    assert_eq!(Role::SearchField.value_type(), ValueType::String);
     assert!(Role::TextField.is_writable());
   }
 
   #[test]
-  fn checkboxes_are_writable_as_boolean() {
-    assert_eq!(Role::Checkbox.writable_as(), WritableAs::Boolean);
-    assert_eq!(Role::Switch.writable_as(), WritableAs::Boolean);
+  fn checkboxes_have_boolean_value_type() {
+    assert_eq!(Role::Checkbox.value_type(), ValueType::Boolean);
+    assert_eq!(Role::Switch.value_type(), ValueType::Boolean);
     assert!(Role::Checkbox.is_writable());
   }
 
   #[test]
-  fn buttons_are_not_writable() {
-    assert_eq!(Role::Button.writable_as(), WritableAs::NotWritable);
+  fn buttons_have_no_value_type() {
+    assert_eq!(Role::Button.value_type(), ValueType::None);
     assert!(!Role::Button.is_writable());
   }
 

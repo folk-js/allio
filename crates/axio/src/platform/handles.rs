@@ -141,13 +141,29 @@ mod macos_impl {
       }
     }
 
-    /// Set attribute value.
-    pub fn set_value(&self, value: &str) -> Result<(), AXError> {
+    /// Set typed value (string, boolean, integer, or float).
+    pub fn set_typed_value(&self, value: &Value) -> Result<(), AXError> {
       let attr = CFString::from_static_str("AXValue");
-      let cf_value = CFString::from_str(value);
       unsafe {
-        // CFString derefs to CFType
-        let result = self.0.set_attribute_value(&attr, &cf_value);
+        let result = match value {
+          Value::String(s) => {
+            let cf_value = CFString::from_str(s);
+            self.0.set_attribute_value(&attr, &cf_value)
+          }
+          Value::Boolean(b) => {
+            // macOS checkboxes use CFNumber 0/1, not CFBoolean
+            let cf_value = CFNumber::new_i32(if *b { 1 } else { 0 });
+            self.0.set_attribute_value(&attr, &cf_value)
+          }
+          Value::Integer(i) => {
+            let cf_value = CFNumber::new_i64(*i);
+            self.0.set_attribute_value(&attr, &cf_value)
+          }
+          Value::Float(f) => {
+            let cf_value = CFNumber::new_f64(*f);
+            self.0.set_attribute_value(&attr, &cf_value)
+          }
+        };
         if result == AXError::Success {
           Ok(())
         } else {
