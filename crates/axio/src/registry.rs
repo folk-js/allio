@@ -38,7 +38,7 @@ use crate::accessibility::Notification;
 use crate::events;
 use crate::platform::{self, ElementHandle, ObserverHandle};
 use crate::types::{
-  AXElement, AXWindow, AxioError, AxioResult, ElementId, Event, ProcessId, WindowId,
+  AXElement, AXWindow, AxioError, AxioResult, ElementId, Event, ProcessId, Selection, WindowId,
 };
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -52,8 +52,8 @@ struct ProcessState {
   observer: ObserverHandle,
   /// Currently focused element in this app.
   focused_element: Option<ElementId>,
-  /// Last selection state for deduplication (element_id, text).
-  last_selection: Option<(ElementId, String)>,
+  /// Last selection state for deduplication.
+  last_selection: Option<Selection>,
 }
 
 /// Per-window state.
@@ -685,15 +685,7 @@ pub fn snapshot() -> crate::types::Snapshot {
           .focused_element
           .and_then(|id| r.elements.get(&id).map(|s| s.element.clone()));
 
-        let sel = process.last_selection.as_ref().map(|(elem_id, text)| {
-          crate::types::Selection {
-            element_id: *elem_id,
-            text: text.clone(),
-            range: None, // Range not tracked in registry
-          }
-        });
-
-        Some((focused_elem, sel))
+        Some((focused_elem, process.last_selection.clone()))
       })
       .unwrap_or((None, None));
 
@@ -786,13 +778,18 @@ pub fn update_selection(
   text: String,
   range: Option<crate::types::TextRange>,
 ) {
+  let new_selection = Selection {
+    element_id,
+    text,
+    range,
+  };
+
   let should_emit = Registry::write(|r| {
     let process_id = ProcessId(pid);
     let process = r.processes.get_mut(&process_id)?;
 
-    let new_selection = (element_id, text.clone());
     let changed = process.last_selection.as_ref() != Some(&new_selection);
-    process.last_selection = Some(new_selection);
+    process.last_selection = Some(new_selection.clone());
     Some(changed)
   })
   .unwrap_or(false);
@@ -800,9 +797,9 @@ pub fn update_selection(
   if should_emit {
     events::emit(Event::SelectionChanged {
       window_id,
-      element_id,
-      text,
-      range,
+      element_id: new_selection.element_id,
+      text: new_selection.text,
+      range: new_selection.range,
     });
   }
 }

@@ -153,7 +153,7 @@ pub struct AXElement {
   pub actions: Vec<crate::accessibility::Action>,
 }
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub struct Selection {
   pub element_id: ElementId,
@@ -226,7 +226,7 @@ pub enum Event {
 }
 
 /// Text selection range within an element
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub struct TextRange {
   pub start: u32,
