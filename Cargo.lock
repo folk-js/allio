@@ -191,6 +191,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 name = "axio"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "derive_more 1.0.0",
  "log",
  "objc2 0.6.3",
@@ -204,6 +205,8 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "tokio",
+ "tower-http 0.5.2",
  "ts-rs",
 ]
 
@@ -212,7 +215,6 @@ name = "axio-app"
 version = "0.0.1"
 dependencies = [
  "axio",
- "axio-ws",
  "core-graphics 0.23.2",
  "env_logger",
  "serde_json",
@@ -223,19 +225,6 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-shell",
  "tokio",
-]
-
-[[package]]
-name = "axio-ws"
-version = "0.1.0"
-dependencies = [
- "axio",
- "axum",
- "serde",
- "serde_json",
- "tokio",
- "tower-http 0.5.2",
- "ts-rs",
 ]
 
 [[package]]

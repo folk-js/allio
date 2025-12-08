@@ -1,63 +1,60 @@
 /*!
-Event emission for AXIO.
+Event broadcasting for AXIO.
 
-# Singleton Design
+Uses a tokio broadcast channel for multi-subscriber event streaming.
+Events are emitted when Registry state changes.
 
-EVENT_SINK is a global `OnceLock` initialized once at startup. This design was chosen because:
+# Usage
 
-1. **Write-once**: The sink is set once during initialization and never changes.
-   `OnceLock` enforces this at the type level.
+```ignore
+// Initialize once at startup
+let rx = axio::events::init();
 
-2. **No callback risk**: The WebSocket event sink broadcasts to clients over the network.
-   Clients cannot synchronously call back into the registry, so there's no deadlock risk
-   when emitting events while holding the registry lock.
+// Subscribe additional receivers
+let rx2 = axio::events::subscribe().unwrap();
 
-3. **Observer callbacks**: macOS accessibility observer callbacks fire on the main thread
-   and need to emit events. Global access is simpler than threading sinks through C callbacks.
+// Receive events
+while let Ok(event) = rx.recv().await {
+    // handle event
+}
+```
 
-# Alternative Designs
+# Why Global?
 
-- **Registry-owned sink**: Registry could own the sink, but then events would need to be
-  collected and emitted after releasing the lock, adding complexity.
-
-- **Return events from functions**: Pure functional approach where functions return events
-  instead of emitting them. Requires changing all call sites and still needs a place to
-  actually emit (which would be another global or passed parameter).
-
-- **Dependency injection**: Pass `Arc<dyn EventSink>` to all functions. Cleaner but
-  invasive change and doesn't simplify macOS callback handling.
+macOS accessibility callbacks fire on the main thread and need to emit events.
+A global channel is simpler than threading senders through C callback contexts.
 */
 
 use crate::types::Event;
+use std::sync::OnceLock;
+use tokio::sync::broadcast;
 
-/// Implement to receive AXIO events.
-/// Events notify clients when the Registry changes.
-pub trait EventSink: Send + Sync + 'static {
-  fn emit(&self, event: Event);
+const CHANNEL_CAPACITY: usize = 1000;
+
+static EVENT_CHANNEL: OnceLock<broadcast::Sender<Event>> = OnceLock::new();
+
+/// Initialize the event broadcast channel. Returns a receiver.
+///
+/// # Panics
+/// Panics if called more than once.
+pub fn init() -> broadcast::Receiver<Event> {
+    let (tx, rx) = broadcast::channel(CHANNEL_CAPACITY);
+    EVENT_CHANNEL
+        .set(tx)
+        .expect("axio::events::init() called more than once");
+    rx
 }
 
-/// No-op event sink for testing or when events aren't needed.
-pub struct NoopEventSink;
-
-impl EventSink for NoopEventSink {
-  fn emit(&self, _event: Event) {}
+/// Subscribe to events. Returns None if init() hasn't been called.
+pub fn subscribe() -> Option<broadcast::Receiver<Event>> {
+    EVENT_CHANNEL.get().map(|tx| tx.subscribe())
 }
 
-/// Global event sink. Set once at startup, never changes.
-static EVENT_SINK: std::sync::OnceLock<Box<dyn EventSink>> = std::sync::OnceLock::new();
-
-fn sink() -> &'static dyn EventSink {
-  EVENT_SINK.get_or_init(|| Box::new(NoopEventSink)).as_ref()
-}
-
-/// Set the event sink. Returns false if already set.
-/// Call this once during application initialization.
-pub fn set_event_sink(new_sink: impl EventSink) -> bool {
-  EVENT_SINK.set(Box::new(new_sink)).is_ok()
-}
-
-/// Emit an event to all listeners.
-/// Called from registry when state changes.
+/// Emit an event to all subscribers.
+/// No-op if init() hasn't been called (events are silently dropped).
 pub(crate) fn emit(event: Event) {
-  sink().emit(event);
+    if let Some(tx) = EVENT_CHANNEL.get() {
+        // Ignore send errors - just means no receivers
+        let _ = tx.send(event);
+    }
 }

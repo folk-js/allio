@@ -14,9 +14,8 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# AXIO crates (local workspace members)
-axio = { path = "../crates/axio" }
-axio-ws = { path = "../crates/axio-ws" }
+# AXIO crate with WebSocket server
+axio = { path = "../crates/axio", features = ["ws"] }
 
 # Tauri framework
 tauri = { version = "2", features = [

@@ -20,8 +20,8 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 #[cfg(target_os = "macos")]
 use tauri_nspanel::{tauri_panel, ManagerExt as _, PanelLevel, StyleMask, WebviewWindowExt as _};
 
+use axio::ws::WebSocketState;
 use axio::{PollingHandle, PollingOptions};
-use axio_ws::WebSocketState;
 
 // ============================================================================
 // macOS Panel Configuration
@@ -405,7 +405,7 @@ fn load_file(app: &AppHandle, path: &Path) -> Result<(), Box<dyn std::error::Err
 // WebSocket RPC Handler
 // ============================================================================
 
-fn create_rpc_handler(app_handle: AppHandle) -> axio_ws::CustomRpcHandler {
+fn create_rpc_handler(app_handle: AppHandle) -> axio::ws::CustomRpcHandler {
   let last_state = std::sync::Arc::new(AtomicBool::new(true));
 
   std::sync::Arc::new(move |method, args| {
@@ -558,11 +558,12 @@ fn main() {
   builder
     .manage(AppState::default())
     .setup(|app| {
-      // WebSocket setup
-      let (sender, _) = tokio::sync::broadcast::channel(1000);
-      let ws_state = WebSocketState::new(std::sync::Arc::new(sender))
-        .with_custom_handler(create_rpc_handler(app.handle().clone()));
-      axio::set_event_sink(ws_state.clone());
+      // Initialize axio events channel
+      let _ = axio::init_events();
+
+      // WebSocket setup (auto-subscribes to axio events)
+      let ws_state =
+        WebSocketState::new().with_custom_handler(create_rpc_handler(app.handle().clone()));
       if !axio::verify_permissions() {
         eprintln!("[axio] ⚠️  Accessibility permissions NOT granted!");
         eprintln!("[axio]    Go to System Preferences > Privacy & Security > Accessibility");
@@ -598,7 +599,7 @@ fn main() {
       thread::spawn(move || {
         tokio::runtime::Runtime::new()
           .expect("Failed to create runtime")
-          .block_on(axio_ws::start_ws_server(ws));
+          .block_on(axio::ws::start_server(ws));
       });
 
       Ok(())

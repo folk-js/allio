@@ -6,6 +6,10 @@ description = "Accessibility I/O - window tracking and accessibility API"
 authors = ["Orion Reed"]
 license = "MIT"
 
+[features]
+default = []
+ws = ["axum", "tower-http", "tokio/rt-multi-thread", "tokio/net"]
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -13,7 +17,12 @@ derive_more = { version = "1", features = ["display", "from", "into"] }
 log = "0.4"
 parking_lot = "0.12"
 thiserror = "1.0"
+tokio = { version = "1", features = ["sync"] }
 ts-rs = "10"
+
+# WebSocket server (optional, enabled with "ws" feature)
+axum = { version = "0.7", features = ["ws"], optional = true }
+tower-http = { version = "0.5", features = ["cors"], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.3"

@@ -18,7 +18,11 @@ mod platform;
 mod polling;
 mod registry;
 
-// Cross-platform accessibility abstractions (new)
+// WebSocket server (optional)
+#[cfg(feature = "ws")]
+pub mod ws;
+
+// Cross-platform accessibility abstractions
 pub mod accessibility;
 
 // Types - re-export everything at crate root
@@ -29,8 +33,8 @@ pub use types::*;
 mod api;
 pub use api::{elements, screen, windows};
 
-// Events - just the sink setup, not emit()
-pub use events::{set_event_sink, EventSink, NoopEventSink};
+// Events - channel init and subscribe
+pub use events::{init as init_events, subscribe as subscribe_events};
 
 // Polling
 pub use polling::{PollingHandle, PollingOptions};
