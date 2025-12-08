@@ -27,8 +27,8 @@ const STRING_ROLES = new Set([
   "combobox",
 ]);
 const BOOLEAN_ROLES = new Set(["checkbox", "switch", "radiobutton"]);
-const FLOAT_ROLES = new Set(["slider", "progressbar"]);
-const INTEGER_ROLES = new Set(["stepper"]);
+const NUMBER_ROLES = new Set(["slider", "progressbar", "stepper"]);
+const INTEGER_ROLES = new Set(["stepper"]); // Subset of NUMBER_ROLES that expect integers
 
 /** Check if element expects string values */
 export function isStringElement(el: AXElement): boolean {
@@ -40,14 +40,19 @@ export function isBooleanElement(el: AXElement): boolean {
   return BOOLEAN_ROLES.has(el.role);
 }
 
-/** Check if element expects integer values */
+/** Check if element expects numeric values */
+export function isNumberElement(el: AXElement): boolean {
+  return NUMBER_ROLES.has(el.role);
+}
+
+/** Check if element expects integer values (should display/round as whole number) */
 export function isIntegerElement(el: AXElement): boolean {
   return INTEGER_ROLES.has(el.role);
 }
 
-/** Check if element expects float values */
+/** Check if element expects float values (continuous) */
 export function isFloatElement(el: AXElement): boolean {
-  return FLOAT_ROLES.has(el.role);
+  return NUMBER_ROLES.has(el.role) && !INTEGER_ROLES.has(el.role);
 }
 
 /** Check if element is writable (can accept value input) */
@@ -55,8 +60,7 @@ export function isWritable(el: AXElement): boolean {
   return (
     STRING_ROLES.has(el.role) ||
     BOOLEAN_ROLES.has(el.role) ||
-    FLOAT_ROLES.has(el.role) ||
-    INTEGER_ROLES.has(el.role)
+    NUMBER_ROLES.has(el.role)
   );
 }
 
@@ -71,11 +75,8 @@ export function createValue(
   if (BOOLEAN_ROLES.has(el.role)) {
     return { type: "Boolean", value: Boolean(primitive) };
   }
-  if (INTEGER_ROLES.has(el.role)) {
-    return { type: "Integer", value: BigInt(Math.round(Number(primitive))) };
-  }
-  if (FLOAT_ROLES.has(el.role)) {
-    return { type: "Float", value: Number(primitive) };
+  if (NUMBER_ROLES.has(el.role)) {
+    return { type: "Number", value: Number(primitive) };
   }
   // Fallback to string
   return { type: "String", value: String(primitive) };

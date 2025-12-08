@@ -142,14 +142,42 @@ pub struct AXElement {
   pub parent_id: Option<ElementId>,
   pub children: Option<Vec<ElementId>>,
   pub role: crate::accessibility::Role,
-  pub subrole: Option<String>,
+  /// Raw platform role string for debugging (e.g., "AXRadioGroup", "AXButton/AXCloseButton")
+  pub platform_role: String,
+
+  // === Text properties ===
   pub label: Option<String>,
-  pub value: Option<crate::accessibility::Value>,
   pub description: Option<String>,
   pub placeholder: Option<String>,
+  /// URL for links, file paths (Finder), documents
+  pub url: Option<String>,
+
+  // === Value ===
+  pub value: Option<crate::accessibility::Value>,
+
+  // === Geometry ===
   pub bounds: Option<Bounds>,
+
+  // === States ===
   pub focused: Option<bool>,
-  pub enabled: Option<bool>,
+  /// Whether the element is disabled (matches ARIA aria-disabled)
+  pub disabled: bool,
+  /// Selection state for items in lists/tables
+  pub selected: Option<bool>,
+  /// Expansion state for tree nodes, disclosure triangles
+  pub expanded: Option<bool>,
+
+  // === Table/Collection position ===
+  /// Row index for cells/rows in tables (0-based)
+  pub row_index: Option<usize>,
+  /// Column index for cells in tables (0-based)
+  pub column_index: Option<usize>,
+  /// Total row count (for table containers)
+  pub row_count: Option<usize>,
+  /// Total column count (for table containers)
+  pub column_count: Option<usize>,
+
+  // === Actions ===
   pub actions: Vec<crate::accessibility::Action>,
 }
 

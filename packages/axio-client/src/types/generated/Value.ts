@@ -3,10 +3,13 @@
 /**
  * Typed value for an accessibility element.
  *
- * Different roles have different value types:
- * - TextField, TextArea: String
- * - Checkbox, Switch: Boolean
- * - Slider: Float
- * - Stepper: Integer
+ * Role provides semantic context for how to interpret values:
+ * - TextField, TextArea → String
+ * - Checkbox, Switch → Boolean
+ * - Slider, ProgressBar → Number (float)
+ * - Stepper → Number (integer, as whole f64)
+ *
+ * Number is unified f64 for JSON/TypeScript compatibility.
+ * Use `Role::expects_integer()` to know if display should truncate.
  */
-export type Value = { "type": "String", "value": string } | { "type": "Integer", "value": bigint } | { "type": "Float", "value": number } | { "type": "Boolean", "value": boolean };
+export type Value = { "type": "String", "value": string } | { "type": "Number", "value": number } | { "type": "Boolean", "value": boolean };

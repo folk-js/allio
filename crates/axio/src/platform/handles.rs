@@ -16,9 +16,16 @@ pub struct ElementAttributes {
   pub value: Option<Value>,
   pub description: Option<String>,
   pub placeholder: Option<String>,
+  pub url: Option<String>,
   pub bounds: Option<Bounds>,
   pub focused: Option<bool>,
-  pub enabled: Option<bool>,
+  pub disabled: bool,
+  pub selected: Option<bool>,
+  pub expanded: Option<bool>,
+  pub row_index: Option<usize>,
+  pub column_index: Option<usize>,
+  pub row_count: Option<usize>,
+  pub column_count: Option<usize>,
   pub actions: Vec<Action>,
 }
 
@@ -136,7 +143,7 @@ mod macos_impl {
       }
     }
 
-    /// Set typed value (string, boolean, integer, or float).
+    /// Set typed value (string, boolean, or number).
     pub fn set_typed_value(&self, value: &Value) -> Result<(), AXError> {
       let attr = CFString::from_static_str("AXValue");
       unsafe {
@@ -150,12 +157,8 @@ mod macos_impl {
             let cf_value = CFNumber::new_i32(if *b { 1 } else { 0 });
             self.0.set_attribute_value(&attr, &cf_value)
           }
-          Value::Integer(i) => {
-            let cf_value = CFNumber::new_i64(*i);
-            self.0.set_attribute_value(&attr, &cf_value)
-          }
-          Value::Float(f) => {
-            let cf_value = CFNumber::new_f64(*f);
+          Value::Number(n) => {
+            let cf_value = CFNumber::new_f64(*n);
             self.0.set_attribute_value(&attr, &cf_value)
           }
         };
@@ -193,22 +196,36 @@ mod macos_impl {
       let value = CFString::from_static_str("AXValue");
       let description = CFString::from_static_str("AXDescription");
       let placeholder = CFString::from_static_str("AXPlaceholderValue");
+      let url = CFString::from_static_str("AXURL");
       let position = CFString::from_static_str("AXPosition");
       let size = CFString::from_static_str("AXSize");
       let focused = CFString::from_static_str("AXFocused");
       let enabled = CFString::from_static_str("AXEnabled");
+      let selected = CFString::from_static_str("AXSelected");
+      let expanded = CFString::from_static_str("AXExpanded");
+      let row_index = CFString::from_static_str("AXRowIndex");
+      let column_index = CFString::from_static_str("AXColumnIndex");
+      let row_count = CFString::from_static_str("AXRowCount");
+      let column_count = CFString::from_static_str("AXColumnCount");
 
-      let attr_refs: [&CFString; 10] = [
-        &role,
-        &subrole,
-        &title,
-        &value,
-        &description,
-        &placeholder,
-        &position,
-        &size,
-        &focused,
-        &enabled,
+      let attr_refs: [&CFString; 17] = [
+        &role,         // 0
+        &subrole,      // 1
+        &title,        // 2
+        &value,        // 3
+        &description,  // 4
+        &placeholder,  // 5
+        &url,          // 6
+        &position,     // 7
+        &size,         // 8
+        &focused,      // 9
+        &enabled,      // 10
+        &selected,     // 11
+        &expanded,     // 12
+        &row_index,    // 13
+        &column_index, // 14
+        &row_count,    // 15
+        &column_count, // 16
       ];
       let attrs = CFArray::from_objects(&attr_refs);
 
@@ -255,6 +272,15 @@ mod macos_impl {
         }
       };
 
+      // Helper to parse boolean
+      let parse_bool =
+        |v: &CFType| -> Option<bool> { v.downcast_ref::<CFBoolean>().map(|b| b.as_bool()) };
+
+      // Helper to parse usize from CFNumber
+      let parse_usize = |v: &CFType| -> Option<usize> {
+        v.downcast_ref::<CFNumber>()?.as_i64().map(|n| n as usize)
+      };
+
       let role_str = get_val(0).and_then(|v| parse_str(&v));
       let subrole_str = get_val(1).and_then(|v| parse_str(&v));
       let title_str = get_val(2).and_then(|v| parse_str(&v));
@@ -262,17 +288,25 @@ mod macos_impl {
         get_val(3).and_then(|v| Self::extract_value(&v, role_hint.or(role_str.as_deref())));
       let desc_str = get_val(4).and_then(|v| parse_str(&v));
       let placeholder_str = get_val(5).and_then(|v| parse_str(&v));
-      let bounds = Self::parse_bounds(get_val(6).as_deref(), get_val(7).as_deref());
-      let focused_bool =
-        get_val(8).and_then(|v| v.downcast_ref::<CFBoolean>().map(|b| b.as_bool()));
-      let enabled_bool =
-        get_val(9).and_then(|v| v.downcast_ref::<CFBoolean>().map(|b| b.as_bool()));
+      let url_str = get_val(6).and_then(|v| parse_str(&v));
+      let bounds = Self::parse_bounds(get_val(7).as_deref(), get_val(8).as_deref());
+      let focused_bool = get_val(9).and_then(|v| parse_bool(&v));
+      let enabled_bool = get_val(10).and_then(|v| parse_bool(&v));
+      let selected_bool = get_val(11).and_then(|v| parse_bool(&v));
+      let expanded_bool = get_val(12).and_then(|v| parse_bool(&v));
+      let row_index_val = get_val(13).and_then(|v| parse_usize(&v));
+      let column_index_val = get_val(14).and_then(|v| parse_usize(&v));
+      let row_count_val = get_val(15).and_then(|v| parse_usize(&v));
+      let column_count_val = get_val(16).and_then(|v| parse_usize(&v));
 
       let action_strs = self.get_actions();
       let actions = action_strs
         .into_iter()
         .filter_map(|s| action_from_macos(&s))
         .collect();
+
+      // Convert enabled to disabled (inverted)
+      let disabled = enabled_bool.map(|e| !e).unwrap_or(false);
 
       ElementAttributes {
         role: role_str,
@@ -281,9 +315,16 @@ mod macos_impl {
         value: value_parsed,
         description: desc_str,
         placeholder: placeholder_str,
+        url: url_str,
         bounds,
         focused: focused_bool,
-        enabled: enabled_bool,
+        disabled,
+        selected: selected_bool,
+        expanded: expanded_bool,
+        row_index: row_index_val,
+        column_index: column_index_val,
+        row_count: row_count_val,
+        column_count: column_count_val,
         actions,
       }
     }
@@ -330,10 +371,8 @@ mod macos_impl {
             }
           }
         }
-        if let Some(int_val) = cf_number.as_i64() {
-          return Some(Value::Integer(int_val));
-        } else if let Some(float_val) = cf_number.as_f64() {
-          return Some(Value::Float(float_val));
+        if let Some(float_val) = cf_number.as_f64() {
+          return Some(Value::Number(float_val));
         }
       }
 

@@ -25,4 +25,40 @@ window_id: WindowId,
 /**
  * Process that owns this element (may differ from window's process for helper processes)
  */
-pid: ProcessId, is_root: boolean, parent_id: ElementId | null, children: Array<ElementId> | null, role: Role, subrole: string | null, label: string | null, value: Value | null, description: string | null, placeholder: string | null, bounds: Bounds | null, focused: boolean | null, enabled: boolean | null, actions: Array<Action>, };
+pid: ProcessId, is_root: boolean, parent_id: ElementId | null, children: Array<ElementId> | null, role: Role, 
+/**
+ * Raw platform role string for debugging (e.g., "AXRadioGroup", "AXButton/AXCloseButton")
+ */
+platform_role: string, label: string | null, description: string | null, placeholder: string | null, 
+/**
+ * URL for links, file paths (Finder), documents
+ */
+url: string | null, value: Value | null, bounds: Bounds | null, focused: boolean | null, 
+/**
+ * Whether the element is disabled (matches ARIA aria-disabled)
+ */
+disabled: boolean, 
+/**
+ * Selection state for items in lists/tables
+ */
+selected: boolean | null, 
+/**
+ * Expansion state for tree nodes, disclosure triangles
+ */
+expanded: boolean | null, 
+/**
+ * Row index for cells/rows in tables (0-based)
+ */
+row_index: number | null, 
+/**
+ * Column index for cells in tables (0-based)
+ */
+column_index: number | null, 
+/**
+ * Total row count (for table containers)
+ */
+row_count: number | null, 
+/**
+ * Total column count (for table containers)
+ */
+column_count: number | null, actions: Array<Action>, };

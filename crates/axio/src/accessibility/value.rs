@@ -10,11 +10,14 @@ use ts_rs::TS;
 
 /// Typed value for an accessibility element.
 ///
-/// Different roles have different value types:
-/// - TextField, TextArea: String
-/// - Checkbox, Switch: Boolean
-/// - Slider: Float
-/// - Stepper: Integer
+/// Role provides semantic context for how to interpret values:
+/// - TextField, TextArea → String
+/// - Checkbox, Switch → Boolean
+/// - Slider, ProgressBar → Number (float)
+/// - Stepper → Number (integer, as whole f64)
+///
+/// Number is unified f64 for JSON/TypeScript compatibility.
+/// Use `Role::expects_integer()` to know if display should truncate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", content = "value")]
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
@@ -22,11 +25,9 @@ pub enum Value {
   /// Text content (text fields, labels)
   String(String),
 
-  /// Integer value (steppers, discrete controls)
-  Integer(i64),
-
-  /// Floating point value (sliders, progress bars)
-  Float(f64),
+  /// Numeric value (sliders, steppers, progress bars)
+  /// Integers are stored as whole f64 values.
+  Number(f64),
 
   /// Boolean state (checkboxes, switches)
   Boolean(bool),
@@ -45,26 +46,30 @@ impl Value {
   pub fn into_string(self) -> String {
     match self {
       Self::String(s) => s,
-      Self::Integer(i) => i.to_string(),
-      Self::Float(f) => f.to_string(),
+      Self::Number(n) => {
+        // Format integers without decimal point
+        if n.fract() == 0.0 {
+          format!("{}", n as i64)
+        } else {
+          n.to_string()
+        }
+      }
       Self::Boolean(b) => b.to_string(),
     }
   }
 
-  /// Get as i64 if this is an Integer or can be converted from Float.
-  pub fn as_i64(&self) -> Option<i64> {
+  /// Get as f64 if this is a Number value.
+  pub fn as_f64(&self) -> Option<f64> {
     match self {
-      Self::Integer(i) => Some(*i),
-      Self::Float(f) => Some(*f as i64),
+      Self::Number(n) => Some(*n),
       _ => None,
     }
   }
 
-  /// Get as f64 if this is a Float or Integer.
-  pub fn as_f64(&self) -> Option<f64> {
+  /// Get as i64 (truncated) if this is a Number value.
+  pub fn as_i64(&self) -> Option<i64> {
     match self {
-      Self::Float(f) => Some(*f),
-      Self::Integer(i) => Some(*i as f64),
+      Self::Number(n) => Some(*n as i64),
       _ => None,
     }
   }
@@ -81,20 +86,12 @@ impl Value {
     matches!(self, Self::String(_))
   }
 
-  pub fn is_integer(&self) -> bool {
-    matches!(self, Self::Integer(_))
-  }
-
-  pub fn is_float(&self) -> bool {
-    matches!(self, Self::Float(_))
+  pub fn is_number(&self) -> bool {
+    matches!(self, Self::Number(_))
   }
 
   pub fn is_boolean(&self) -> bool {
     matches!(self, Self::Boolean(_))
-  }
-
-  pub fn is_numeric(&self) -> bool {
-    matches!(self, Self::Integer(_) | Self::Float(_))
   }
 }
 
@@ -110,27 +107,27 @@ impl From<&str> for Value {
   }
 }
 
-impl From<i64> for Value {
-  fn from(i: i64) -> Self {
-    Self::Integer(i)
-  }
-}
-
-impl From<i32> for Value {
-  fn from(i: i32) -> Self {
-    Self::Integer(i as i64)
-  }
-}
-
 impl From<f64> for Value {
-  fn from(f: f64) -> Self {
-    Self::Float(f)
+  fn from(n: f64) -> Self {
+    Self::Number(n)
   }
 }
 
 impl From<f32> for Value {
-  fn from(f: f32) -> Self {
-    Self::Float(f as f64)
+  fn from(n: f32) -> Self {
+    Self::Number(n as f64)
+  }
+}
+
+impl From<i64> for Value {
+  fn from(n: i64) -> Self {
+    Self::Number(n as f64)
+  }
+}
+
+impl From<i32> for Value {
+  fn from(n: i32) -> Self {
+    Self::Number(n as f64)
   }
 }
 
@@ -148,16 +145,16 @@ mod tests {
   fn string_accessors() {
     let v = Value::String("hello".into());
     assert_eq!(v.as_str(), Some("hello"));
-    assert_eq!(v.as_i64(), None);
+    assert_eq!(v.as_f64(), None);
   }
 
   #[test]
-  fn numeric_conversions() {
-    let int = Value::Integer(42);
+  fn number_accessors() {
+    let int = Value::Number(42.0);
     assert_eq!(int.as_i64(), Some(42));
     assert_eq!(int.as_f64(), Some(42.0));
 
-    let float = Value::Float(3.14);
+    let float = Value::Number(3.14);
     assert_eq!(float.as_f64(), Some(3.14));
     assert_eq!(float.as_i64(), Some(3)); // truncates
   }
@@ -165,8 +162,8 @@ mod tests {
   #[test]
   fn into_string_converts() {
     assert_eq!(Value::String("test".into()).into_string(), "test");
-    assert_eq!(Value::Integer(42).into_string(), "42");
-    assert_eq!(Value::Float(3.14).into_string(), "3.14");
+    assert_eq!(Value::Number(42.0).into_string(), "42");
+    assert_eq!(Value::Number(3.14).into_string(), "3.14");
     assert_eq!(Value::Boolean(true).into_string(), "true");
   }
 
@@ -178,5 +175,13 @@ mod tests {
     let _: Value = 42i32.into();
     let _: Value = 3.14f64.into();
     let _: Value = true.into();
+  }
+
+  #[test]
+  fn integer_display() {
+    // Integers should format without decimal
+    assert_eq!(Value::Number(42.0).into_string(), "42");
+    assert_eq!(Value::Number(0.0).into_string(), "0");
+    assert_eq!(Value::Number(-5.0).into_string(), "-5");
   }
 }

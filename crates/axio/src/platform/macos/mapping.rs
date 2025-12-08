@@ -99,20 +99,26 @@ pub fn action_from_macos(s: &str) -> Option<Action> {
 
 /// macOS role string constants (kAX*Role).
 pub mod ax_role {
+  // Structural
   pub const APPLICATION: &str = "AXApplication";
   pub const WINDOW: &str = "AXWindow";
   pub const STANDARD_WINDOW: &str = "AXStandardWindow";
   pub const DOCUMENT: &str = "AXDocument";
+  pub const WEB_AREA: &str = "AXWebArea";
   pub const GROUP: &str = "AXGroup";
+  pub const SPLIT_GROUP: &str = "AXSplitGroup";
+  pub const RADIO_GROUP: &str = "AXRadioGroup";
   pub const SCROLL_AREA: &str = "AXScrollArea";
   pub const TOOLBAR: &str = "AXToolbar";
 
+  // Navigation
   pub const MENU: &str = "AXMenu";
   pub const MENU_BAR: &str = "AXMenuBar";
   pub const MENU_ITEM: &str = "AXMenuItem";
   pub const TAB: &str = "AXTab";
   pub const TAB_GROUP: &str = "AXTabGroup";
 
+  // Collections
   pub const LIST: &str = "AXList";
   pub const ROW: &str = "AXRow";
   pub const TABLE: &str = "AXTable";
@@ -120,8 +126,10 @@ pub mod ax_role {
   pub const OUTLINE: &str = "AXOutline"; // Tree
   pub const OUTLINE_ROW: &str = "AXOutlineRow"; // TreeItem
 
+  // Interactive
   pub const BUTTON: &str = "AXButton";
   pub const DEFAULT_BUTTON: &str = "AXDefaultButton";
+  pub const MENU_BUTTON: &str = "AXMenuButton";
   pub const LINK: &str = "AXLink";
   pub const TEXT_FIELD: &str = "AXTextField";
   pub const TEXT_AREA: &str = "AXTextArea";
@@ -135,24 +143,46 @@ pub mod ax_role {
   pub const INCREMENTOR: &str = "AXIncrementor"; // Also stepper
   pub const PROGRESS_INDICATOR: &str = "AXProgressIndicator";
 
+  // Static content
   pub const STATIC_TEXT: &str = "AXStaticText";
   pub const HEADING: &str = "AXHeading";
   pub const IMAGE: &str = "AXImage";
   pub const SPLITTER: &str = "AXSplitter";
 
+  // Generic elements (known, non-semantic chrome)
+  pub const SCROLL_BAR: &str = "AXScrollBar";
+  pub const VALUE_INDICATOR: &str = "AXValueIndicator";
+  pub const HANDLE: &str = "AXHandle";
+  pub const MATTE: &str = "AXMatte";
+  pub const RULER: &str = "AXRuler";
+  pub const RULER_MARKER: &str = "AXRulerMarker";
+  pub const GROW_AREA: &str = "AXGrowArea";
+  pub const DRAWER: &str = "AXDrawer";
+  pub const POPOVER: &str = "AXPopover";
+  pub const LAYOUT_AREA: &str = "AXLayoutArea";
+  pub const LAYOUT_ITEM: &str = "AXLayoutItem";
+  pub const RELEVANCE_INDICATOR: &str = "AXRelevanceIndicator";
+  pub const LEVEL_INDICATOR: &str = "AXLevelIndicator";
+  pub const BUSY_INDICATOR: &str = "AXBusyIndicator";
+
   pub const UNKNOWN: &str = "AXUnknown";
 }
 
 /// Convert macOS role string to our Role.
-/// Expects the exact macOS role string (e.g., "AXButton").
-/// Returns `Role::Unknown` for unrecognized roles.
+///
+/// Mapping strategy:
+/// - Semantic roles → specific Role variants (Button, TextField, etc.)
+/// - Semantic groups → Group (split groups, radio groups, etc.)
+/// - Layout-only groups → Group (then refined to GenericContainer if no label/value)
+/// - Known non-semantic chrome → GenericElement (scrollbars, handles, etc.)
+/// - Unknown → Unknown (logs warning, indicates gap in mappings)
 pub fn role_from_macos(platform_role: &str) -> Role {
   match platform_role {
     // Structural
     ax_role::APPLICATION => Role::Application,
     ax_role::WINDOW | ax_role::STANDARD_WINDOW => Role::Window,
-    ax_role::DOCUMENT => Role::Document,
-    ax_role::GROUP => Role::Group,
+    ax_role::DOCUMENT | ax_role::WEB_AREA => Role::Document,
+    ax_role::GROUP | ax_role::SPLIT_GROUP | ax_role::RADIO_GROUP => Role::Group,
     ax_role::SCROLL_AREA => Role::ScrollArea,
     ax_role::TOOLBAR => Role::Toolbar,
 
@@ -172,7 +202,7 @@ pub fn role_from_macos(platform_role: &str) -> Role {
     ax_role::OUTLINE_ROW => Role::TreeItem,
 
     // Interactive
-    ax_role::BUTTON | ax_role::DEFAULT_BUTTON => Role::Button,
+    ax_role::BUTTON | ax_role::DEFAULT_BUTTON | ax_role::MENU_BUTTON => Role::Button,
     ax_role::LINK => Role::Link,
     ax_role::TEXT_FIELD | ax_role::SECURE_TEXT_FIELD => Role::TextField,
     ax_role::TEXT_AREA => Role::TextArea,
@@ -190,8 +220,32 @@ pub fn role_from_macos(platform_role: &str) -> Role {
     ax_role::IMAGE => Role::Image,
     ax_role::SPLITTER => Role::Separator,
 
-    // Fallback
-    _ => Role::Unknown,
+    // Generic elements - known non-semantic chrome
+    // These are explicitly mapped so we don't log warnings for them.
+    // They'll be candidates for pruning in simplified tree views.
+    ax_role::SCROLL_BAR
+    | ax_role::VALUE_INDICATOR
+    | ax_role::HANDLE
+    | ax_role::MATTE
+    | ax_role::RULER
+    | ax_role::RULER_MARKER
+    | ax_role::GROW_AREA
+    | ax_role::DRAWER
+    | ax_role::POPOVER
+    | ax_role::LAYOUT_AREA
+    | ax_role::LAYOUT_ITEM
+    | ax_role::RELEVANCE_INDICATOR
+    | ax_role::LEVEL_INDICATOR
+    | ax_role::BUSY_INDICATOR => Role::GenericElement,
+
+    // Explicit unknown
+    ax_role::UNKNOWN => Role::Unknown,
+
+    // Unmapped - truly unaccounted for, needs investigation
+    _ => {
+      log::warn!("Unknown macOS role: {platform_role}");
+      Role::Unknown
+    }
   }
 }
 
@@ -245,7 +299,8 @@ pub fn role_to_macos(r: Role) -> &'static str {
     Role::Separator => ax_role::SPLITTER,
 
     // Fallback
-    Role::GenericContainer => ax_role::GROUP,
+    Role::GenericGroup => ax_role::GROUP,
+    Role::GenericElement => ax_role::GROUP, // Best approximation
     Role::Unknown => ax_role::UNKNOWN,
   }
 }

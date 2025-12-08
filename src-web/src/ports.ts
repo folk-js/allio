@@ -818,9 +818,7 @@ function buildInfoPanelHtml(element: AXElement, isTransform: boolean): string {
   const lines: string[] = [];
 
   lines.push(
-    `<div style="color: var(--port-output); font-weight: 600; margin-bottom: 4px;">${
-      element.role
-    }${element.subrole ? ` / ${element.subrole}` : ""}</div>`
+    `<div style="color: var(--port-output); font-weight: 600; margin-bottom: 4px;">${element.role} <span style="opacity: 0.5">(${element.platform_role})</span></div>`
   );
 
   if (element.label) {
@@ -865,7 +863,7 @@ function buildInfoPanelHtml(element: AXElement, isTransform: boolean): string {
     );
   }
 
-  if (element.enabled === false) {
+  if (element.disabled) {
     lines.push(`<div style="color: #ff6b6b; margin-top: 2px;">Disabled</div>`);
   }
 

@@ -19,15 +19,18 @@ use crate::accessibility::Role;
 
 /// Refine role based on element attributes.
 ///
-/// Groups with no label and no value are likely just layout containers
-/// with no semantic meaning—classify them as GenericContainer.
+/// Plain AXGroup with no label/value is likely just a layout container
+/// with no semantic meaning—classify as GenericGroup.
+/// Semantic group types (AXSplitGroup, AXRadioGroup) stay as Group.
 fn refine_role(
   role: Role,
+  raw_role: &str,
   label: &Option<String>,
   value: &Option<crate::accessibility::Value>,
 ) -> Role {
-  if role == Role::Group && label.is_none() && value.is_none() {
-    Role::GenericContainer
+  // Only demote plain AXGroup, not semantic group types
+  if role == Role::Group && raw_role == "AXGroup" && label.is_none() && value.is_none() {
+    Role::GenericGroup
   } else {
     role
   }
@@ -46,14 +49,14 @@ pub fn build_element_from_handle(
   // Fetch all attributes in ONE IPC call - safe method!
   let attrs = handle.get_attributes(None);
 
-  let platform_role = attrs.role.clone().unwrap_or_else(|| "Unknown".to_string());
-  let base_role = role_from_macos(&platform_role);
-  let role = refine_role(base_role, &attrs.title, &attrs.value);
+  let raw_role = attrs.role.clone().unwrap_or_else(|| "Unknown".to_string());
+  let base_role = role_from_macos(&raw_role);
+  let role = refine_role(base_role, &raw_role, &attrs.title, &attrs.value);
 
-  let subrole = if matches!(base_role, Role::Unknown) {
-    Some(platform_role.clone())
-  } else {
-    attrs.subrole
+  // Combine role + subrole for debugging display (e.g., "AXButton/AXCloseButton")
+  let platform_role = match &attrs.subrole {
+    Some(sr) => format!("{raw_role}/{sr}"),
+    None => raw_role.clone(),
   };
 
   // Determine if this is a root element.
@@ -76,18 +79,25 @@ pub fn build_element_from_handle(
     parent_id: parent_id_value,
     children: None,
     role,
-    subrole,
+    platform_role: platform_role.clone(),
     label: attrs.title,
-    value: attrs.value,
     description: attrs.description,
     placeholder: attrs.placeholder,
+    url: attrs.url,
+    value: attrs.value,
     bounds: attrs.bounds,
     focused: attrs.focused,
-    enabled: attrs.enabled,
+    disabled: attrs.disabled,
+    selected: attrs.selected,
+    expanded: attrs.expanded,
+    row_index: attrs.row_index,
+    column_index: attrs.column_index,
+    row_count: attrs.row_count,
+    column_count: attrs.column_count,
     actions: attrs.actions,
   };
 
-  crate::registry::register_element(element, handle, pid, &platform_role)
+  crate::registry::register_element(element, handle, pid, &raw_role)
 }
 
 /// Fetch and register children of an element.
@@ -137,11 +147,12 @@ pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
   let attrs = info.handle.get_attributes(Some(&info.platform_role));
 
   let base_role = role_from_macos(&info.platform_role);
-  let role = refine_role(base_role, &attrs.title, &attrs.value);
-  let subrole = if matches!(base_role, Role::Unknown) {
-    Some(info.platform_role.to_string())
-  } else {
-    attrs.subrole
+  let role = refine_role(base_role, &info.platform_role, &attrs.title, &attrs.value);
+
+  // Combine role + subrole for debugging display
+  let platform_role = match &attrs.subrole {
+    Some(sr) => format!("{}/{sr}", info.platform_role),
+    None => info.platform_role.to_string(),
   };
 
   let updated = AXElement {
@@ -152,14 +163,21 @@ pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
     parent_id: info.parent_id,
     children: info.children,
     role,
-    subrole,
+    platform_role,
     label: attrs.title,
-    value: attrs.value,
     description: attrs.description,
     placeholder: attrs.placeholder,
+    url: attrs.url,
+    value: attrs.value,
     bounds: attrs.bounds,
     focused: attrs.focused,
-    enabled: attrs.enabled,
+    disabled: attrs.disabled,
+    selected: attrs.selected,
+    expanded: attrs.expanded,
+    row_index: attrs.row_index,
+    column_index: attrs.column_index,
+    row_count: attrs.row_count,
+    column_count: attrs.column_count,
     actions: attrs.actions,
   };
 

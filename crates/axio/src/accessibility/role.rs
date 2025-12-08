@@ -61,9 +61,19 @@ pub enum Role {
   Image,
   Separator,
 
-  /// Generic container - has children but no specific semantic meaning
-  GenericContainer,
-  /// Unknown role - platform role didn't map to anything known
+  // === Generic / Fallback ===
+  /// Generic container - layout-only groups with no semantic meaning.
+  /// Candidates for tree-collapsing (e.g., a group containing just one group).
+  /// Mapped from AXGroup when there's no label/value.
+  GenericGroup,
+
+  /// Generic element - known platform elements without specific semantics.
+  /// Explicitly mapped (not unknown), but non-interactive chrome like scrollbars.
+  /// Will be pruned from simplified views; platform_role preserved for debugging.
+  GenericElement,
+
+  /// Unknown role - platform role didn't map to anything known.
+  /// This indicates a gap in our mappings that should be addressed.
   Unknown,
 }
 
@@ -77,10 +87,9 @@ pub enum ValueType {
   None,
   /// Text value (TextField, TextArea, SearchField, ComboBox)
   String,
-  /// Integer value (Stepper)
-  Integer,
-  /// Floating point value (Slider, ProgressBar)
-  Float,
+  /// Numeric value (Slider, ProgressBar, Stepper)
+  /// Use `Role::expects_integer()` to check if integer vs float.
+  Number,
   /// Boolean value (Checkbox, Switch, RadioButton)
   Boolean,
 }
@@ -91,10 +100,17 @@ impl Role {
     match self {
       Self::TextField | Self::TextArea | Self::SearchField | Self::ComboBox => ValueType::String,
       Self::Checkbox | Self::Switch | Self::RadioButton => ValueType::Boolean,
-      Self::Slider | Self::ProgressBar => ValueType::Float,
-      Self::Stepper => ValueType::Integer,
+      Self::Slider | Self::ProgressBar | Self::Stepper => ValueType::Number,
       _ => ValueType::None,
     }
+  }
+
+  /// Should numeric values for this role be treated as integers?
+  ///
+  /// Returns true for roles like Stepper where values are discrete.
+  /// Returns false for roles like Slider where values are continuous.
+  pub fn expects_integer(&self) -> bool {
+    matches!(self, Self::Stepper)
   }
 
   /// Can values be written to elements with this role?
@@ -143,7 +159,16 @@ impl Role {
         | Self::Table
         | Self::Tree
         | Self::Row
-        | Self::GenericContainer
+        | Self::GenericGroup
+        | Self::GenericElement // May contain children (e.g., scrollbar with buttons)
+    )
+  }
+
+  /// Is this a generic/placeholder role that may be pruned from simplified views?
+  pub fn is_generic(&self) -> bool {
+    matches!(
+      self,
+      Self::GenericGroup | Self::GenericElement | Self::Unknown
     )
   }
 
@@ -213,6 +238,20 @@ mod tests {
     assert_eq!(Role::Checkbox.value_type(), ValueType::Boolean);
     assert_eq!(Role::Switch.value_type(), ValueType::Boolean);
     assert!(Role::Checkbox.is_writable());
+  }
+
+  #[test]
+  fn numeric_roles_have_number_value_type() {
+    assert_eq!(Role::Slider.value_type(), ValueType::Number);
+    assert_eq!(Role::Stepper.value_type(), ValueType::Number);
+    assert_eq!(Role::ProgressBar.value_type(), ValueType::Number);
+  }
+
+  #[test]
+  fn stepper_expects_integer() {
+    assert!(Role::Stepper.expects_integer());
+    assert!(!Role::Slider.expects_integer());
+    assert!(!Role::ProgressBar.expects_integer());
   }
 
   #[test]

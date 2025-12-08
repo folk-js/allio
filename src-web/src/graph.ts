@@ -204,6 +204,7 @@ class AXGraph {
     };
 
     this.nodes.set(element.id, node);
+    this.markDirty();
 
     // Create link to parent if exists
     this.updateLinks();
@@ -232,7 +233,12 @@ class AXGraph {
     // Re-check links (parent may have changed)
     this.updateLinks();
 
-    this.render();
+    // Update node appearance (class might have changed)
+    const nodeEl = this.nodeElements.get(element.id);
+    if (nodeEl) {
+      nodeEl.setAttribute("class", `node ${this.getNodeClass(node)}`);
+    }
+
     this.updateStats();
 
     // Update element info if this is the hovered node
@@ -259,6 +265,7 @@ class AXGraph {
       (l) => l.source.id !== elementId && l.target.id !== elementId
     );
 
+    this.markDirty();
     this.restartSimulation();
     this.updateStats();
 
@@ -292,8 +299,11 @@ class AXGraph {
       }
     }
 
-    // Add new links
-    this.links.push(...newLinks);
+    // Add new links and mark for rebuild
+    if (newLinks.length > 0) {
+      this.links.push(...newLinks);
+      this.markDirty();
+    }
 
     // Update simulation
     const linkForce = this.simulation.force("link") as ReturnType<
@@ -356,13 +366,25 @@ class AXGraph {
 
     this.updateLinks();
     this.restartSimulation();
-    this.render();
   }
 
   // ============================================================================
   // Rendering
   // ============================================================================
 
+  // SVG element references for efficient updates
+  private linkGroup: SVGGElement | null = null;
+  private nodeGroup: SVGGElement | null = null;
+  private nodeElements: Map<ElementId, SVGGElement> = new Map();
+  private linkElements: SVGLineElement[] = [];
+  private needsRebuild = true;
+
+  /** Mark that SVG elements need to be rebuilt (nodes/links changed) */
+  private markDirty() {
+    this.needsRebuild = true;
+  }
+
+  /** Called on every simulation tick - only updates positions */
   private render() {
     // Hide all overlays if in passthrough mode
     if (this.axio.passthrough) {
@@ -370,8 +392,22 @@ class AXGraph {
       this.hideElementInfo();
     }
 
+    // Rebuild SVG elements only when structure changed
+    if (this.needsRebuild) {
+      this.rebuildSVG();
+      this.needsRebuild = false;
+    }
+
+    // Fast path: just update positions
+    this.updatePositions();
+  }
+
+  /** Rebuild SVG elements (called only when nodes/links change) */
+  private rebuildSVG() {
     // Clear SVG
     this.svg.innerHTML = "";
+    this.nodeElements.clear();
+    this.linkElements = [];
 
     // Create defs for arrow markers
     const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
@@ -382,12 +418,12 @@ class AXGraph {
     `;
     this.svg.appendChild(defs);
 
-    // Render links
-    const linkGroup = document.createElementNS(
+    // Create link group
+    this.linkGroup = document.createElementNS(
       "http://www.w3.org/2000/svg",
       "g"
     );
-    linkGroup.setAttribute("class", "links");
+    this.linkGroup.setAttribute("class", "links");
 
     for (const link of this.links) {
       const line = document.createElementNS(
@@ -395,32 +431,34 @@ class AXGraph {
         "line"
       );
       line.setAttribute("class", `link ${link.type}`);
-      line.setAttribute("x1", String(link.source.x ?? 0));
-      line.setAttribute("y1", String(link.source.y ?? 0));
-      line.setAttribute("x2", String(link.target.x ?? 0));
-      line.setAttribute("y2", String(link.target.y ?? 0));
       line.setAttribute("marker-end", "url(#arrow)");
-      linkGroup.appendChild(line);
+      this.linkElements.push(line);
+      this.linkGroup.appendChild(line);
     }
-    this.svg.appendChild(linkGroup);
+    this.svg.appendChild(this.linkGroup);
 
-    // Render nodes
-    const nodeGroup = document.createElementNS(
+    // Add wiring line BEFORE nodes (renders behind)
+    if (this.wiringLine) {
+      this.svg.appendChild(this.wiringLine);
+    }
+
+    // Create node group
+    this.nodeGroup = document.createElementNS(
       "http://www.w3.org/2000/svg",
       "g"
     );
-    nodeGroup.setAttribute("class", "nodes");
+    this.nodeGroup.setAttribute("class", "nodes");
 
     for (const node of this.nodes.values()) {
       const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
       const nodeClass = this.getNodeClass(node);
       g.setAttribute("class", `node ${nodeClass}`);
-      g.setAttribute("transform", `translate(${node.x ?? 0}, ${node.y ?? 0})`);
+      g.setAttribute("data-id", String(node.id));
       g.setAttribute("ax-io", "opaque"); // Capture clicks, don't pass through
       g.style.pointerEvents = "all";
       g.style.cursor = "pointer";
 
-      // Circle - needs pointer-events for click detection
+      // Circle
       const circle = document.createElementNS(
         "http://www.w3.org/2000/svg",
         "circle"
@@ -445,16 +483,39 @@ class AXGraph {
       // Drag behavior (also handles click detection)
       this.addDragBehavior(g, node);
 
-      nodeGroup.appendChild(g);
+      this.nodeElements.set(node.id, g);
+      this.nodeGroup.appendChild(g);
     }
 
-    // Add wiring line BEFORE nodes (renders behind)
-    if (this.wiringLine) {
-      this.svg.appendChild(this.wiringLine);
-      this.updateWiringLine();
+    this.svg.appendChild(this.nodeGroup);
+  }
+
+  /** Fast position update - called on every tick */
+  private updatePositions() {
+    // Update link positions
+    this.links.forEach((link, i) => {
+      const line = this.linkElements[i];
+      if (line) {
+        line.setAttribute("x1", String(link.source.x ?? 0));
+        line.setAttribute("y1", String(link.source.y ?? 0));
+        line.setAttribute("x2", String(link.target.x ?? 0));
+        line.setAttribute("y2", String(link.target.y ?? 0));
+      }
+    });
+
+    // Update node positions
+    for (const node of this.nodes.values()) {
+      const g = this.nodeElements.get(node.id);
+      if (g) {
+        g.setAttribute(
+          "transform",
+          `translate(${node.x ?? 0}, ${node.y ?? 0})`
+        );
+      }
     }
 
-    this.svg.appendChild(nodeGroup);
+    // Update wiring line if visible
+    this.updateWiringLine();
   }
 
   private getNodeClass(node: GraphNode): string {
@@ -627,7 +688,7 @@ class AXGraph {
 
     rows.push(row("id", String(el.id)));
     rows.push(row("role", el.role));
-    if (el.subrole) rows.push(row("subrole", el.subrole));
+    rows.push(row("platform", el.platform_role));
     rows.push(
       row(
         "parent",
@@ -653,8 +714,19 @@ class AXGraph {
     if (el.description) rows.push(row("desc", this.escapeHtml(el.description)));
     if (el.placeholder)
       rows.push(row("placeholder", this.escapeHtml(el.placeholder)));
+    if (el.url) rows.push(row("url", this.escapeHtml(el.url)));
     if (el.focused !== null) rows.push(row("focused", String(el.focused)));
-    if (el.enabled !== null) rows.push(row("enabled", String(el.enabled)));
+    if (el.disabled) rows.push(row("disabled", "true"));
+    if (el.selected !== null) rows.push(row("selected", String(el.selected)));
+    if (el.expanded !== null) rows.push(row("expanded", String(el.expanded)));
+    if (el.row_index !== null)
+      rows.push(row("row_index", String(el.row_index)));
+    if (el.column_index !== null)
+      rows.push(row("column_index", String(el.column_index)));
+    if (el.row_count !== null)
+      rows.push(row("row_count", String(el.row_count)));
+    if (el.column_count !== null)
+      rows.push(row("column_count", String(el.column_count)));
     if (el.actions.length > 0) rows.push(row("actions", el.actions.join(", ")));
 
     this.elementDetailsEl.innerHTML = rows.join("");

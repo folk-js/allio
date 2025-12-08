@@ -190,11 +190,9 @@ class AXTreeOverlay {
           } ${isWatched ? "watched" : ""}" 
                 data-action="toggle">${indicator}</span>
           <span class="tree-role">${el.role}</span>
-          ${
-            el.subrole && el.subrole !== el.role
-              ? `<span class="tree-subrole">:${el.subrole}</span>`
-              : ""
-          }
+          <span class="tree-subrole" title="${el.platform_role}">${
+      el.platform_role.includes("/") ? `:${el.platform_role.split("/")[1]}` : ""
+    }</span>
           ${
             el.label
               ? `<span class="tree-label">"${this.escapeHtml(el.label)}"</span>`
