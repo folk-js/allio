@@ -40,8 +40,6 @@ impl Default for ElementId {
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub struct ProcessId(pub u32);
 
-// === Error types ===
-
 #[derive(Debug, thiserror::Error)]
 pub enum AxioError {
   #[error("Element not found: {0}")]
@@ -64,8 +62,6 @@ pub enum AxioError {
 }
 
 pub type AxioResult<T> = Result<T, AxioError>;
-
-// === Geometry types ===
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, TS)]
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
@@ -118,10 +114,6 @@ impl Point {
   }
 }
 
-// === Core types ===
-
-/// Window info from x-win + accessibility.
-/// Note: Windows don't have children - elements reference windows via window_id.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub struct AXWindow {
@@ -197,11 +189,6 @@ pub struct AXElement {
   pub actions: Vec<crate::accessibility::Action>,
 }
 
-// === Events ===
-// Events notify clients when the Registry changes.
-// Any registry change emits an event, regardless of trigger.
-
-/// Initial state sent on connection
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub struct Selection {
@@ -210,6 +197,7 @@ pub struct Selection {
   pub range: Option<TextRange>,
 }
 
+/// Initial state sent on connection
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub struct SyncInit {

@@ -52,11 +52,6 @@ mod macos_impl {
       &self.0
     }
 
-    // =========================================================================
-    // Safe Attribute Accessors
-    // All unsafe is encapsulated in these methods
-    // =========================================================================
-
     /// Get string attribute by name.
     pub fn get_string(&self, attr: &str) -> Option<String> {
       let value = self.get_raw_attr(&CFString::from_str(attr))?;
@@ -260,7 +255,6 @@ mod macos_impl {
         }
       };
 
-      // Parse attributes
       let role_str = get_val(0).and_then(|v| parse_str(&v));
       let subrole_str = get_val(1).and_then(|v| parse_str(&v));
       let title_str = get_val(2).and_then(|v| parse_str(&v));
@@ -274,7 +268,6 @@ mod macos_impl {
       let enabled_bool =
         get_val(9).and_then(|v| v.downcast_ref::<CFBoolean>().map(|b| b.as_bool()));
 
-      // Get actions separately (not in batch)
       let action_strs = self.get_actions();
       let actions = action_strs
         .into_iter()
@@ -317,15 +310,11 @@ mod macos_impl {
       self.get_raw_attr_internal(attr)
     }
 
-    // Internal: extract Value from CFType
     fn extract_value(cf_value: &CFType, role: Option<&str>) -> Option<Value> {
-      // Try CFString - empty strings are valid values (e.g., cleared text field)
-      // null means "no value attribute", Some("") means "has value, it's empty"
       if let Some(cf_string) = cf_value.downcast_ref::<CFString>() {
         return Some(Value::String(cf_string.to_string()));
       }
 
-      // Try CFNumber
       if let Some(cf_number) = cf_value.downcast_ref::<CFNumber>() {
         // For toggle-like elements, convert 0/1 integers to booleans
         if let Some(r) = role {
@@ -348,7 +337,6 @@ mod macos_impl {
         }
       }
 
-      // Try CFBoolean
       if let Some(cf_bool) = cf_value.downcast_ref::<CFBoolean>() {
         return Some(Value::Boolean(cf_bool.as_bool()));
       }
@@ -356,7 +344,6 @@ mod macos_impl {
       None
     }
 
-    // Internal: parse bounds from position and size CFTypes
     fn parse_bounds(position: Option<&CFType>, size: Option<&CFType>) -> Option<Bounds> {
       let pos = position?.downcast_ref::<AXValueRef>()?;
       let sz = size?.downcast_ref::<AXValueRef>()?;
@@ -405,7 +392,6 @@ mod macos_impl {
     }
   }
 
-  // SAFETY: CFRetained<AXUIElement> is reference-counted and thread-safe.
   unsafe impl Send for ElementHandle {}
   unsafe impl Sync for ElementHandle {}
 
@@ -425,17 +411,12 @@ mod macos_impl {
     }
   }
 
-  // SAFETY: CFRetained<AXObserver> is reference-counted and thread-safe.
   unsafe impl Send for ObserverHandle {}
   unsafe impl Sync for ObserverHandle {}
 }
 
 #[cfg(target_os = "macos")]
 pub use macos_impl::*;
-
-// =============================================================================
-// Windows Implementation (Future)
-// =============================================================================
 
 #[cfg(target_os = "windows")]
 mod windows_impl {
@@ -458,10 +439,6 @@ mod windows_impl {
 #[cfg(target_os = "windows")]
 pub use windows_impl::*;
 
-// =============================================================================
-// Linux Implementation (Future)
-// =============================================================================
-
 #[cfg(target_os = "linux")]
 mod linux_impl {
   #[derive(Clone)]
@@ -482,10 +459,6 @@ mod linux_impl {
 
 #[cfg(target_os = "linux")]
 pub use linux_impl::*;
-
-// =============================================================================
-// Fallback for unsupported platforms
-// =============================================================================
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 mod fallback_impl {

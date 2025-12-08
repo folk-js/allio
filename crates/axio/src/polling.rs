@@ -93,7 +93,6 @@ impl Drop for PollingHandle {
 fn poll_windows(options: &PollingOptions) -> Option<Vec<AXWindow>> {
   let all_windows = platform::enumerate_windows();
 
-  // Find offset from excluded window (e.g., our overlay)
   let (offset_x, offset_y) = if let Some(exclude_pid) = options.exclude_pid {
     match all_windows.iter().find(|w| w.process_id.0 == exclude_pid.0) {
       Some(overlay_window) => (overlay_window.bounds.x, overlay_window.bounds.y),
@@ -123,7 +122,6 @@ fn poll_windows(options: &PollingOptions) -> Option<Vec<AXWindow>> {
       w
     })
     .filter(|w| {
-      // Filter fullscreen windows
       if options.filter_fullscreen {
         let is_fullscreen = w.bounds.x == 0.0
           && w.bounds.y == 0.0
@@ -133,7 +131,6 @@ fn poll_windows(options: &PollingOptions) -> Option<Vec<AXWindow>> {
           return false;
         }
       }
-      // Filter offscreen windows
       if options.filter_offscreen && w.bounds.x > screen_width + 1.0 {
         return false;
       }
@@ -270,9 +267,7 @@ fn poll_iteration(config: &PollingOptions, state: &mut PollingState, cleanup_int
     }
   }
 
-  // Window polling
   if let Some(raw_windows) = poll_windows(config) {
-    // Update registry (handles window events internally)
     let added_pids = registry::update_windows(raw_windows.clone());
 
     // Enable accessibility for new windows

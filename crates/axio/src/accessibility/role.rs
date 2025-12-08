@@ -59,7 +59,6 @@ pub enum Role {
   Image,
   Separator,
 
-  // === Fallback ===
   /// Generic container - has children but no specific semantic meaning
   GenericContainer,
   /// Unknown role - platform role didn't map to anything known

@@ -18,16 +18,12 @@ use crate::types::{Event, WindowId};
 use super::element::build_element_from_handle;
 use super::util::app_element;
 
-// =============================================================================
-// Focus Change Handling
-// =============================================================================
-
 /// Check if a role should be auto-watched when focused.
 pub fn should_auto_watch(role: &crate::accessibility::Role) -> bool {
   role.auto_watch_on_focus() || role.is_writable()
 }
 
-/// Handle focus change notification from the unified callback.
+/// Handle focus change notification from callback.
 pub fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
   let handle = ElementHandle::new(element);
   let window_id = match get_window_id_for_handle(&handle, pid) {
@@ -51,18 +47,14 @@ pub fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
     return;
   }
 
-  // Update focus in registry, get previous
   let previous_element_id = crate::registry::set_process_focus(pid, ax_element.id);
   let same_element = previous_element_id.as_ref() == Some(&ax_element.id);
 
-  // Skip if focus hasn't actually changed (macOS often sends duplicate notifications)
   if same_element {
     return;
   }
 
-  // Auto-watch/unwatch based on role
   if let Some(ref prev_id) = previous_element_id {
-    // Check if previous was watchable before unwatching
     if let Ok(prev_elem) = crate::registry::get_element(prev_id) {
       if should_auto_watch(&prev_elem.role) {
         crate::registry::unwatch_element(prev_id);
@@ -80,10 +72,6 @@ pub fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
   });
 }
 
-// =============================================================================
-// Selection Change Handling
-// =============================================================================
-
 /// Handle selection change notification from the unified callback.
 pub fn handle_app_selection_changed(pid: u32, element: CFRetained<AXUIElement>) {
   let handle = ElementHandle::new(element);
@@ -91,9 +79,7 @@ pub fn handle_app_selection_changed(pid: u32, element: CFRetained<AXUIElement>) 
     Some(id) => id,
     None => {
       // Expected when desktop is focused or window not yet tracked
-      log::debug!(
-        "SelectionChanged: no window_id found for PID {pid}, skipping"
-      );
+      log::debug!("SelectionChanged: no window_id found for PID {pid}, skipping");
       return;
     }
   };
@@ -105,7 +91,6 @@ pub fn handle_app_selection_changed(pid: u32, element: CFRetained<AXUIElement>) 
 
   let selected_text = handle.get_string("AXSelectedText").unwrap_or_default();
 
-  // Skip if selection hasn't changed (macOS often sends duplicate notifications)
   if !crate::registry::set_process_selection(pid, ax_element.id, &selected_text) {
     return;
   }
@@ -152,10 +137,6 @@ fn get_selected_text_range(handle: &ElementHandle) -> Option<crate::types::TextR
   }
 }
 
-// =============================================================================
-// Current Focus Query
-// =============================================================================
-
 /// Query the currently focused element and selection for an app.
 pub fn get_current_focus(
   pid: u32,
@@ -163,10 +144,8 @@ pub fn get_current_focus(
   Option<crate::types::AXElement>,
   Option<crate::types::Selection>,
 ) {
-  // Create ElementHandle for app element
   let app_handle = ElementHandle::new(app_element(pid));
 
-  // Use safe ElementHandle method to get focused element
   let Some(focused_handle) = app_handle.get_element("AXFocusedUIElement") else {
     return (None, None);
   };
@@ -178,10 +157,9 @@ pub fn get_current_focus(
 
   let Some(element) = build_element_from_handle(focused_handle.clone(), &window_id, pid, None)
   else {
-    return (None, None); // Element was previously destroyed
+    return (None, None);
   };
 
-  // Get selection using handle method
   let selection =
     get_selection_from_handle(&focused_handle).map(|(text, range)| crate::types::Selection {
       element_id: element.id,
@@ -191,10 +169,6 @@ pub fn get_current_focus(
 
   (Some(element), selection)
 }
-
-// =============================================================================
-// Window ID Lookup
-// =============================================================================
 
 /// Get window ID for an ElementHandle using hash-based lookup.
 /// First checks if element is already registered, then falls back to focused window.

@@ -17,10 +17,6 @@ use super::element::build_element_from_handle;
 use super::mapping::ax_role;
 use super::util::app_element;
 
-// =============================================================================
-// Window Elements
-// =============================================================================
-
 /// Get all window ElementHandles for a given PID.
 pub fn get_window_elements(pid: u32) -> AxioResult<Vec<ElementHandle>> {
   let app_handle = ElementHandle::new(app_element(pid));
@@ -47,10 +43,6 @@ pub fn get_window_root(window_id: &WindowId) -> AxioResult<AXElement> {
     .ok_or_else(|| AxioError::Internal("Window root element was previously destroyed".to_string()))
 }
 
-// =============================================================================
-// Element at Position
-// =============================================================================
-
 /// Retry delays (in ms) for Chromium/Electron lazy accessibility initialization.
 ///
 /// Chromium/Electron apps lazily build their accessibility spatial index on a per-region
@@ -60,13 +52,8 @@ pub fn get_window_root(window_id: &WindowId) -> AxioResult<AXElement> {
 /// We retry with increasing delays to give Chromium time to process:
 /// - Attempt 0: Immediate (often returns fallback)
 /// - Attempt 1: 10ms delay (usually sufficient for Chromium to initialize)
-/// - Attempt 2: 25ms delay (handles slower systems/complex trees)
+/// - Attempt 2: 25ms delay
 const HIT_TEST_RETRY_DELAYS_MS: [u64; 3] = [0, 10, 25];
-
-/// Tolerance in pixels for detecting window-sized fallback containers.
-/// Chromium's fallback container has EXACTLY the same bounds as the window,
-/// so we use 0.0 for precise matching.
-const FALLBACK_CONTAINER_TOLERANCE_PX: f64 = 0.0;
 
 /// Get the accessibility element at a specific screen position.
 pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
@@ -79,8 +66,6 @@ pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
 
   let app_handle = ElementHandle::new(app_element(pid));
 
-  // Retry hit testing to handle Chromium/Electron's lazy accessibility initialization.
-  // See HIT_TEST_RETRY_DELAYS_MS for rationale.
   let mut element_handle = None;
   let mut fallback_container = None;
 
@@ -98,7 +83,7 @@ pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
       && attrs
         .bounds
         .as_ref()
-        .map(|b| b.matches(&window.bounds, FALLBACK_CONTAINER_TOLERANCE_PX))
+        .map(|b| b.matches(&window.bounds, 0.0))
         .unwrap_or(false);
 
     if is_fallback_container {
@@ -140,11 +125,7 @@ pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
   })
 }
 
-// =============================================================================
-// Accessibility Enablement
-// =============================================================================
-
-/// Enable accessibility for an Electron app.
+/// Enable accessibility (mostly for Chromium/Electron apps)
 pub fn enable_accessibility_for_pid(pid: crate::ProcessId) {
   let raw_pid = pid.0;
   let app_el = app_element(raw_pid);
@@ -162,11 +143,8 @@ pub fn enable_accessibility_for_pid(pid: crate::ProcessId) {
   }
 }
 
-// =============================================================================
-// Window Handle Fetching
-// =============================================================================
-
-/// Fetch an element handle for a window by matching bounds.
+/// Fetch an element handle for a window by matching bounds
+/// TODO: find a way to not do this...
 pub fn fetch_window_handle(window: &crate::AXWindow) -> Option<ElementHandle> {
   let window_elements = get_window_elements(window.process_id.0).ok()?;
 

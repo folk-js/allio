@@ -50,12 +50,10 @@ fn enumerate_windows_inner() -> Vec<AXWindow> {
       continue;
     };
 
-    // Skip off-screen windows
     if !get_cf_boolean(&dict, "kCGWindowIsOnscreen") {
       continue;
     }
 
-    // Filter by window layer (normal windows are 0-100)
     let window_layer = get_cf_number(&dict, "kCGWindowLayer");
     if !(0..=100).contains(&window_layer) {
       continue;
@@ -66,7 +64,6 @@ fn enumerate_windows_inner() -> Vec<AXWindow> {
       continue;
     };
 
-    // Skip tiny windows (< 50x50)
     if cg_bounds.size.height < 50.0 || cg_bounds.size.width < 50.0 {
       continue;
     }
@@ -77,12 +74,10 @@ fn enumerate_windows_inner() -> Vec<AXWindow> {
       continue;
     }
 
-    // Get app info
     let Some(app) = get_running_application(process_id as u32) else {
       continue;
     };
 
-    // Filter system UI windows
     if let Some(bundle_id) = get_bundle_identifier(app) {
       if FILTERED_BUNDLE_IDS.contains(&bundle_id.as_str()) {
         continue;

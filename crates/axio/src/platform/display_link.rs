@@ -94,7 +94,6 @@ pub fn start_display_link<F>(callback: F) -> Result<DisplayLinkHandle, &'static 
 where
   F: Fn() + Send + Sync + 'static,
 {
-  // Create display link for all active displays
   let mut link: *mut CVDisplayLink = std::ptr::null_mut();
   let result =
     unsafe { CVDisplayLink::create_with_active_cg_displays(NonNull::new(&mut link).unwrap()) };
@@ -105,12 +104,9 @@ where
 
   let link = unsafe { NonNull::new_unchecked(link) };
 
-  // Double-box the callback to get a stable pointer
-  // The outer Box is for the trait object, the inner keeps it on heap with stable address
   let callback: Box<Box<dyn Fn() + Send + Sync>> = Box::new(Box::new(callback));
   let callback_ptr = &*callback as *const _ as *mut c_void;
 
-  // Set callback
   let result = unsafe {
     link
       .as_ref()

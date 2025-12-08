@@ -15,10 +15,6 @@ use crate::types::{AXElement, AxioError, AxioResult, ElementId, ParentRef, Proce
 use super::mapping::{ax_action, role_from_macos};
 use crate::accessibility::Role;
 
-// =============================================================================
-// Role Heuristics
-// =============================================================================
-
 /// Refine role based on element attributes.
 ///
 /// Groups with no label and no value are likely just layout containers
@@ -34,10 +30,6 @@ fn refine_role(
     role
   }
 }
-
-// =============================================================================
-// Element Building
-// =============================================================================
 
 /// Build an AXElement from an ElementHandle and register it.
 /// Uses batch attribute fetching for ~10x faster element creation.
@@ -101,20 +93,12 @@ pub fn build_element_from_handle(
   crate::registry::register_element(element, handle, pid, &platform_role)
 }
 
-// =============================================================================
-// Children
-// =============================================================================
-
 /// Fetch and register children of an element.
-/// ElementAdded events are emitted by register_element for new children.
-/// ElementChanged is emitted by set_element_children if children changed.
 pub fn children(parent_id: &ElementId, max_children: usize) -> AxioResult<Vec<AXElement>> {
   let info = crate::registry::get_stored_element_info(parent_id)?;
 
-  // Use safe ElementHandle method
   let child_handles = info.handle.get_children();
   if child_handles.is_empty() {
-    // set_element_children emits ElementChanged if children changed
     crate::registry::set_element_children(parent_id, vec![])?;
     return Ok(vec![]);
   }
@@ -123,8 +107,6 @@ pub fn children(parent_id: &ElementId, max_children: usize) -> AxioResult<Vec<AX
   let mut child_ids = Vec::new();
 
   for child_handle in child_handles.into_iter().take(max_children) {
-    // Skip children that were previously destroyed
-    // ElementAdded is emitted by register_element for new elements
     if let Some(child) =
       build_element_from_handle(child_handle, &info.window_id, info.pid, Some(parent_id))
     {
@@ -133,42 +115,28 @@ pub fn children(parent_id: &ElementId, max_children: usize) -> AxioResult<Vec<AX
     }
   }
 
-  // set_element_children emits ElementChanged if children changed
   crate::registry::set_element_children(parent_id, child_ids)?;
 
   Ok(children)
 }
 
-// =============================================================================
-// Parent
-// =============================================================================
-
 /// Fetch and register parent of an element.
-/// Returns None if element is a root (no parent in OS tree).
 /// The lazy linking in register_element will connect this element to the parent.
 pub fn parent(element_id: &ElementId) -> AxioResult<Option<AXElement>> {
   let info = crate::registry::get_stored_element_info(element_id)?;
 
-  // Get parent handle from OS
   let Some(parent_handle) = info.handle.get_element("AXParent") else {
-    // No parent - this is a root element
     return Ok(None);
   };
 
-  // Build and register parent (linking happens in register_element)
   let parent = build_element_from_handle(parent_handle, &info.window_id, info.pid, None);
   Ok(parent)
 }
-
-// =============================================================================
-// Element Refresh
-// =============================================================================
 
 /// Refresh an element's attributes from the platform.
 pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
   let info = crate::registry::get_stored_element_info(element_id)?;
 
-  // Use safe ElementHandle method for batch attribute fetch
   let attrs = info.handle.get_attributes(Some(&info.platform_role));
 
   let base_role = role_from_macos(&info.platform_role);
@@ -202,18 +170,10 @@ pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
   Ok(updated)
 }
 
-// =============================================================================
-// Element Hash
-// =============================================================================
-
 /// Get hash for element handle (for O(1) dedup lookup).
 pub fn element_hash(handle: &ElementHandle) -> u64 {
   CFHash(Some(handle.inner())) as u64
 }
-
-// =============================================================================
-// Element Operations
-// =============================================================================
 
 /// Write a typed value to an element.
 pub fn write_element_value(
@@ -221,7 +181,6 @@ pub fn write_element_value(
   value: &crate::accessibility::Value,
   platform_role: &str,
 ) -> AxioResult<()> {
-  // Use Role::is_writable() for writability check
   let role = role_from_macos(platform_role);
   if !role.is_writable() {
     return Err(AxioError::NotSupported(format!(

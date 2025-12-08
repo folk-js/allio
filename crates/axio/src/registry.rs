@@ -43,10 +43,6 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::sync::LazyLock;
 
-// =============================================================================
-// Internal State Types
-// =============================================================================
-
 /// Per-process state: owns the AXObserver for this application.
 struct ProcessState {
   /// The observer for this process (one per PID).
@@ -95,10 +91,6 @@ unsafe impl Send for ProcessState {}
 unsafe impl Sync for ProcessState {}
 unsafe impl Send for ElementState {}
 unsafe impl Sync for ElementState {}
-
-// =============================================================================
-// Registry
-// =============================================================================
 
 /// Unified registry for all accessibility state.
 pub struct Registry {
@@ -161,10 +153,6 @@ impl Registry {
     f(&mut guard)
   }
 
-  // ===========================================================================
-  // Process Management
-  // ===========================================================================
-
   /// Get or create process state for a PID.
   /// Creates the AXObserver if this is a new process.
   fn get_or_create_process(&mut self, pid: u32) -> AxioResult<ProcessId> {
@@ -174,14 +162,11 @@ impl Registry {
       return Ok(process_id);
     }
 
-    // Create observer for this process
     let observer = platform::create_observer_for_pid(pid)?;
 
     // Subscribe to app-level notifications (focus, selection)
     if let Err(e) = platform::subscribe_app_notifications(pid, &observer) {
-      log::warn!(
-        "Failed to subscribe app notifications for PID {pid}: {e:?}"
-      );
+      log::warn!("Failed to subscribe app notifications for PID {pid}: {e:?}");
     }
 
     self.processes.insert(
@@ -200,7 +185,6 @@ impl Registry {
   fn remove_process_internal(&mut self, process_id: &ProcessId) -> Vec<Event> {
     let mut events = Vec::new();
 
-    // Find all windows for this process
     let window_ids: Vec<WindowId> = self
       .windows
       .iter()
@@ -208,20 +192,14 @@ impl Registry {
       .map(|(id, _)| *id)
       .collect();
 
-    // Cascade to windows (which cascade to elements)
     for window_id in window_ids {
       events.extend(self.remove_window_internal(&window_id));
     }
 
-    // Remove process state
     self.processes.remove(process_id);
 
     events
   }
-
-  // ===========================================================================
-  // Window Management
-  // ===========================================================================
 
   /// Update windows from polling. Returns (events, added PIDs).
   fn update_windows_internal(
@@ -233,10 +211,8 @@ impl Registry {
     let mut added_pids = Vec::new();
     let mut changed_ids = Vec::new();
 
-    // Build set of new window IDs
     let new_ids: HashSet<WindowId> = new_windows.iter().map(|w| w.id).collect();
 
-    // Find removed windows
     let removed: Vec<WindowId> = self
       .windows
       .keys()
@@ -244,7 +220,6 @@ impl Registry {
       .copied()
       .collect();
 
-    // Remove them (cascades to elements)
     for window_id in removed {
       events.extend(self.remove_window_internal(&window_id));
     }
@@ -256,13 +231,11 @@ impl Registry {
       let pid = process_id.0;
 
       if let Some(existing) = self.windows.get_mut(&window_id) {
-        // Track if changed
         if existing.info != window_info {
           changed_ids.push(window_id);
         }
         existing.info = window_info;
 
-        // Retry fetching handle if missing
         if existing.handle.is_none() {
           existing.handle = platform::fetch_window_handle(&existing.info);
         }
@@ -289,12 +262,10 @@ impl Registry {
       }
     }
 
-    // Update depth order
     let mut windows: Vec<_> = self.windows.values().map(|w| &w.info).collect();
     windows.sort_by_key(|w| w.z_index);
     self.depth_order = windows.into_iter().map(|w| w.id).collect();
 
-    // Emit WindowAdded events
     for added_id in added_ids {
       if let Some(window) = self.windows.get(&added_id) {
         events.push(Event::WindowAdded {
@@ -304,7 +275,6 @@ impl Registry {
       }
     }
 
-    // Emit WindowChanged events
     for changed_id in changed_ids {
       if let Some(window) = self.windows.get(&changed_id) {
         events.push(Event::WindowChanged {
@@ -321,7 +291,6 @@ impl Registry {
   fn remove_window_internal(&mut self, window_id: &WindowId) -> Vec<Event> {
     let mut events = Vec::new();
 
-    // Find all elements in this window
     let element_ids: Vec<ElementId> = self
       .elements
       .iter()
@@ -335,22 +304,18 @@ impl Registry {
       .filter_map(|id| self.elements.get(id).map(|e| e.hash))
       .collect();
 
-    // Remove each element (cascade handled internally)
     for element_id in &element_ids {
       events.extend(self.remove_element_internal(element_id));
     }
 
-    // Prune dead_hashes for this window's elements
     for hash in hashes_to_prune {
       self.dead_hashes.remove(&hash);
       self.hash_to_window.remove(&hash);
     }
 
-    // Remove window state
     if let Some(window_state) = self.windows.remove(window_id) {
       self.window_to_process.remove(window_id);
 
-      // Update depth order after removal
       let mut windows: Vec<_> = self.windows.values().map(|w| &w.info).collect();
       windows.sort_by_key(|w| w.z_index);
       self.depth_order = windows.into_iter().map(|w| w.id).collect();
@@ -360,7 +325,6 @@ impl Registry {
         depth_order: self.depth_order.clone(),
       });
 
-      // Check if process has no more windows
       let process_id = window_state.process_id;
       let has_windows = self.windows.values().any(|w| w.process_id == process_id);
       if !has_windows {
@@ -370,10 +334,6 @@ impl Registry {
 
     events
   }
-
-  // ===========================================================================
-  // Element Management
-  // ===========================================================================
 
   /// Register a new element. Returns existing if hash matches.
   /// Emits ElementAdded for newly registered elements.
@@ -393,7 +353,6 @@ impl Registry {
       return None;
     }
 
-    // Check for existing element with same hash
     if let Some(existing_id) = self.hash_to_element.get(&hash) {
       if let Some(existing) = self.elements.get(existing_id) {
         return Some(existing.element.clone());
@@ -407,8 +366,6 @@ impl Registry {
       return None;
     }
 
-    // Get parent hash from OS (for lazy linking)
-    // element.parent is already set by build_element_from_handle
     let parent_hash = if element.parent.is_root() {
       None // Root elements have no parent
     } else {
@@ -417,7 +374,6 @@ impl Registry {
         .map(|parent_handle| platform::element_hash(&parent_handle))
     };
 
-    // Try to link to parent if orphan (caller didn't provide parent)
     if matches!(element.parent, ParentRef::Orphan) {
       if let Some(ref ph) = parent_hash {
         if let Some(&parent_id) = self.hash_to_element.get(ph) {
@@ -426,7 +382,6 @@ impl Registry {
       }
     }
 
-    // Store element
     let element_id = element.id;
     let mut state = ElementState {
       element: element.clone(),
@@ -440,22 +395,18 @@ impl Registry {
       watch_context: None,
     };
 
-    // Register destruction tracking immediately
     if let Some(process) = self.processes.get(&process_id) {
       self.subscribe_destruction(&mut state, &process.observer);
     }
 
-    // Update indexes
     self.elements.insert(element_id, state);
     self.element_to_window.insert(element_id, window_id);
     self.hash_to_element.insert(hash, element_id);
     self.hash_to_window.insert(hash, window_id);
 
-    // Add to parent's children (if parent exists)
     if let Some(parent_id) = element.parent.parent_id() {
       self.add_child_to_parent(parent_id, element_id);
     } else if matches!(element.parent, ParentRef::Orphan) {
-      // Parent not in registry yet - add to waiting list
       if let Some(ref ph) = parent_hash {
         self
           .waiting_for_parent
@@ -465,14 +416,12 @@ impl Registry {
       }
     }
 
-    // Check if any orphans are waiting for us as their parent
     if let Some(orphans) = self.waiting_for_parent.remove(&hash) {
       for orphan_id in orphans {
         self.link_orphan_to_parent(orphan_id, element_id);
       }
     }
 
-    // Emit event for newly registered element
     events::emit(Event::ElementAdded {
       element: element.clone(),
     });
@@ -482,15 +431,12 @@ impl Registry {
 
   /// Link an orphan element to its newly-discovered parent.
   fn link_orphan_to_parent(&mut self, orphan_id: ElementId, parent_id: ElementId) {
-    // Update orphan's parent
     if let Some(orphan_state) = self.elements.get_mut(&orphan_id) {
       orphan_state.element.parent = ParentRef::Linked { id: parent_id };
-      // Emit ElementChanged for the orphan
       events::emit(Event::ElementChanged {
         element: orphan_state.element.clone(),
       });
     }
-    // Add orphan to parent's children
     self.add_child_to_parent(parent_id, orphan_id);
   }
 
@@ -500,7 +446,6 @@ impl Registry {
       let children = parent_state.element.children.get_or_insert_with(Vec::new);
       if !children.contains(&child_id) {
         children.push(child_id);
-        // Emit ElementChanged for parent
         events::emit(Event::ElementChanged {
           element: parent_state.element.clone(),
         });
@@ -546,12 +491,10 @@ impl Registry {
       return events;
     };
 
-    // Remove from parent's children list
     if let Some(parent_id) = state.element.parent.parent_id() {
       self.remove_child_from_parent(parent_id, *element_id, &mut events);
     }
 
-    // Clean up waiting_for_parent (if we were waiting)
     if let Some(ref ph) = state.parent_hash {
       if let Some(waiting) = self.waiting_for_parent.get_mut(ph) {
         waiting.retain(|&id| id != *element_id);
@@ -561,22 +504,18 @@ impl Registry {
       }
     }
 
-    // Remove any orphans waiting for us (they'll never get a parent now)
     self.waiting_for_parent.remove(&state.hash);
 
-    // Cascade: remove all children
     if let Some(children) = &state.element.children {
       for child_id in children.clone() {
         events.extend(self.remove_element_internal(&child_id));
       }
     }
 
-    // Add to dead set
     self.hash_to_element.remove(&state.hash);
     self.dead_hashes.insert(state.hash);
     self.hash_to_window.insert(state.hash, window_id);
 
-    // Unsubscribe from notifications
     let process_id = ProcessId(state.pid);
     if let Some(process) = self.processes.get(&process_id) {
       self.unsubscribe_all(&mut state, &process.observer);
@@ -601,7 +540,6 @@ impl Registry {
         let old_len = children.len();
         children.retain(|&id| id != child_id);
         if children.len() != old_len {
-          // Emit ElementChanged for parent
           events.push(Event::ElementChanged {
             element: parent_state.element.clone(),
           });
@@ -641,10 +579,6 @@ impl Registry {
     state.subscriptions.clear();
   }
 
-  // ===========================================================================
-  // Watch/Unwatch
-  // ===========================================================================
-
   /// Subscribe to additional notifications for an element (beyond destruction).
   fn watch_internal(&mut self, element_id: &ElementId) -> AxioResult<()> {
     let state = self
@@ -663,7 +597,6 @@ impl Registry {
       .map(|p| p.observer.clone())
       .ok_or(AxioError::NotSupported("Process not found".into()))?;
 
-    // Get notifications for this element's role
     let notifs = Notification::for_watching(state.element.role);
     if notifs.is_empty() {
       return Ok(()); // Nothing to watch
@@ -721,10 +654,6 @@ impl Registry {
       .retain(|n| *n == Notification::Destroyed);
   }
 }
-
-// =============================================================================
-// Public API
-// =============================================================================
 
 /// Update windows from polling. Returns PIDs of newly added windows for accessibility setup.
 pub fn update_windows(new_windows: Vec<AXWindow>) -> Vec<ProcessId> {
@@ -788,7 +717,6 @@ pub fn get_depth_order() -> Vec<WindowId> {
 /// Note: `accessibility_enabled` must be set by caller (platform-specific check).
 pub fn snapshot() -> crate::types::SyncInit {
   Registry::with(|r| {
-    // Get focused element and selection for the focused window's process
     let (focused_element, selection) = r
       .focused_window
       .and_then(|window_id| {
@@ -846,8 +774,6 @@ pub fn get_window_with_handle(window_id: &WindowId) -> Option<(AXWindow, Option<
   })
 }
 
-// === Focus API ===
-
 /// Set focused element for a process, returns the previous focused element.
 pub fn set_process_focus(pid: u32, element_id: ElementId) -> Option<ElementId> {
   Registry::with(|r| {
@@ -877,9 +803,6 @@ pub fn set_process_selection(pid: u32, element_id: ElementId, text: &str) -> boo
   })
 }
 
-// === Element API ===
-
-/// Register a new element.
 /// Register an element. Returns existing if hash matches.
 /// Emits ElementAdded for newly registered elements.
 pub fn register_element(
@@ -1050,8 +973,6 @@ pub fn click_element(element_id: &ElementId) -> AxioResult<()> {
   with_element_handle(element_id, |handle, _| platform::click_element(handle))?
 }
 
-// === Cleanup ===
-
 /// Clean up observers for dead processes.
 pub fn cleanup_dead_processes(active_pids: &HashSet<ProcessId>) -> usize {
   Registry::with(|r| {
@@ -1066,7 +987,6 @@ pub fn cleanup_dead_processes(active_pids: &HashSet<ProcessId>) -> usize {
     for pid in dead {
       let events = r.remove_process_internal(&pid);
       for event in events {
-        // Emit outside the lock would be better, but for now this is fine
         events::emit(event);
       }
     }

@@ -19,15 +19,10 @@ use crate::accessibility::Notification;
 use crate::platform::handles::{ElementHandle, ObserverHandle};
 use crate::types::{AxioError, AxioResult, ElementId};
 
-// =============================================================================
-// Context Registry
-// =============================================================================
-
 /// Next available context ID
 static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Unified observer context - either element-level or process-level.
-///
+/// Observer context for element-level and process-level.
 /// Element contexts are used for per-element notifications (destruction, value change).
 /// Process contexts are used for app-level notifications (focus, selection).
 #[derive(Clone)]
@@ -46,7 +41,7 @@ pub struct ContextHandle {
 
 pub type ObserverContextHandle = ContextHandle;
 
-/// Unified registry for observer contexts.
+/// Registry for observer contexts.
 static OBSERVER_CONTEXTS: LazyLock<Mutex<HashMap<u64, ObserverContext>>> =
   LazyLock::new(|| Mutex::new(HashMap::new()));
 
@@ -88,12 +83,7 @@ fn lookup_context(handle_ptr: *const ObserverContextHandle) -> Option<ObserverCo
   }
 }
 
-// =============================================================================
-// Observer Creation
-// =============================================================================
-
 /// Create an AXObserver and add it to the main run loop.
-/// This is the core observer creation logic shared by all observer types.
 fn create_observer_raw(
   pid: u32,
   callback: AXObserverCallback,
@@ -130,18 +120,12 @@ fn create_observer_raw(
 }
 
 /// Create an observer for a process and add it to the main run loop.
-/// Uses the unified callback that handles both element-level and app-level notifications.
 pub fn create_observer_for_pid(pid: u32) -> AxioResult<ObserverHandle> {
   let observer = create_observer_raw(pid, Some(unified_observer_callback))?;
   Ok(ObserverHandle::new(observer))
 }
 
-// =============================================================================
-// Unified Callback
-// =============================================================================
-
-/// Unified observer callback - handles both element-level and app-level notifications.
-///
+/// Observer callback - handles both element-level and app-level notifications.
 /// Dispatches based on context type:
 /// - Element context → element-level notifications (destruction, value change, title change)
 /// - Process context → app-level notifications (focus change, selection change)
@@ -187,11 +171,7 @@ unsafe extern "C-unwind" fn unified_observer_callback(
   }
 }
 
-// =============================================================================
-// Notification Handlers
-// =============================================================================
-
-/// Handle element-level notifications (destruction, value change, title change).
+/// Handle element-level notifications
 fn handle_element_notification(
   element_id: &ElementId,
   notif: Notification,
@@ -201,7 +181,6 @@ fn handle_element_notification(
     Notification::ValueChanged => {
       let handle = ElementHandle::new(ax_element);
       let attrs = handle.get_attributes(None);
-      // update_element emits ElementChanged if value actually changed
       if let Ok(mut element) = crate::registry::get_element(element_id) {
         element.value = attrs.value;
         let _ = crate::registry::update_element(element_id, element);
@@ -210,7 +189,6 @@ fn handle_element_notification(
 
     Notification::TitleChanged => {
       let handle = ElementHandle::new(ax_element);
-      // update_element emits ElementChanged if label actually changed
       if let Ok(mut element) = crate::registry::get_element(element_id) {
         element.label = handle.get_string("AXTitle");
         let _ = crate::registry::update_element(element_id, element);

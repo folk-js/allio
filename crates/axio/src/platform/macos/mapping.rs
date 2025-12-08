@@ -8,10 +8,6 @@
 
 use crate::accessibility::{Action, Notification, Role};
 
-// =============================================================================
-// macOS Notification Constants
-// =============================================================================
-
 /// macOS notification string constants (kAX*Notification).
 pub mod ax_notification {
   pub const DESTROYED: &str = "AXUIElementDestroyed";
@@ -49,10 +45,6 @@ pub fn notification_from_macos(s: &str) -> Option<Notification> {
     _ => None,
   }
 }
-
-// =============================================================================
-// macOS Action Constants
-// =============================================================================
 
 /// macOS action string constants (kAX*Action).
 pub mod ax_action {
@@ -104,10 +96,6 @@ pub fn action_from_macos(s: &str) -> Option<Action> {
   }
 }
 
-// =============================================================================
-// macOS Role Constants
-// =============================================================================
-
 /// macOS role string constants (kAX*Role).
 pub mod ax_role {
   pub const APPLICATION: &str = "AXApplication";
@@ -155,7 +143,6 @@ pub mod ax_role {
 }
 
 /// Convert macOS role string to our Role.
-///
 /// Expects the exact macOS role string (e.g., "AXButton").
 /// Returns `Role::Unknown` for unrecognized roles.
 pub fn role_from_macos(platform_role: &str) -> Role {
@@ -262,10 +249,6 @@ pub fn role_to_macos(r: Role) -> &'static str {
   }
 }
 
-// =============================================================================
-// Tests
-// =============================================================================
-
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -299,7 +282,6 @@ mod tests {
 
   #[test]
   fn role_from_macos_exact_strings() {
-    // Uses our defined constants
     assert_eq!(role_from_macos(ax_role::BUTTON), Role::Button);
     assert_eq!(role_from_macos(ax_role::TEXT_FIELD), Role::TextField);
     assert_eq!(role_from_macos(ax_role::WINDOW), Role::Window);
@@ -307,11 +289,8 @@ mod tests {
 
   #[test]
   fn role_from_macos_variants() {
-    // Standard window variant
     assert_eq!(role_from_macos(ax_role::STANDARD_WINDOW), Role::Window);
-    // Default button
     assert_eq!(role_from_macos(ax_role::DEFAULT_BUTTON), Role::Button);
-    // Secure text field (password)
     assert_eq!(role_from_macos(ax_role::SECURE_TEXT_FIELD), Role::TextField);
   }
 

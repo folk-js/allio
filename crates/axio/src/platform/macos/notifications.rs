@@ -20,10 +20,6 @@ use super::observer::{
 };
 use super::util::app_element;
 
-// =============================================================================
-// Destruction Notification
-// =============================================================================
-
 /// Subscribe to destruction notification only (lightweight tracking for all elements).
 pub fn subscribe_destruction_notification(
   element_id: &ElementId,
@@ -67,10 +63,6 @@ pub fn unsubscribe_destruction_notification(
   }
   unregister_observer_context(context_handle);
 }
-
-// =============================================================================
-// Element Notifications
-// =============================================================================
 
 /// Subscribe to notifications for an element.
 pub fn subscribe_notifications(
@@ -133,10 +125,6 @@ pub fn unsubscribe_notifications(
 
   unregister_observer_context(context_handle);
 }
-
-// =============================================================================
-// App-Level Notifications
-// =============================================================================
 
 /// Subscribe to app-level notifications (focus, selection) on the application element.
 /// Returns a context handle for the subscription.

@@ -31,8 +31,6 @@ pub enum Value {
 }
 
 impl Value {
-  // === Type-specific accessors ===
-
   /// Get as string reference if this is a String value.
   pub fn as_str(&self) -> Option<&str> {
     match self {
@@ -77,8 +75,6 @@ impl Value {
     }
   }
 
-  // === Type checks ===
-
   pub fn is_string(&self) -> bool {
     matches!(self, Self::String(_))
   }
@@ -99,8 +95,6 @@ impl Value {
     matches!(self, Self::Integer(_) | Self::Float(_))
   }
 }
-
-// === From impls for ergonomic construction ===
 
 impl From<String> for Value {
   fn from(s: String) -> Self {
