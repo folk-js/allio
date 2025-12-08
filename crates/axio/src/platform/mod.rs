@@ -48,3 +48,9 @@ mod mouse;
 
 pub use display::get_main_screen_dimensions;
 pub use mouse::get_mouse_position;
+
+// Display-synced callback support (macOS only for now)
+#[cfg(target_os = "macos")]
+mod display_link;
+#[cfg(target_os = "macos")]
+pub use display_link::{start_display_link, DisplayLinkHandle};

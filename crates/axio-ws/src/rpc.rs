@@ -113,19 +113,3 @@ pub fn dispatch(request: RpcRequest) -> Result<RpcResponse, String> {
     }
   }
 }
-
-// TODO: can this be removed?
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  #[test]
-  fn export_bindings_rpcrequest() {
-    RpcRequest::export().expect("export RpcRequest");
-  }
-
-  #[test]
-  fn export_bindings_rpcresponse() {
-    RpcResponse::export().expect("export RpcResponse");
-  }
-}

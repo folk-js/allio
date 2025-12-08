@@ -45,7 +45,7 @@ tauri_panel! {
 struct AppState {
   clickthrough_enabled: AtomicBool,
   current_overlay: Mutex<String>,
-  /// Handle to control the polling thread. Stops polling when dropped.
+  /// Handle to control polling. Stops polling when dropped.
   polling_handle: Mutex<Option<PollingHandle>>,
   /// Guards against menu updates during tray event handling.
   /// The muda crate can crash if the menu is replaced while it's accessing menu items.
@@ -592,7 +592,7 @@ fn main() {
         }
       }
 
-      // Start polling (handles windows + mouse position in one loop)
+      // Start polling (uses display-synced polling on macOS by default)
       let polling_handle = axio::start_polling(PollingOptions {
         exclude_pid: Some(axio::ProcessId::from(std::process::id())),
         ..PollingOptions::default()

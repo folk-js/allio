@@ -1,6 +1,7 @@
 use crate::events::emit;
 use crate::platform;
 use crate::types::{AXWindow, Event, Point, ProcessId, WindowId};
+use parking_lot::Mutex;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -9,48 +10,83 @@ use std::time::{Duration, Instant};
 
 pub const DEFAULT_POLLING_INTERVAL_MS: u64 = 8;
 
-/// Handle to control the polling thread.
+/// Mutable state for polling iteration.
+#[derive(Default)]
+struct PollingState {
+  last_mouse_pos: Option<Point>,
+  last_active_id: Option<WindowId>,
+  last_focused_id: Option<WindowId>,
+  poll_count: u64,
+}
+
+/// Internal implementation of the polling handle.
+enum PollingImpl {
+  /// Thread-based polling with fixed interval
+  Thread {
+    stop_signal: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+  },
+  /// Display-synchronized polling (macOS only)
+  #[cfg(target_os = "macos")]
+  DisplayLink(platform::DisplayLinkHandle),
+}
+
+/// Handle to control polling.
 ///
-/// The polling thread runs until this handle is dropped or `stop()` is called.
-/// When dropped, the thread is signaled to stop and joined.
+/// Polling runs until this handle is dropped or `stop()` is called.
+/// When dropped, polling is automatically stopped.
 pub struct PollingHandle {
-  stop_signal: Arc<AtomicBool>,
-  thread: Option<JoinHandle<()>>,
+  inner: PollingImpl,
 }
 
 impl PollingHandle {
-  /// Signal the polling thread to stop.
+  /// Signal polling to stop.
   ///
-  /// This is non-blocking. The thread will stop on its next iteration.
+  /// This is non-blocking. Polling will stop on its next iteration.
   pub fn stop(&self) {
-    self.stop_signal.store(true, Ordering::SeqCst);
-  }
-
-  /// Check if the polling thread is still running.
-  pub fn is_running(&self) -> bool {
-    self
-      .thread
-      .as_ref()
-      .map(|t| !t.is_finished())
-      .unwrap_or(false)
-  }
-
-  /// Wait for the polling thread to finish.
-  ///
-  /// This will block until the thread stops. Call `stop()` first if you want
-  /// to ensure the thread terminates.
-  pub fn join(mut self) {
-    if let Some(thread) = self.thread.take() {
-      let _ = thread.join();
+    match &self.inner {
+      PollingImpl::Thread { stop_signal, .. } => {
+        stop_signal.store(true, Ordering::SeqCst);
+      }
+      #[cfg(target_os = "macos")]
+      PollingImpl::DisplayLink(handle) => {
+        handle.stop();
+      }
     }
+  }
+
+  /// Check if polling is still running.
+  pub fn is_running(&self) -> bool {
+    match &self.inner {
+      PollingImpl::Thread { thread, .. } => {
+        thread.as_ref().map(|t| !t.is_finished()).unwrap_or(false)
+      }
+      #[cfg(target_os = "macos")]
+      PollingImpl::DisplayLink(handle) => handle.is_running(),
+    }
+  }
+
+  /// Wait for polling to finish.
+  ///
+  /// This will block until polling stops. Call `stop()` first if you want
+  /// to ensure it terminates.
+  pub fn join(mut self) {
+    if let PollingImpl::Thread { thread, .. } = &mut self.inner {
+      if let Some(t) = thread.take() {
+        let _ = t.join();
+      }
+    }
+    // DisplayLink stops automatically on drop
   }
 }
 
 impl Drop for PollingHandle {
   fn drop(&mut self) {
     self.stop();
-    if let Some(thread) = self.thread.take() {
-      let _ = thread.join();
+    if let PollingImpl::Thread { thread, .. } = &mut self.inner {
+      if let Some(t) = thread.take() {
+        let _ = t.join();
+      }
     }
   }
 }
@@ -110,14 +146,22 @@ fn poll_windows(options: &PollingOptions) -> Option<Vec<AXWindow>> {
   Some(windows)
 }
 
-/// Window polling filters and interval.
+/// Window polling configuration.
 #[derive(Clone)]
 pub struct PollingOptions {
   /// PID to exclude. Its window position is used as coordinate offset.
   pub exclude_pid: Option<ProcessId>,
+  /// Filter out fullscreen windows.
   pub filter_fullscreen: bool,
+  /// Filter out offscreen windows.
   pub filter_offscreen: bool,
+  /// Polling interval in milliseconds (ignored when `use_display_link` is true).
   pub interval_ms: u64,
+  /// Use CVDisplayLink for display-synchronized polling (macOS only).
+  /// When true, polling fires exactly once per display refresh (60Hz/120Hz).
+  /// When false, uses a fixed interval timer.
+  /// Ignored on non-macOS platforms.
+  pub use_display_link: bool,
 }
 
 impl Default for PollingOptions {
@@ -127,134 +171,55 @@ impl Default for PollingOptions {
       filter_fullscreen: true,
       filter_offscreen: true,
       interval_ms: DEFAULT_POLLING_INTERVAL_MS,
+      // Default to display link on macOS for optimal frame alignment
+      #[cfg(target_os = "macos")]
+      use_display_link: true,
+      #[cfg(not(target_os = "macos"))]
+      use_display_link: false,
     }
   }
 }
 
-/// How often to run cleanup (in poll cycles). At 8ms, 1250 cycles ≈ 10 seconds.
-const CLEANUP_INTERVAL: u64 = 1250;
-
 /// Start background polling for windows and mouse position.
 ///
-/// Returns a `PollingHandle` that can be used to stop the polling thread.
-/// The polling will automatically stop when the handle is dropped.
+/// Returns a [`PollingHandle`] that controls the polling lifetime.
+/// Polling will stop when the handle is dropped or [`PollingHandle::stop`] is called.
+///
+/// On macOS with `use_display_link: true` (the default), polling is synchronized
+/// to the display's refresh rate (60Hz, 120Hz, etc.) for optimal frame alignment.
+///
+/// # Example
+///
+/// ```ignore
+/// let handle = axio::start_polling(PollingOptions::default());
+/// // Polling runs until handle is dropped or stop() is called
+/// handle.stop();
+/// ```
 pub fn start_polling(config: PollingOptions) -> PollingHandle {
-  use crate::registry;
+  #[cfg(target_os = "macos")]
+  if config.use_display_link {
+    return start_display_synced_polling(config);
+  }
 
+  start_thread_polling(config)
+}
+
+/// Thread-based polling implementation.
+fn start_thread_polling(config: PollingOptions) -> PollingHandle {
   let stop_signal = Arc::new(AtomicBool::new(false));
   let stop_signal_clone = Arc::clone(&stop_signal);
 
+  // How often to run cleanup (in poll cycles). At 8ms, 1250 cycles ≈ 10 seconds.
+  const CLEANUP_INTERVAL: u64 = 1250;
+
   let thread = thread::spawn(move || {
-    let mut last_active_id: Option<WindowId> = None;
-    let mut last_focused_id: Option<WindowId> = None;
-    let mut last_mouse_pos: Option<Point> = None;
-    let mut poll_count: u64 = 0;
+    let mut state = PollingState::default();
 
     while !stop_signal_clone.load(Ordering::SeqCst) {
       let loop_start = Instant::now();
-      poll_count += 1;
+      state.poll_count += 1;
 
-      // Mouse position polling
-      if let Some(pos) = platform::get_mouse_position() {
-        let changed = last_mouse_pos.is_none_or(|last| pos.moved_from(last, 1.0));
-        if changed {
-          last_mouse_pos = Some(pos);
-          emit(Event::MousePosition(pos));
-        }
-      }
-
-      if let Some(raw_windows) = poll_windows(&config) {
-        // Get previous window state for comparison
-        let prev_windows: HashSet<WindowId> =
-          registry::get_windows().into_iter().map(|w| w.id).collect();
-        let prev_window_data: std::collections::HashMap<WindowId, crate::AXWindow> =
-          registry::get_windows()
-            .into_iter()
-            .map(|w| (w.id, w))
-            .collect();
-
-        // Update registry (handles cascading cleanup internally)
-        registry::update_windows(raw_windows.clone());
-
-        // Get new state
-        let new_windows = registry::get_windows();
-        let new_ids: HashSet<WindowId> = new_windows.iter().map(|w| w.id).collect();
-        let depth_order = registry::get_depth_order();
-
-        // Calculate diffs
-        let removed: Vec<WindowId> = prev_windows.difference(&new_ids).copied().collect();
-        let added: Vec<WindowId> = new_ids.difference(&prev_windows).copied().collect();
-        let changed: Vec<WindowId> = new_windows
-          .iter()
-          .filter(|w| {
-            prev_window_data
-              .get(&w.id)
-              .map(|prev| prev != *w)
-              .unwrap_or(false)
-          })
-          .map(|w| w.id)
-          .collect();
-
-        // Emit events for removed windows
-        for removed_id in removed {
-          emit(Event::WindowRemoved {
-            window_id: removed_id,
-            depth_order: depth_order.clone(),
-          });
-        }
-
-        // Emit events for added windows
-        for added_id in added {
-          if let Some(window) = registry::get_window(&added_id) {
-            platform::enable_accessibility_for_pid(window.process_id);
-            emit(Event::WindowAdded {
-              window,
-              depth_order: depth_order.clone(),
-            });
-          }
-        }
-
-        // Emit events for changed windows
-        for changed_id in changed {
-          if let Some(window) = registry::get_window(&changed_id) {
-            emit(Event::WindowChanged {
-              window,
-              depth_order: depth_order.clone(),
-            });
-          }
-        }
-
-        // Focus tracking
-        let focused_window = new_windows.iter().find(|w| w.focused);
-        let current_focused_id = focused_window.map(|w| w.id);
-
-        // Update focused_window in registry (can be None when desktop or non-tracked window focused)
-        registry::set_focused_window(current_focused_id);
-
-        if current_focused_id != last_focused_id {
-          emit(Event::FocusChanged {
-            window_id: current_focused_id,
-          });
-          last_focused_id = current_focused_id;
-        }
-
-        // Active window tracking
-        if let Some(focused_id) = current_focused_id {
-          if last_active_id.as_ref() != Some(&focused_id) {
-            registry::set_active_window(Some(focused_id));
-            emit(Event::ActiveChanged {
-              window_id: focused_id,
-            });
-            last_active_id = Some(focused_id);
-          }
-        }
-
-        // Periodic cleanup
-        if poll_count % CLEANUP_INTERVAL == 0 {
-          let active_pids: HashSet<ProcessId> = new_windows.iter().map(|w| w.process_id).collect();
-          let _observers_cleaned = registry::cleanup_dead_processes(&active_pids);
-        }
-      }
+      poll_iteration(&config, &mut state, CLEANUP_INTERVAL);
 
       let elapsed = loop_start.elapsed();
       let target = Duration::from_millis(config.interval_ms);
@@ -265,7 +230,140 @@ pub fn start_polling(config: PollingOptions) -> PollingHandle {
   });
 
   PollingHandle {
-    stop_signal,
-    thread: Some(thread),
+    inner: PollingImpl::Thread {
+      stop_signal,
+      thread: Some(thread),
+    },
+  }
+}
+
+/// Display-synchronized polling implementation (macOS only).
+#[cfg(target_os = "macos")]
+fn start_display_synced_polling(config: PollingOptions) -> PollingHandle {
+  let state = Arc::new(Mutex::new(PollingState::default()));
+
+  // At 60Hz, 600 cycles ≈ 10 seconds
+  const CLEANUP_INTERVAL: u64 = 600;
+
+  let handle = platform::start_display_link(move || {
+    let mut state = state.lock();
+    state.poll_count += 1;
+
+    poll_iteration(&config, &mut state, CLEANUP_INTERVAL);
+  })
+  .expect("Failed to start display-synced polling");
+
+  PollingHandle {
+    inner: PollingImpl::DisplayLink(handle),
+  }
+}
+
+/// Shared polling logic for both thread and display-link implementations.
+fn poll_iteration(config: &PollingOptions, state: &mut PollingState, cleanup_interval: u64) {
+  use crate::registry;
+
+  // Mouse position polling
+  if let Some(pos) = platform::get_mouse_position() {
+    let changed = state
+      .last_mouse_pos
+      .is_none_or(|last| pos.moved_from(last, 1.0));
+    if changed {
+      state.last_mouse_pos = Some(pos);
+      emit(Event::MousePosition(pos));
+    }
+  }
+
+  // Window polling
+  if let Some(raw_windows) = poll_windows(config) {
+    // Get previous window state for comparison
+    let prev_windows: HashSet<WindowId> =
+      registry::get_windows().into_iter().map(|w| w.id).collect();
+    let prev_window_data: std::collections::HashMap<WindowId, crate::AXWindow> =
+      registry::get_windows()
+        .into_iter()
+        .map(|w| (w.id, w))
+        .collect();
+
+    // Update registry (handles cascading cleanup internally)
+    registry::update_windows(raw_windows.clone());
+
+    // Get new state
+    let new_windows = registry::get_windows();
+    let new_ids: HashSet<WindowId> = new_windows.iter().map(|w| w.id).collect();
+    let depth_order = registry::get_depth_order();
+
+    // Calculate diffs
+    let removed: Vec<WindowId> = prev_windows.difference(&new_ids).copied().collect();
+    let added: Vec<WindowId> = new_ids.difference(&prev_windows).copied().collect();
+    let changed: Vec<WindowId> = new_windows
+      .iter()
+      .filter(|w| {
+        prev_window_data
+          .get(&w.id)
+          .map(|prev| prev != *w)
+          .unwrap_or(false)
+      })
+      .map(|w| w.id)
+      .collect();
+
+    // Emit events for removed windows
+    for removed_id in removed {
+      emit(Event::WindowRemoved {
+        window_id: removed_id,
+        depth_order: depth_order.clone(),
+      });
+    }
+
+    // Emit events for added windows
+    for added_id in added {
+      if let Some(window) = registry::get_window(&added_id) {
+        platform::enable_accessibility_for_pid(window.process_id);
+        emit(Event::WindowAdded {
+          window,
+          depth_order: depth_order.clone(),
+        });
+      }
+    }
+
+    // Emit events for changed windows
+    for changed_id in changed {
+      if let Some(window) = registry::get_window(&changed_id) {
+        emit(Event::WindowChanged {
+          window,
+          depth_order: depth_order.clone(),
+        });
+      }
+    }
+
+    // Focus tracking
+    let focused_window = new_windows.iter().find(|w| w.focused);
+    let current_focused_id = focused_window.map(|w| w.id);
+
+    // Update focused_window in registry
+    registry::set_focused_window(current_focused_id);
+
+    if current_focused_id != state.last_focused_id {
+      emit(Event::FocusChanged {
+        window_id: current_focused_id,
+      });
+      state.last_focused_id = current_focused_id;
+    }
+
+    // Active window tracking
+    if let Some(focused_id) = current_focused_id {
+      if state.last_active_id.as_ref() != Some(&focused_id) {
+        registry::set_active_window(Some(focused_id));
+        emit(Event::ActiveChanged {
+          window_id: focused_id,
+        });
+        state.last_active_id = Some(focused_id);
+      }
+    }
+
+    // Periodic cleanup
+    if state.poll_count % cleanup_interval == 0 {
+      let active_pids: HashSet<ProcessId> = new_windows.iter().map(|w| w.process_id).collect();
+      let _observers_cleaned = registry::cleanup_dead_processes(&active_pids);
+    }
   }
 }

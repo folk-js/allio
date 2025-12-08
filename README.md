@@ -10,15 +10,6 @@ For more background check out our [paper](https://folkjs.org/live-2025/).
 
 Check out the [Contributing Guide](/CONTRIBUTING.md) to setting up the repo.
 
-## Goals/Challenges
+## Not Implemented
 
-Some technical challenges of this project are:
-
-- Efficient collection of window geometry
-- Assosiating windows with their accessibility trees (as these are semi-sandboxed)
-- Efficiently getting accessibility trees
-- Making the trees 'reactive' and live
-- Handling tree and element lifecycle
-- Syncing between Rust and Web
-- Finding a good architecture
-- ...many more
+- multiple monitors / spaces / fullscreen splitscreen apps
