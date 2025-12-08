@@ -89,6 +89,7 @@ pub fn build_element_from_handle(
 // =============================================================================
 
 /// Discover and register children of an element.
+/// ElementAdded events are emitted by register_element for new children.
 pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResult<Vec<AXElement>> {
   let info = crate::registry::get_stored_element_info(parent_id)?;
 
@@ -104,6 +105,7 @@ pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResu
 
   for child_handle in child_handles.into_iter().take(max_children) {
     // Skip children that were previously destroyed
+    // ElementAdded is emitted by register_element for new elements
     if let Some(child) =
       build_element_from_handle(child_handle, &info.window_id, info.pid, Some(parent_id))
     {
@@ -113,12 +115,6 @@ pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResu
   }
 
   crate::registry::set_element_children(parent_id, child_ids)?;
-
-  for child in &children {
-    emit(Event::ElementAdded {
-      element: child.clone(),
-    });
-  }
 
   if let Ok(updated_parent) = crate::registry::get_element(parent_id) {
     emit(Event::ElementChanged {

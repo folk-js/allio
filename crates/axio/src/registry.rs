@@ -354,6 +354,7 @@ impl Registry {
   // ===========================================================================
 
   /// Register a new element. Returns existing if hash matches.
+  /// Emits ElementAdded for newly registered elements.
   /// Returns None if the element's hash is in the dead set.
   fn register_internal(
     &mut self,
@@ -407,6 +408,11 @@ impl Registry {
     self.element_to_window.insert(element_id, window_id);
     self.hash_to_element.insert(hash, element_id);
     self.hash_to_window.insert(hash, window_id);
+
+    // Emit event for newly registered element
+    events::emit(Event::ElementAdded {
+      element: element.clone(),
+    });
 
     Some(element)
   }
@@ -688,6 +694,8 @@ pub fn set_process_selection(pid: u32, element_id: ElementId, text: &str) -> boo
 // === Element API ===
 
 /// Register a new element.
+/// Register an element. Returns existing if hash matches.
+/// Emits ElementAdded for newly registered elements.
 pub fn register_element(
   element: AXElement,
   handle: ElementHandle,
