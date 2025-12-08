@@ -298,11 +298,14 @@ class AXTreeOverlay {
         e.preventDefault();
         const node = target.closest(".tree-node") as HTMLElement;
         if (node?.dataset.id) {
-          try {
-            await this.axio.write(parseInt(node.dataset.id!), target.value);
-            console.log(`✅ Wrote "${target.value}"`);
-          } catch (err) {
-            console.error("Failed to write:", err);
+          const el = this.axio.get(parseInt(node.dataset.id!));
+          if (el) {
+            try {
+              await this.axio.writeValue(el, target.value);
+              console.log(`✅ Wrote "${target.value}"`);
+            } catch (err) {
+              console.error("Failed to write:", err);
+            }
           }
         }
       }

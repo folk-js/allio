@@ -770,7 +770,11 @@ class PortsDemo {
     if (!value) return;
 
     try {
-      await this.axio.write(conn.targetPort.element.id, String(value.value));
+      // Use writeValue to auto-convert based on target element's expected type
+      // Convert bigint to number for the primitive parameter
+      const primitive =
+        typeof value.value === "bigint" ? Number(value.value) : value.value;
+      await this.axio.writeValue(conn.targetPort.element, primitive);
     } catch (err) {
       console.error("Failed to propagate:", err);
     }
