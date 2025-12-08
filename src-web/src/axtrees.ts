@@ -42,7 +42,7 @@ class AXTreeOverlay {
     });
 
     // Fetch root elements when active window changes
-    this.axio.on("focus:changed", async (data) => {
+    this.axio.on("focus:window", async (data) => {
       if (data.window_id) {
         await this.fetchWindowRoot(data.window_id);
         render();
@@ -67,7 +67,7 @@ class AXTreeOverlay {
     // Note: Tier 2 auto-watches text elements on focus, so element:changed fires automatically
     (
       [
-        "focus:changed",
+        "focus:window",
         "focus:element", // Tier 1: element focus changes
         "selection:changed", // Tier 1: text selection changes
         "window:changed",

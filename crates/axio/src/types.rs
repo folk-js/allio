@@ -186,20 +186,11 @@ pub enum Event {
 
   // Window lifecycle (from polling)
   #[serde(rename = "window:added")]
-  WindowAdded {
-    window: AXWindow,
-    depth_order: Vec<WindowId>,
-  },
+  WindowAdded { window: AXWindow },
   #[serde(rename = "window:changed")]
-  WindowChanged {
-    window: AXWindow,
-    depth_order: Vec<WindowId>,
-  },
+  WindowChanged { window: AXWindow },
   #[serde(rename = "window:removed")]
-  WindowRemoved {
-    window_id: WindowId,
-    depth_order: Vec<WindowId>,
-  },
+  WindowRemoved { window_id: WindowId },
 
   // Element lifecycle (from RPC, watches)
   #[serde(rename = "element:added")]
@@ -210,8 +201,8 @@ pub enum Event {
   ElementRemoved { element_id: ElementId },
 
   // Window focus (from polling)
-  #[serde(rename = "focus:changed")]
-  FocusChanged { window_id: Option<WindowId> },
+  #[serde(rename = "focus:window")]
+  FocusWindow { window_id: Option<WindowId> },
 
   // Element focus (from Tier 1 app-level observer)
   #[serde(rename = "focus:element")]

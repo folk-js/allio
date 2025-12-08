@@ -108,7 +108,7 @@ axio.connect().then(() => {
     "window:added",
     "window:changed",
     "window:removed",
-    "focus:changed",
+    "focus:window",
     "focus:element",
     "selection:changed",
   ] as const;

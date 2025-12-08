@@ -264,7 +264,7 @@ fn poll_iteration(config: &PollingOptions, state: &mut PollingState) {
       platform::enable_accessibility_for_pid(pid);
     }
 
-    // Focus tracking - registry emits FocusChanged if value changed
+    // Focus tracking - registry emits FocusWindow if value changed
     let focused_window_id = raw_windows.iter().find(|w| w.focused).map(|w| w.id);
     registry::set_focused_window(focused_window_id);
   }

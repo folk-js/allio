@@ -251,7 +251,6 @@ impl Registry {
       if let Some(window) = self.windows.get(&added_id) {
         events.push(Event::WindowAdded {
           window: window.info.clone(),
-          depth_order: self.depth_order.clone(),
         });
       }
     }
@@ -260,7 +259,6 @@ impl Registry {
       if let Some(window) = self.windows.get(&changed_id) {
         events.push(Event::WindowChanged {
           window: window.info.clone(),
-          depth_order: self.depth_order.clone(),
         });
       }
     }
@@ -290,7 +288,6 @@ impl Registry {
 
       events.push(Event::WindowRemoved {
         window_id: *window_id,
-        depth_order: self.depth_order.clone(),
       });
 
       let process_id = window_state.process_id;
@@ -640,7 +637,7 @@ pub fn get_focused_window() -> Option<WindowId> {
   Registry::read(|r| r.focused_window)
 }
 
-/// Set currently focused window. Emits FocusChanged if value changed.
+/// Set currently focused window. Emits FocusWindow if value changed.
 pub fn set_focused_window(window_id: Option<WindowId>) {
   let changed = Registry::write(|r| {
     if r.focused_window != window_id {
@@ -651,7 +648,7 @@ pub fn set_focused_window(window_id: Option<WindowId>) {
     }
   });
   if changed {
-    events::emit(Event::FocusChanged { window_id });
+    events::emit(Event::FocusWindow { window_id });
   }
 }
 

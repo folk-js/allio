@@ -416,28 +416,28 @@ export class AXIO extends EventEmitter<AxioEvents> {
       }
 
       case "window:added": {
-        const { window, depth_order } = event.data;
+        const { window } = event.data;
         this.windows.set(window.id, window);
-        this.depthOrder = depth_order;
+        this.updateDepthOrder();
         break;
       }
 
       case "window:changed": {
-        const { window, depth_order } = event.data;
+        const { window } = event.data;
         this.windows.set(window.id, window);
-        this.depthOrder = depth_order;
+        this.updateDepthOrder();
         break;
       }
 
       case "window:removed": {
-        const { window_id, depth_order } = event.data;
+        const { window_id } = event.data;
         this.windows.delete(window_id);
-        this.depthOrder = depth_order;
         for (const [id, el] of this.elements) {
           if (el.window_id === window_id) {
             this.elements.delete(id);
           }
         }
+        this.updateDepthOrder();
         break;
       }
 
@@ -460,7 +460,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
         break;
       }
 
-      case "focus:changed": {
+      case "focus:window": {
         this.focusedWindow = event.data.window_id;
         break;
       }
@@ -490,6 +490,12 @@ export class AXIO extends EventEmitter<AxioEvents> {
     // Emit namespace event (e.g., 'window' for 'window:added')
     const namespace = event.event.split(":")[0] as EventNamespace;
     (this.emit as Function)(namespace, event);
+  }
+
+  private updateDepthOrder() {
+    this.depthOrder = Array.from(this.windows.values())
+      .sort((a, b) => a.z_index - b.z_index)
+      .map((w) => w.id);
   }
 
   private async call<M extends RpcMethod>(
