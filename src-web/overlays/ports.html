@@ -11,6 +11,8 @@
         --port-input-glow: rgba(99, 168, 125, 0.4);
         --port-output: #6b8fc7;
         --port-output-glow: rgba(107, 143, 199, 0.4);
+        --port-transform: #d4a054;
+        --port-transform-glow: rgba(212, 160, 84, 0.4);
         --port-border: rgba(255, 255, 255, 0.25);
         --port-border-hover: rgba(255, 255, 255, 0.5);
         --connection-color: #6b8fc7;
@@ -129,6 +131,23 @@
         box-shadow: 0 0 8px var(--port-output-glow);
       }
 
+      /* Transform ports - override colors */
+      .port.transform {
+        background: var(--port-transform);
+        box-shadow: 0 0 8px var(--port-transform-glow);
+      }
+      .port.transform::after {
+        content: "ƒ";
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-size: 9px;
+        font-weight: bold;
+        color: rgba(0, 0, 0, 0.5);
+        pointer-events: none;
+      }
+
       .port:hover {
         border-color: var(--port-border-hover);
       }
@@ -139,6 +158,10 @@
       .port.output:hover {
         box-shadow: 0 0 12px var(--port-output-glow),
           0 0 20px var(--port-output-glow);
+      }
+      .port.transform:hover {
+        box-shadow: 0 0 12px var(--port-transform-glow),
+          0 0 20px var(--port-transform-glow);
       }
 
       .port.connecting {
