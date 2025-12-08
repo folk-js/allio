@@ -419,60 +419,10 @@ mod macos_impl {
 pub use macos_impl::*;
 
 #[cfg(target_os = "windows")]
-mod windows_impl {
-  #[derive(Clone)]
-  pub struct ElementHandle {
-    _placeholder: (),
-  }
-
-  #[derive(Clone, Copy)]
-  pub struct ObserverHandle {
-    _placeholder: (),
-  }
-
-  unsafe impl Send for ElementHandle {}
-  unsafe impl Sync for ElementHandle {}
-  unsafe impl Send for ObserverHandle {}
-  unsafe impl Sync for ObserverHandle {}
-}
-
-#[cfg(target_os = "windows")]
-pub use windows_impl::*;
+compile_error!("Windows support is not yet implemented");
 
 #[cfg(target_os = "linux")]
-mod linux_impl {
-  #[derive(Clone)]
-  pub struct ElementHandle {
-    _placeholder: (),
-  }
-
-  #[derive(Clone, Copy)]
-  pub struct ObserverHandle {
-    _placeholder: (),
-  }
-
-  unsafe impl Send for ElementHandle {}
-  unsafe impl Sync for ElementHandle {}
-  unsafe impl Send for ObserverHandle {}
-  unsafe impl Sync for ObserverHandle {}
-}
-
-#[cfg(target_os = "linux")]
-pub use linux_impl::*;
+compile_error!("Linux support is not yet implemented");
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-mod fallback_impl {
-  #[derive(Clone)]
-  pub struct ElementHandle(());
-
-  #[derive(Clone, Copy)]
-  pub struct ObserverHandle(());
-
-  unsafe impl Send for ElementHandle {}
-  unsafe impl Sync for ElementHandle {}
-  unsafe impl Send for ObserverHandle {}
-  unsafe impl Sync for ObserverHandle {}
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-pub use fallback_impl::*;
+compile_error!("Unsupported platform - AXIO only supports macOS currently");

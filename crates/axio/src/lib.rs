@@ -20,6 +20,9 @@ pub mod ws;
 
 pub mod accessibility;
 
+mod config;
+pub use config::Config;
+
 mod types;
 pub use types::*;
 

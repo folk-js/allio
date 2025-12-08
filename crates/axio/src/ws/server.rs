@@ -2,7 +2,7 @@
 WebSocket server implementation.
 */
 
-use crate::Event;
+use crate::{Config, Event};
 use axum::{
   extract::{
     ws::{Message, WebSocket, WebSocketUpgrade},
@@ -26,18 +26,22 @@ pub struct WebSocketState {
   /// Sender for JSON-serialized events to WebSocket clients
   json_sender: Arc<broadcast::Sender<String>>,
   custom_handler: Option<CustomRpcHandler>,
+  port: u16,
 }
 
 impl WebSocketState {
-  /// Create WebSocket state.
-  ///
-  /// Note: Call this before starting the server. Event forwarding is set up
-  /// automatically when `start_server()` is called.
+  /// Create WebSocket state with default config.
   pub fn new() -> Self {
-    let (json_tx, _) = broadcast::channel::<String>(1000);
+    Self::with_config(Config::default())
+  }
+
+  /// Create WebSocket state with custom config.
+  pub fn with_config(config: Config) -> Self {
+    let (json_tx, _) = broadcast::channel::<String>(config.event_channel_capacity);
     Self {
       json_sender: Arc::new(json_tx),
       custom_handler: None,
+      port: config.ws_port,
     }
   }
 
@@ -53,10 +57,11 @@ impl Default for WebSocketState {
   }
 }
 
-/// Start the WebSocket server on port 3030.
+/// Start the WebSocket server.
 ///
 /// This also spawns a task to forward axio events to connected clients.
 pub async fn start_server(ws_state: WebSocketState) {
+  let port = ws_state.port;
   // Spawn event forwarding task
   let sender = ws_state.json_sender.clone();
   let mut rx = crate::events::subscribe();
@@ -78,11 +83,12 @@ pub async fn start_server(ws_state: WebSocketState) {
     .layer(cors)
     .with_state(ws_state);
 
-  let listener = tokio::net::TcpListener::bind("127.0.0.1:3030")
+  let addr = format!("127.0.0.1:{port}");
+  let listener = tokio::net::TcpListener::bind(&addr)
     .await
     .expect("Failed to bind WebSocket server");
 
-  println!("WebSocket server: ws://127.0.0.1:3030/ws");
+  println!("WebSocket server: ws://{addr}/ws");
 
   axum::serve(listener, app)
     .await
@@ -157,7 +163,9 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
                         break;
                     }
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    log::warn!("[ws] Client lagged, dropped {n} events - consider increasing event_channel_capacity or client needs resync");
+                }
                 Err(broadcast::error::RecvError::Closed) => break,
             }
         }
