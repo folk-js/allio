@@ -204,14 +204,13 @@ fn handle_element_notification(
     Notification::ValueChanged => {
       let handle = ElementHandle::new(ax_element);
       let attrs = handle.get_attributes(None);
-      if let Some(value) = attrs.value {
-        if let Ok(mut element) = crate::registry::get_element(element_id) {
-          element.value = Some(value);
-          let _ = crate::registry::update_element(element_id, element.clone());
-          emit(Event::ElementChanged {
-            element: element.clone(),
-          });
-        }
+      // Always emit when value changes, even when it becomes empty (None)
+      if let Ok(mut element) = crate::registry::get_element(element_id) {
+        element.value = attrs.value;
+        let _ = crate::registry::update_element(element_id, element.clone());
+        emit(Event::ElementChanged {
+          element: element.clone(),
+        });
       }
     }
 

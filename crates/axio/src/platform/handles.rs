@@ -303,14 +303,10 @@ mod macos_impl {
 
     // Internal: extract Value from CFType
     fn extract_value(cf_value: &CFType, role: Option<&str>) -> Option<Value> {
-      // Try CFString
+      // Try CFString - empty strings are valid values (e.g., cleared text field)
+      // null means "no value attribute", Some("") means "has value, it's empty"
       if let Some(cf_string) = cf_value.downcast_ref::<CFString>() {
-        let s = cf_string.to_string();
-        return if s.is_empty() {
-          None
-        } else {
-          Some(Value::String(s))
-        };
+        return Some(Value::String(cf_string.to_string()));
       }
 
       // Try CFNumber

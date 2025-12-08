@@ -171,7 +171,6 @@ impl Default for PollingOptions {
       filter_fullscreen: true,
       filter_offscreen: true,
       interval_ms: DEFAULT_POLLING_INTERVAL_MS,
-      // Default to display link on macOS for optimal frame alignment
       #[cfg(target_os = "macos")]
       use_display_link: false,
       #[cfg(not(target_os = "macos"))]
