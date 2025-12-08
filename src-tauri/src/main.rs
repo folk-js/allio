@@ -558,9 +558,6 @@ fn main() {
   builder
     .manage(AppState::default())
     .setup(|app| {
-      // Initialize axio events channel
-      let _ = axio::init_events();
-
       // WebSocket setup (auto-subscribes to axio events)
       let ws_state =
         WebSocketState::new().with_custom_handler(create_rpc_handler(app.handle().clone()));

@@ -57,17 +57,16 @@ impl Default for WebSocketState {
 ///
 /// This also spawns a task to forward axio events to connected clients.
 pub async fn start_server(ws_state: WebSocketState) {
-  // Spawn event forwarding task (now we're inside an async runtime)
+  // Spawn event forwarding task
   let sender = ws_state.json_sender.clone();
-  if let Some(mut rx) = crate::subscribe_events() {
-    tokio::spawn(async move {
-      while let Ok(event) = rx.recv().await {
-        if let Ok(json) = serde_json::to_string(&event) {
-          let _ = sender.send(json);
-        }
+  let mut rx = crate::events::subscribe();
+  tokio::spawn(async move {
+    while let Ok(event) = rx.recv().await {
+      if let Ok(json) = serde_json::to_string(&event) {
+        let _ = sender.send(json);
       }
-    });
-  }
+    }
+  });
 
   let cors = CorsLayer::new()
     .allow_origin(Any)
