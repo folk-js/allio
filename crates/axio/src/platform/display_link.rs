@@ -6,9 +6,7 @@
 //! - Auto-adapts to display rate (60Hz, 120Hz, throttled, etc.)
 //! - Perfect frame alignment
 
-use objc2_core_video::{
-  kCVReturnSuccess, CVDisplayLink, CVOptionFlags, CVReturn, CVTimeStamp,
-};
+use objc2_core_video::{kCVReturnSuccess, CVDisplayLink, CVOptionFlags, CVReturn, CVTimeStamp};
 use std::ffi::c_void;
 use std::ptr::NonNull;
 
@@ -98,9 +96,8 @@ where
 {
   // Create display link for all active displays
   let mut link: *mut CVDisplayLink = std::ptr::null_mut();
-  let result = unsafe {
-    CVDisplayLink::create_with_active_cg_displays(NonNull::new(&mut link).unwrap())
-  };
+  let result =
+    unsafe { CVDisplayLink::create_with_active_cg_displays(NonNull::new(&mut link).unwrap()) };
 
   if result != kCVReturnSuccess || link.is_null() {
     return Err("Failed to create CVDisplayLink");
