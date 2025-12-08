@@ -558,7 +558,7 @@ fn main() {
   builder
     .manage(AppState::default())
     .setup(|app| {
-      // WebSocket setup (auto-subscribes to axio events)
+      // WebSocket setup
       let ws_state =
         WebSocketState::new().with_custom_handler(create_rpc_handler(app.handle().clone()));
       if !axio::verify_permissions() {
