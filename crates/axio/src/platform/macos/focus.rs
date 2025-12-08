@@ -1,38 +1,33 @@
-//! Focus and selection handling for macOS accessibility.
-//!
-//! This module handles:
-//! - Focus change notifications
-//! - Selection change notifications
-//! - Current focus/selection queries
-//! - Window ID lookup for elements
+/*!
+Focus and selection handling for macOS accessibility.
+
+Handles:
+- Focus change notifications (builds element, delegates to registry)
+- Selection change notifications (builds element, delegates to registry)
+- Current focus/selection queries
+- Window ID lookup for elements
+*/
 
 use objc2_application_services::{AXUIElement, AXValueType};
 use objc2_core_foundation::{CFRange, CFRetained, CFString};
 use std::ffi::c_void;
 use std::ptr::NonNull;
 
-use crate::events::emit;
 use crate::platform::handles::ElementHandle;
-use crate::types::{Event, WindowId};
+use crate::types::WindowId;
 
 use super::element::build_element_from_handle;
 use super::util::app_element;
 
-/// Check if a role should be auto-watched when focused.
-pub fn should_auto_watch(role: &crate::accessibility::Role) -> bool {
-  role.auto_watch_on_focus() || role.is_writable()
-}
-
 /// Handle focus change notification from callback.
+/// Builds the element and delegates to registry for state update and event emission.
 pub fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
   let handle = ElementHandle::new(element);
-  let window_id = match get_window_id_for_handle(&handle, pid) {
-    Some(id) => id,
-    None => {
-      // Expected when desktop is focused or window not yet tracked
-      log::debug!("FocusChanged: no window_id found for PID {pid}, skipping");
-      return;
-    }
+
+  let Some(window_id) = get_window_id_for_handle(&handle, pid) else {
+    // Expected when desktop is focused or window not yet tracked
+    log::debug!("FocusChanged: no window_id found for PID {pid}, skipping");
+    return;
   };
 
   let Some(ax_element) = build_element_from_handle(handle, &window_id, pid, None) else {
@@ -40,48 +35,26 @@ pub fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
     return;
   };
 
-  // Only emit focus for elements that self-identify as focused.
+  // Only process focus for elements that self-identify as focused.
   // macOS sends AXFocusedUIElementChanged for intermediate elements during click propagation,
   // but only the actual target has focused=true.
   if ax_element.focused != Some(true) {
     return;
   }
 
-  let previous_element_id = crate::registry::set_process_focus(pid, ax_element.id);
-  let same_element = previous_element_id.as_ref() == Some(&ax_element.id);
-
-  if same_element {
-    return;
-  }
-
-  if let Some(ref prev_id) = previous_element_id {
-    if let Ok(prev_elem) = crate::registry::get_element(prev_id) {
-      if should_auto_watch(&prev_elem.role) {
-        crate::registry::unwatch_element(prev_id);
-      }
-    }
-  }
-
-  if should_auto_watch(&ax_element.role) {
-    let _ = crate::registry::watch_element(&ax_element.id);
-  }
-
-  emit(Event::FocusElement {
-    element: ax_element,
-    previous_element_id,
-  });
+  // Registry handles state update, auto-watch, and event emission
+  crate::registry::update_focus(pid, ax_element);
 }
 
 /// Handle selection change notification from the unified callback.
+/// Builds the element and delegates to registry for state update and event emission.
 pub fn handle_app_selection_changed(pid: u32, element: CFRetained<AXUIElement>) {
   let handle = ElementHandle::new(element);
-  let window_id = match get_window_id_for_handle(&handle, pid) {
-    Some(id) => id,
-    None => {
-      // Expected when desktop is focused or window not yet tracked
-      log::debug!("SelectionChanged: no window_id found for PID {pid}, skipping");
-      return;
-    }
+
+  let Some(window_id) = get_window_id_for_handle(&handle, pid) else {
+    // Expected when desktop is focused or window not yet tracked
+    log::debug!("SelectionChanged: no window_id found for PID {pid}, skipping");
+    return;
   };
 
   let Some(ax_element) = build_element_from_handle(handle.clone(), &window_id, pid, None) else {
@@ -90,51 +63,14 @@ pub fn handle_app_selection_changed(pid: u32, element: CFRetained<AXUIElement>) 
   };
 
   let selected_text = handle.get_string("AXSelectedText").unwrap_or_default();
-
-  if !crate::registry::set_process_selection(pid, ax_element.id, &selected_text) {
-    return;
-  }
-
   let range = if selected_text.is_empty() {
     None
   } else {
     get_selected_text_range(&handle)
   };
 
-  emit(Event::SelectionChanged {
-    window_id,
-    element_id: ax_element.id,
-    text: selected_text,
-    range,
-  });
-}
-
-/// Get the selected text range from an element handle.
-fn get_selected_text_range(handle: &ElementHandle) -> Option<crate::types::TextRange> {
-  use objc2_application_services::AXValue as AXValueRef;
-
-  let attr_name = CFString::from_static_str("AXSelectedTextRange");
-  let value = handle.get_raw_attr_internal(&attr_name)?;
-
-  let ax_value = value.downcast_ref::<AXValueRef>()?;
-
-  unsafe {
-    let mut range = CFRange {
-      location: 0,
-      length: 0,
-    };
-    if ax_value.value(
-      AXValueType::CFRange,
-      NonNull::new(&mut range as *mut _ as *mut c_void)?,
-    ) {
-      Some(crate::types::TextRange {
-        start: range.location as u32,
-        length: range.length as u32,
-      })
-    } else {
-      None
-    }
-  }
+  // Registry handles state update and event emission
+  crate::registry::update_selection(pid, window_id, ax_element.id, selected_text, range);
 }
 
 /// Query the currently focused element and selection for an app.
@@ -172,7 +108,7 @@ pub fn get_current_focus(
 
 /// Get window ID for an ElementHandle using hash-based lookup.
 /// First checks if element is already registered, then falls back to focused window.
-pub fn get_window_id_for_handle(handle: &ElementHandle, pid: u32) -> Option<WindowId> {
+fn get_window_id_for_handle(handle: &ElementHandle, pid: u32) -> Option<WindowId> {
   // First: check if element is already registered (by hash)
   let element_hash = super::element::element_hash(handle);
   if let Some(element) = crate::registry::get_element_by_hash(element_hash) {
@@ -184,6 +120,34 @@ pub fn get_window_id_for_handle(handle: &ElementHandle, pid: u32) -> Option<Wind
   crate::registry::get_focused_window_for_pid(pid)
 }
 
+/// Get the selected text range from an element handle.
+fn get_selected_text_range(handle: &ElementHandle) -> Option<crate::types::TextRange> {
+  use objc2_application_services::AXValue as AXValueRef;
+
+  let attr_name = CFString::from_static_str("AXSelectedTextRange");
+  let value = handle.get_raw_attr_internal(&attr_name)?;
+
+  let ax_value = value.downcast_ref::<AXValueRef>()?;
+
+  unsafe {
+    let mut range = CFRange {
+      location: 0,
+      length: 0,
+    };
+    if ax_value.value(
+      AXValueType::CFRange,
+      NonNull::new(&mut range as *mut _ as *mut c_void)?,
+    ) {
+      Some(crate::types::TextRange {
+        start: range.location as u32,
+        length: range.length as u32,
+      })
+    } else {
+      None
+    }
+  }
+}
+
 /// Get selected text and range from an element handle.
 fn get_selection_from_handle(
   handle: &ElementHandle,
@@ -192,6 +156,6 @@ fn get_selection_from_handle(
   if selected_text.is_empty() {
     return None;
   }
-  // TODO: Parse AXSelectedTextRange if needed
-  Some((selected_text, None))
+  let range = get_selected_text_range(handle);
+  Some((selected_text, range))
 }

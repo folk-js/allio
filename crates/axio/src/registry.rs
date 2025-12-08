@@ -1,42 +1,44 @@
-//! Unified registry for accessibility state.
-//!
-//! This module provides a single source of truth for all accessibility entities:
-//! - Processes: One AXObserver per running application
-//! - Windows: Tracked windows belonging to processes  
-//! - Elements: UI elements with handles and subscriptions
-//!
-//! # Lifecycle
-//!
-//! ```text
-//! Process (ProcessId / PID)
-//! ├─ created: first window seen for this app
-//! ├─ destroyed: no windows remain
-//! └─ owns: ONE AXObserver for all notifications
-//!
-//! Window (WindowId)
-//! ├─ created: window enumeration sees it
-//! ├─ destroyed: window enumeration stops seeing it
-//! ├─ belongs to: one Process
-//! └─ owns: set of ElementIds
-//!
-//! Element (ElementId)
-//! ├─ created: discovered via API (children, elementAt, focus)
-//! ├─ destroyed: notification or window removal
-//! ├─ belongs to: one Window
-//! └─ owns: handle, subscriptions
-//! ```
-//!
-//! # Cascade Behavior
-//!
-//! - Individual elements can be removed (e.g., destroyed notification)
-//! - Window removal cascades to all elements in that window
-//! - Process removal cascades to all windows → all elements
+/*!
+Unified registry for accessibility state.
+
+Single source of truth for all accessibility entities:
+- Processes: One AXObserver per running application
+- Windows: Tracked windows belonging to processes
+- Elements: UI elements with handles and subscriptions
+
+# Lifecycle
+
+```text
+Process (ProcessId / PID)
+├─ created: first window seen for this app
+├─ destroyed: no windows remain
+└─ owns: ONE AXObserver for all notifications
+
+Window (WindowId)
+├─ created: window enumeration sees it
+├─ destroyed: window enumeration stops seeing it
+├─ belongs to: one Process
+└─ owns: set of ElementIds
+
+Element (ElementId)
+├─ created: discovered via API (children, elementAt, focus)
+├─ destroyed: notification or window removal
+├─ belongs to: one Window
+└─ owns: handle, subscriptions
+```
+
+# Cascade Behavior
+
+- Individual elements can be removed (e.g., destroyed notification)
+- Window removal cascades to all elements in that window
+- Process removal cascades to all windows → all elements
+*/
 
 use crate::accessibility::Notification;
 use crate::events;
 use crate::platform::{self, ElementHandle, ObserverHandle};
 use crate::types::{
-  AXElement, AXWindow, AxioError, AxioResult, ElementId, Event, ParentRef, ProcessId, WindowId,
+  AXElement, AXWindow, AxioError, AxioResult, ElementId, Event, ProcessId, WindowId,
 };
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
@@ -93,6 +95,19 @@ unsafe impl Send for ElementState {}
 unsafe impl Sync for ElementState {}
 
 /// Unified registry for all accessibility state.
+///
+/// # Singleton Design
+///
+/// Registry is a global singleton accessed via `REGISTRY`. This design was chosen because:
+/// 1. Accessibility state is inherently global (one set of windows/elements per process)
+/// 2. Observer callbacks from macOS need to access state without explicit context passing
+/// 3. The event sink is write-once and observers don't call back into registry
+///
+/// Alternative designs considered:
+/// - **Dependency injection**: Pass `Arc<AxioInstance>` everywhere. Cleaner but requires
+///   changing all function signatures and doesn't work well with C callbacks.
+/// - **Thread-local storage**: Doesn't work across threads (observer callbacks).
+/// - **Context parameter**: Similar issues with C callbacks needing raw pointers.
 pub struct Registry {
   /// Process state keyed by ProcessId.
   processes: HashMap<ProcessId, ProcessState>,
@@ -366,7 +381,7 @@ impl Registry {
       return None;
     }
 
-    let parent_hash = if element.parent.is_root() {
+    let parent_hash = if element.is_root {
       None // Root elements have no parent
     } else {
       handle
@@ -374,10 +389,11 @@ impl Registry {
         .map(|parent_handle| platform::element_hash(&parent_handle))
     };
 
-    if matches!(element.parent, ParentRef::Orphan) {
+    // Try to link orphan to parent if parent exists in registry
+    if !element.is_root && element.parent_id.is_none() {
       if let Some(ref ph) = parent_hash {
         if let Some(&parent_id) = self.hash_to_element.get(ph) {
-          element.parent = ParentRef::Linked { id: parent_id };
+          element.parent_id = Some(parent_id);
         }
       }
     }
@@ -404,9 +420,10 @@ impl Registry {
     self.hash_to_element.insert(hash, element_id);
     self.hash_to_window.insert(hash, window_id);
 
-    if let Some(parent_id) = element.parent.parent_id() {
+    if let Some(parent_id) = element.parent_id {
       self.add_child_to_parent(parent_id, element_id);
-    } else if matches!(element.parent, ParentRef::Orphan) {
+    } else if !element.is_root {
+      // Orphan: has parent in OS but not loaded yet
       if let Some(ref ph) = parent_hash {
         self
           .waiting_for_parent
@@ -432,7 +449,7 @@ impl Registry {
   /// Link an orphan element to its newly-discovered parent.
   fn link_orphan_to_parent(&mut self, orphan_id: ElementId, parent_id: ElementId) {
     if let Some(orphan_state) = self.elements.get_mut(&orphan_id) {
-      orphan_state.element.parent = ParentRef::Linked { id: parent_id };
+      orphan_state.element.parent_id = Some(parent_id);
       events::emit(Event::ElementChanged {
         element: orphan_state.element.clone(),
       });
@@ -491,7 +508,7 @@ impl Registry {
       return events;
     };
 
-    if let Some(parent_id) = state.element.parent.parent_id() {
+    if let Some(parent_id) = state.element.parent_id {
       self.remove_child_from_parent(parent_id, *element_id, &mut events);
     }
 
@@ -774,33 +791,79 @@ pub fn get_window_with_handle(window_id: &WindowId) -> Option<(AXWindow, Option<
   })
 }
 
-/// Set focused element for a process, returns the previous focused element.
-pub fn set_process_focus(pid: u32, element_id: ElementId) -> Option<ElementId> {
-  Registry::with(|r| {
+/// Update focused element for a process and emit FocusElement event.
+/// Handles auto-watch/unwatch based on element roles.
+/// Returns the previous focused element ID if focus actually changed.
+pub fn update_focus(pid: u32, element: AXElement) -> Option<ElementId> {
+  let (previous_id, should_emit) = Registry::with(|r| {
     let process_id = ProcessId(pid);
-    if let Some(process) = r.processes.get_mut(&process_id) {
-      let previous = process.focused_element;
-      process.focused_element = Some(element_id);
-      previous
-    } else {
-      None
+    let process = r.processes.get_mut(&process_id)?;
+
+    let previous = process.focused_element;
+    let same_element = previous == Some(element.id);
+
+    if same_element {
+      return Some((previous, false));
     }
-  })
+
+    process.focused_element = Some(element.id);
+    Some((previous, true))
+  })?;
+
+  if !should_emit {
+    return previous_id;
+  }
+
+  // Auto-unwatch previous element
+  if let Some(prev_id) = previous_id {
+    if let Ok(prev_elem) = get_element(&prev_id) {
+      if prev_elem.role.auto_watch_on_focus() || prev_elem.role.is_writable() {
+        unwatch_element(&prev_id);
+      }
+    }
+  }
+
+  // Auto-watch new element
+  if element.role.auto_watch_on_focus() || element.role.is_writable() {
+    let _ = watch_element(&element.id);
+  }
+
+  // Emit focus event
+  events::emit(Event::FocusElement {
+    element,
+    previous_element_id: previous_id,
+  });
+
+  previous_id
 }
 
-/// Set selection for a process, returns true if selection changed (for deduplication).
-pub fn set_process_selection(pid: u32, element_id: ElementId, text: &str) -> bool {
-  Registry::with(|r| {
+/// Update selection for a process and emit SelectionChanged event if changed.
+pub fn update_selection(
+  pid: u32,
+  window_id: WindowId,
+  element_id: ElementId,
+  text: String,
+  range: Option<crate::types::TextRange>,
+) {
+  let should_emit = Registry::with(|r| {
     let process_id = ProcessId(pid);
-    if let Some(process) = r.processes.get_mut(&process_id) {
-      let new_selection = (element_id, text.to_string());
-      let changed = process.last_selection.as_ref() != Some(&new_selection);
-      process.last_selection = Some(new_selection);
-      changed
-    } else {
-      false
-    }
+    let process = r.processes.get_mut(&process_id)?;
+
+    let new_selection = (element_id, text.clone());
+    let changed = process.last_selection.as_ref() != Some(&new_selection);
+    process.last_selection = Some(new_selection);
+    Some(changed)
   })
+  .unwrap_or(false);
+
+  if should_emit {
+    events::emit(Event::SelectionChanged {
+      window_id,
+      element_id,
+      text,
+      range,
+    });
+  }
 }
 
 /// Register an element. Returns existing if hash matches.
@@ -936,7 +999,8 @@ pub struct StoredElementInfo {
   pub window_id: WindowId,
   pub pid: u32,
   pub platform_role: String,
-  pub parent: ParentRef,
+  pub is_root: bool,
+  pub parent_id: Option<ElementId>,
   pub children: Option<Vec<ElementId>>,
 }
 
@@ -952,7 +1016,8 @@ pub fn get_stored_element_info(element_id: &ElementId) -> AxioResult<StoredEleme
       window_id: state.element.window_id,
       pid: state.pid,
       platform_role: state.platform_role.clone(),
-      parent: state.element.parent.clone(),
+      is_root: state.element.is_root,
+      parent_id: state.element.parent_id,
       children: state.element.children.clone(),
     })
   })

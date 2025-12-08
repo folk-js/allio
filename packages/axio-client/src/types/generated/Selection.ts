@@ -2,7 +2,4 @@
 import type { ElementId } from "./ElementId";
 import type { TextRange } from "./TextRange";
 
-/**
- * Initial state sent on connection
- */
 export type Selection = { element_id: ElementId, text: string, range: TextRange | null, };

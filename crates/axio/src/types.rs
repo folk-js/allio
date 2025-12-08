@@ -127,36 +127,14 @@ pub struct AXWindow {
   pub z_index: u32,
 }
 
-/// Parent reference for an element - discriminated union for clean semantics.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
-pub enum ParentRef {
-  /// Window root element (parent is AXApplication, not tracked)
-  Root,
-  /// Parent is loaded in registry
-  Linked { id: ElementId },
-  /// Has parent in OS but not loaded in registry yet
-  Orphan,
-}
-
-impl ParentRef {
-  /// Check if this is a root element
-  pub fn is_root(&self) -> bool {
-    matches!(self, ParentRef::Root)
-  }
-
-  /// Get the parent ID if linked
-  pub fn parent_id(&self) -> Option<ElementId> {
-    match self {
-      ParentRef::Linked { id } => Some(*id),
-      _ => None,
-    }
-  }
-}
-
-/// The unified element type - stored in registry and returned from API.
-/// Flat structure: children are IDs, not nested. Trees derived client-side.
+/// Core Element type - stored in registry and returned from API.
+///
+/// Elements are flat: children are IDs, not nested. Trees are derived client-side.
+///
+/// Parent linkage semantics:
+/// - `is_root=true, parent_id=None` → window root element
+/// - `is_root=false, parent_id=Some(id)` → parent is loaded (linked)
+/// - `is_root=false, parent_id=None` → orphan (parent exists but not loaded)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub struct AXElement {
@@ -165,27 +143,18 @@ pub struct AXElement {
   pub window_id: WindowId,
   /// Process that owns this element (may differ from window's process for helper processes)
   pub pid: ProcessId,
-  /// Parent reference: Root, Linked(id), or Orphan
-  pub parent: ParentRef,
-  /// Child element IDs. None = not yet fetched, Some([]) = no children
+  pub is_root: bool,
+  pub parent_id: Option<ElementId>,
   pub children: Option<Vec<ElementId>>,
   pub role: crate::accessibility::Role,
-  /// Expected value type for this role (computed from role)
-  pub value_type: crate::accessibility::ValueType,
   pub subrole: Option<String>,
-  /// Display label (AXTitle). None = no label or empty label
   pub label: Option<String>,
-  /// Element value. None = element has no value attribute.
-  /// Some(Value::String("")) = element has a string value that is empty (e.g., cleared text field)
   pub value: Option<crate::accessibility::Value>,
-  /// Accessibility description. None = no description or empty
   pub description: Option<String>,
-  /// Placeholder text. None = no placeholder or empty
   pub placeholder: Option<String>,
   pub bounds: Option<Bounds>,
   pub focused: Option<bool>,
   pub enabled: Option<bool>,
-  /// Available actions for this element
   pub actions: Vec<crate::accessibility::Action>,
 }
 

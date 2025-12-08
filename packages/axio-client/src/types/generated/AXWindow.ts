@@ -3,10 +3,6 @@ import type { Bounds } from "./Bounds";
 import type { ProcessId } from "./ProcessId";
 import type { WindowId } from "./WindowId";
 
-/**
- * Window info from x-win + accessibility.
- * Note: Windows don't have children - elements reference windows via window_id.
- */
 export type AXWindow = { id: WindowId, title: string, app_name: string, bounds: Bounds, focused: boolean, process_id: ProcessId, 
 /**
  * Z-order index: 0 = frontmost, higher = further back

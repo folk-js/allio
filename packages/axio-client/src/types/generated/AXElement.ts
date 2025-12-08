@@ -2,16 +2,20 @@
 import type { Action } from "./Action";
 import type { Bounds } from "./Bounds";
 import type { ElementId } from "./ElementId";
-import type { ParentRef } from "./ParentRef";
 import type { ProcessId } from "./ProcessId";
 import type { Role } from "./Role";
 import type { Value } from "./Value";
-import type { ValueType } from "./ValueType";
 import type { WindowId } from "./WindowId";
 
 /**
- * The unified element type - stored in registry and returned from API.
- * Flat structure: children are IDs, not nested. Trees derived client-side.
+ * Core Element type - stored in registry and returned from API.
+ *
+ * Elements are flat: children are IDs, not nested. Trees are derived client-side.
+ *
+ * Parent linkage semantics:
+ * - `is_root=true, parent_id=None` → window root element
+ * - `is_root=false, parent_id=Some(id)` → parent is loaded (linked)
+ * - `is_root=false, parent_id=None` → orphan (parent exists but not loaded)
  */
 export type AXElement = { id: ElementId, 
 /**
@@ -21,37 +25,4 @@ window_id: WindowId,
 /**
  * Process that owns this element (may differ from window's process for helper processes)
  */
-pid: ProcessId, 
-/**
- * Parent reference: Root, Linked(id), or Orphan
- */
-parent: ParentRef, 
-/**
- * Child element IDs. None = not yet fetched, Some([]) = no children
- */
-children: Array<ElementId> | null, role: Role, 
-/**
- * Expected value type for this role (computed from role)
- */
-value_type: ValueType, subrole: string | null, 
-/**
- * Display label (AXTitle). None = no label or empty label
- */
-label: string | null, 
-/**
- * Element value. None = element has no value attribute.
- * Some(Value::String("")) = element has a string value that is empty (e.g., cleared text field)
- */
-value: Value | null, 
-/**
- * Accessibility description. None = no description or empty
- */
-description: string | null, 
-/**
- * Placeholder text. None = no placeholder or empty
- */
-placeholder: string | null, bounds: Bounds | null, focused: boolean | null, enabled: boolean | null, 
-/**
- * Available actions for this element
- */
-actions: Array<Action>, };
+pid: ProcessId, is_root: boolean, parent_id: ElementId | null, children: Array<ElementId> | null, role: Role, subrole: string | null, label: string | null, value: Value | null, description: string | null, placeholder: string | null, bounds: Bounds | null, focused: boolean | null, enabled: boolean | null, actions: Array<Action>, };

@@ -1,7 +1,9 @@
-//! Element values.
-//!
-//! Values represent the current state of interactive elements:
-//! text content, numeric positions, boolean states, etc.
+/*!
+Element values.
+
+Values represent the current state of interactive elements:
+text content, numeric positions, boolean states, etc.
+*/
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;

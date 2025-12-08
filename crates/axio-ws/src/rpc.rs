@@ -1,5 +1,5 @@
 use axio::accessibility::Value as AXValue;
-use axio::{elements, windows, AXElement, ElementId, WindowId};
+use axio::{elements, windows, AXElement, ElementId, Snapshot, WindowId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use ts_rs::TS;
@@ -9,6 +9,8 @@ use ts_rs::TS;
 #[serde(tag = "method", content = "args", rename_all = "snake_case")]
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub enum RpcRequest {
+  /// Get a snapshot of current state (for re-sync)
+  Snapshot,
   /// Get deepest element at screen coordinates
   ElementAt { x: f64, y: f64 },
   /// Get cached element by ID
@@ -47,6 +49,8 @@ fn default_max_children() -> usize {
 #[serde(untagged)]
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub enum RpcResponse {
+  /// Full state snapshot (for re-sync)
+  Snapshot(Box<Snapshot>),
   /// Single element (boxed to reduce enum size - AXElement is 288 bytes)
   Element(Box<AXElement>),
   /// Optional element (for parent which can be None)
@@ -72,6 +76,12 @@ pub fn dispatch_json(method: &str, args: &JsonValue) -> JsonValue {
 /// Typed dispatch - compiler ensures all cases handled correctly
 pub fn dispatch(request: RpcRequest) -> Result<RpcResponse, String> {
   match request {
+    RpcRequest::Snapshot => {
+      let mut snapshot = axio::snapshot();
+      snapshot.accessibility_enabled = axio::verify_permissions();
+      Ok(RpcResponse::Snapshot(Box::new(snapshot)))
+    }
+
     RpcRequest::ElementAt { x, y } => {
       let element = elements::at(x, y).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Element(Box::new(element)))

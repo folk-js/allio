@@ -1,11 +1,13 @@
-//! Window-related operations for macOS accessibility.
-//!
-//! This module handles:
-//! - Getting window elements for a process
-//! - Getting the root element for a window
-//! - Finding elements at screen positions
-//! - Enabling accessibility for Electron apps
-//! - Fetching window handles by bounds matching
+/*!
+Window-related operations for macOS accessibility.
+
+Handles:
+- Getting window elements for a process
+- Getting the root element for a window
+- Finding elements at screen positions
+- Enabling accessibility for Electron apps
+- Fetching window handles by bounds matching
+*/
 
 use objc2_application_services::AXError;
 use objc2_core_foundation::{CFBoolean, CFString};

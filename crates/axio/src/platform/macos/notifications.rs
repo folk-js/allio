@@ -1,9 +1,11 @@
-//! Notification subscription management for macOS accessibility.
-//!
-//! This module handles:
-//! - Subscribing/unsubscribing to element notifications
-//! - Subscribing to app-level notifications (focus, selection)
-//! - Destruction notification subscription
+/*!
+Notification subscription management for macOS accessibility.
+
+Handles:
+- Subscribing/unsubscribing to element notifications
+- Subscribing to app-level notifications (focus, selection)
+- Destruction notification subscription
+*/
 
 use objc2_application_services::AXError;
 use objc2_core_foundation::CFString;

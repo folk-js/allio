@@ -40,7 +40,8 @@ interface GraphLink extends SimulationLinkDatum<GraphNode> {
 
 class AXGraph {
   private axio: AXIO;
-  private _passthrough: AxioPassthrough; // keeps passthrough logic active
+  // @ts-expect-error passthrough must stay in scope to keep mouse listener active
+  private passthrough: AxioPassthrough;
   private svg: SVGSVGElement;
   private container: HTMLElement;
 
@@ -65,7 +66,7 @@ class AXGraph {
     this.elementDetailsEl = document.getElementById("element-details");
     this.axio = new AXIO();
     // Declarative passthrough: elements with ax-io="opaque" capture, rest passes through
-    this._passthrough = new AxioPassthrough(this.axio);
+    this.passthrough = new AxioPassthrough(this.axio);
 
     this.createHoverOverlay();
     this.updateDimensions();
@@ -217,7 +218,7 @@ class AXGraph {
   private onElementAdded(element: AXElement) {
     const { isNew } = this.addNode(element);
     if (isNew) {
-      this.toast(`+ ${element.role} [${element.parent.kind}]`);
+      this.toast(`+ ${element.role} [${this.parentState(element)}]`);
     }
   }
 
@@ -225,7 +226,7 @@ class AXGraph {
     const node = this.nodes.get(element.id);
     if (!node) return;
 
-    const oldParentKind = node.element.parent.kind;
+    const oldParentState = this.parentState(node.element);
     node.element = element;
 
     // Re-check links (parent may have changed)
@@ -240,10 +241,9 @@ class AXGraph {
     }
 
     // Show if parent state changed (orphan → linked, etc)
-    if (oldParentKind !== element.parent.kind) {
-      this.toast(
-        `Δ ${element.role}: ${oldParentKind} → ${element.parent.kind}`
-      );
+    const newParentState = this.parentState(element);
+    if (oldParentState !== newParentState) {
+      this.toast(`Δ ${element.role}: ${oldParentState} → ${newParentState}`);
     }
   }
 
@@ -273,13 +273,13 @@ class AXGraph {
     const newLinks: GraphLink[] = [];
 
     for (const node of this.nodes.values()) {
-      const parent = node.element.parent;
-      if (parent.kind === "linked") {
-        const parentNode = this.nodes.get(parent.id);
+      const parentId = node.element.parent_id;
+      if (parentId !== null) {
+        const parentNode = this.nodes.get(parentId);
         if (parentNode) {
           // Check if link already exists
           const exists = this.links.some(
-            (l) => l.source.id === parent.id && l.target.id === node.id
+            (l) => l.source.id === parentId && l.target.id === node.id
           );
           if (!exists) {
             newLinks.push({
@@ -336,7 +336,7 @@ class AXGraph {
       }
 
       // Fetch parent (if not root)
-      if (node.element.parent.kind !== "root") {
+      if (!node.element.is_root) {
         const parent = await this.axio.parent(node.id);
         if (parent) {
           const { isNew } = this.addNode(parent);
@@ -458,7 +458,14 @@ class AXGraph {
   }
 
   private getNodeClass(node: GraphNode): string {
-    return node.element.parent.kind;
+    return this.parentState(node.element);
+  }
+
+  /** Get parent state as a string for display */
+  private parentState(el: AXElement): "root" | "linked" | "orphan" {
+    if (el.is_root) return "root";
+    if (el.parent_id !== null) return "linked";
+    return "orphan";
   }
 
   private getNodeLabel(node: GraphNode): string {
@@ -624,9 +631,11 @@ class AXGraph {
     rows.push(
       row(
         "parent",
-        el.parent.kind === "linked"
-          ? `linked (${el.parent.id})`
-          : el.parent.kind
+        el.parent_id !== null
+          ? `linked (${el.parent_id})`
+          : el.is_root
+          ? "root"
+          : "orphan"
       )
     );
     if (el.children !== null)
@@ -670,13 +679,13 @@ class AXGraph {
   private updateStats() {
     const nodes = this.nodes.size;
     const roots = Array.from(this.nodes.values()).filter(
-      (n) => n.element.parent.kind === "root"
+      (n) => n.element.is_root
     ).length;
     const linked = Array.from(this.nodes.values()).filter(
-      (n) => n.element.parent.kind === "linked"
+      (n) => !n.element.is_root && n.element.parent_id !== null
     ).length;
     const orphans = Array.from(this.nodes.values()).filter(
-      (n) => n.element.parent.kind === "orphan"
+      (n) => !n.element.is_root && n.element.parent_id === null
     ).length;
 
     document.getElementById("stat-nodes")!.textContent = String(nodes);

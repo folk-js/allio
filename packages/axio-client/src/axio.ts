@@ -14,70 +14,85 @@ import type {
   ElementId,
   WindowId,
   Selection,
+  Snapshot,
   Value,
 } from "./types";
 
-// === Type guards for Value types ===
+// === Role-based type utilities ===
 
-/** Type guard: element expects string values */
-export function isStringElement(
-  el: AXElement
-): el is AXElement & { value_type: "string" } {
-  return el.value_type === "string";
+const STRING_ROLES = new Set([
+  "textfield",
+  "textarea",
+  "searchfield",
+  "combobox",
+]);
+const BOOLEAN_ROLES = new Set(["checkbox", "switch", "radiobutton"]);
+const FLOAT_ROLES = new Set(["slider", "progressbar"]);
+const INTEGER_ROLES = new Set(["stepper"]);
+
+/** Check if element expects string values */
+export function isStringElement(el: AXElement): boolean {
+  return STRING_ROLES.has(el.role);
 }
 
-/** Type guard: element expects boolean values */
-export function isBooleanElement(
-  el: AXElement
-): el is AXElement & { value_type: "boolean" } {
-  return el.value_type === "boolean";
+/** Check if element expects boolean values */
+export function isBooleanElement(el: AXElement): boolean {
+  return BOOLEAN_ROLES.has(el.role);
 }
 
-/** Type guard: element expects integer values */
-export function isIntegerElement(
-  el: AXElement
-): el is AXElement & { value_type: "integer" } {
-  return el.value_type === "integer";
+/** Check if element expects integer values */
+export function isIntegerElement(el: AXElement): boolean {
+  return INTEGER_ROLES.has(el.role);
 }
 
-/** Type guard: element expects float values */
-export function isFloatElement(
-  el: AXElement
-): el is AXElement & { value_type: "float" } {
-  return el.value_type === "float";
+/** Check if element expects float values */
+export function isFloatElement(el: AXElement): boolean {
+  return FLOAT_ROLES.has(el.role);
 }
 
-/** Type guard: element is writable (has a value type other than "none") */
+/** Check if element is writable (can accept value input) */
 export function isWritable(el: AXElement): boolean {
-  return el.value_type !== "none";
+  return (
+    STRING_ROLES.has(el.role) ||
+    BOOLEAN_ROLES.has(el.role) ||
+    FLOAT_ROLES.has(el.role) ||
+    INTEGER_ROLES.has(el.role)
+  );
 }
 
-/** Create a Value from a primitive, using the element's expected type */
+/** Create a Value from a primitive, inferring type from element's role */
 export function createValue(
   el: AXElement,
   primitive: string | number | boolean
 ): Value {
-  switch (el.value_type) {
-    case "string":
-      return { type: "String", value: String(primitive) };
-    case "boolean":
-      return { type: "Boolean", value: Boolean(primitive) };
-    case "integer":
-      return { type: "Integer", value: BigInt(Math.round(Number(primitive))) };
-    case "float":
-      return { type: "Float", value: Number(primitive) };
-    default:
-      // Fallback to string
-      return { type: "String", value: String(primitive) };
+  if (STRING_ROLES.has(el.role)) {
+    return { type: "String", value: String(primitive) };
   }
+  if (BOOLEAN_ROLES.has(el.role)) {
+    return { type: "Boolean", value: Boolean(primitive) };
+  }
+  if (INTEGER_ROLES.has(el.role)) {
+    return { type: "Integer", value: BigInt(Math.round(Number(primitive))) };
+  }
+  if (FLOAT_ROLES.has(el.role)) {
+    return { type: "Float", value: Number(primitive) };
+  }
+  // Fallback to string
+  return { type: "String", value: String(primitive) };
 }
 
 // === Type helpers ===
 type RpcMethod = RpcRequest["method"];
-type RpcArgs<M extends RpcMethod> = Extract<RpcRequest, { method: M }>["args"];
+// For methods with args, extract the args type; for methods without, use empty object
+type RpcArgs<M extends RpcMethod> = Extract<RpcRequest, { method: M }> extends {
+  args: infer A;
+}
+  ? A
+  : Record<string, never>;
 
 // Manual return type mapping (matches Rust dispatch)
 type RpcReturns = {
+  snapshot: Snapshot;
   element_at: AXElement;
   get: AXElement;
   window_root: AXElement;
@@ -206,10 +221,10 @@ export class AXIO extends EventEmitter<AxioEvents> {
     );
   }
 
-  /** Get root element for a window (element with parent.kind === "root") */
+  /** Get root element for a window (element with is_root === true) */
   getRootElement(windowId: WindowId): AXElement | undefined {
     return Array.from(this.elements.values()).find(
-      (el) => el.window_id === windowId && el.parent.kind === "root"
+      (el) => el.window_id === windowId && el.is_root
     );
   }
 
@@ -221,6 +236,25 @@ export class AXIO extends EventEmitter<AxioEvents> {
   }
 
   // === RPC Methods (questions + actions) ===
+
+  /**
+   * Request a full state snapshot from the server.
+   * Use this to re-sync state if you suspect the client is out of sync.
+   * Automatically updates local state (windows, elements, etc.).
+   */
+  async snapshot(): Promise<Snapshot> {
+    const snap = await this.call("snapshot", {});
+    // Apply snapshot to local state
+    this.windows.clear();
+    this.elements.clear();
+    snap.windows.forEach((w) => this.windows.set(w.id, w));
+    snap.elements.forEach((e) => this.elements.set(e.id, e));
+    this.focusedWindow = snap.focused_window;
+    this.focusedElement = snap.focused_element;
+    this.selection = snap.selection;
+    this.depthOrder = snap.depth_order;
+    return snap;
+  }
 
   /** Get element at screen coordinates (fetches from OS) */
   elementAt = (x: number, y: number) => this.call("element_at", { x, y });
@@ -462,7 +496,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
     method: M,
     args: RpcArgs<M>
   ): Promise<RpcReturns[M]> {
-    const result = await this.rawCall(method, args);
+    const result = await this.rawCall(method, args as Record<string, unknown>);
     return result as RpcReturns[M];
   }
 

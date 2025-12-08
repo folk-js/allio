@@ -1,10 +1,12 @@
-//! Display-synchronized callbacks using CVDisplayLink.
-//!
-//! CVDisplayLink fires a callback synchronized to the display's actual refresh rate.
-//! This ensures:
-//! - No drift (tied to hardware vsync)
-//! - Auto-adapts to display rate (60Hz, 120Hz, throttled, etc.)
-//! - Perfect frame alignment
+/*!
+Display-synchronized callbacks using CVDisplayLink.
+
+CVDisplayLink fires a callback synchronized to the display's actual refresh rate.
+This ensures:
+- No drift (tied to hardware vsync)
+- Auto-adapts to display rate (60Hz, 120Hz, throttled, etc.)
+- Perfect frame alignment
+*/
 
 use objc2_core_video::{kCVReturnSuccess, CVDisplayLink, CVOptionFlags, CVReturn, CVTimeStamp};
 use std::ffi::c_void;

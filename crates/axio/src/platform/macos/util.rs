@@ -1,4 +1,4 @@
-//! Shared utilities for macOS accessibility.
+/*! Shared utilities for macOS accessibility. */
 
 use objc2_application_services::{AXIsProcessTrusted, AXUIElement};
 use objc2_core_foundation::CFRetained;
@@ -14,4 +14,3 @@ pub fn app_element(pid: u32) -> CFRetained<AXUIElement> {
 pub fn check_accessibility_permissions() -> bool {
   unsafe { AXIsProcessTrusted() }
 }
-

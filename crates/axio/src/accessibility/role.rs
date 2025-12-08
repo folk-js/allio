@@ -1,7 +1,9 @@
-//! Semantic UI roles.
-//!
-//! Roles describe what an element *is* in the UI hierarchy.
-//! Platform-specific role strings are mapped in `platform/*/mapping.rs`.
+/*!
+Semantic UI roles.
+
+Roles describe what an element *is* in the UI hierarchy.
+Platform-specific role strings are mapped in `platform/macos/mapping.rs`.
+*/
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;

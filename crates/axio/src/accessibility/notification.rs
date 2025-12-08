@@ -1,7 +1,9 @@
-//! Accessibility notifications.
-//!
-//! Notifications are events that the system fires when UI elements change.
-//! Platform-specific notification strings are mapped in `platform/*/mapping.rs`.
+/*!
+Accessibility notifications.
+
+Notifications are events that the system fires when UI elements change.
+Platform-specific notification strings are mapped in `platform/macos/mapping.rs`.
+*/
 
 use super::Role;
 use serde::{Deserialize, Serialize};

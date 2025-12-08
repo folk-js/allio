@@ -1,13 +1,15 @@
-//! macOS platform implementation.
-//!
-//! This module contains macOS-specific accessibility code, organized into:
-//! - `mapping`: Bidirectional mappings between our types and macOS AX* strings
-//! - `observer`: Observer management and unified callback
-//! - `element`: Element building, discovery, and operations
-//! - `focus`: Focus and selection handling
-//! - `notifications`: Notification subscription management
-//! - `window`: Window-related operations
-//! - `util`: Shared utilities
+/*!
+macOS platform implementation.
+
+Contains macOS-specific accessibility code:
+- `mapping`: Bidirectional mappings between our types and macOS AX* strings
+- `observer`: Observer management and unified callback
+- `element`: Element building, discovery, and operations
+- `focus`: Focus and selection handling
+- `notifications`: Notification subscription management
+- `window`: Window-related operations
+- `util`: Shared utilities
+*/
 
 pub mod element;
 pub mod focus;

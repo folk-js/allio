@@ -1,7 +1,9 @@
-//! Accessibility actions.
-//!
-//! Actions are operations that can be performed on UI elements.
-//! Platform-specific action strings are mapped in `platform/*/mapping.rs`.
+/*!
+Accessibility actions.
+
+Actions are operations that can be performed on UI elements.
+Platform-specific action strings are mapped in `platform/macos/mapping.rs`.
+*/
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;

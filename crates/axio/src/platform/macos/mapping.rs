@@ -1,9 +1,10 @@
-//! Bidirectional mappings between axio accessibility types and macOS AX* strings.
-//!
-//! This module provides zero-cost conversions between our cross-platform types
-//! and the macOS Accessibility API string constants.
+/*!
+Bidirectional mappings between axio accessibility types and macOS AX* strings.
 
-// These will be used once we wire up the new types
+Provides zero-cost conversions between our cross-platform types
+and the macOS Accessibility API string constants.
+*/
+
 #![allow(dead_code)]
 
 use crate::accessibility::{Action, Notification, Role};

@@ -1,9 +1,38 @@
-//! Observer management and unified callback for macOS accessibility.
-//!
-//! This module handles:
-//! - Context registry for observer callbacks (element-level and process-level)
-//! - Observer creation and run loop integration
-//! - Unified callback dispatching
+/*!
+Observer management and unified callback for macOS accessibility.
+
+Handles:
+- Context registry for observer callbacks (element-level and process-level)
+- Observer creation and run loop integration
+- Unified callback dispatching
+
+# Singleton Design (OBSERVER_CONTEXTS)
+
+Observer contexts are stored in a global `LazyLock<Mutex<HashMap>>`. This design is
+necessary because:
+
+1. **C callback constraint**: macOS `AXObserver` callbacks receive a raw pointer (`refcon`)
+   that we need to map back to our typed context (ElementId or ProcessId). We can't pass
+   Rust closures or trait objects to C code.
+
+2. **Lifetime management**: Context handles are passed to macOS which may hold them
+   indefinitely. Using stable u64 IDs with a global map avoids lifetime issues.
+
+3. **Cross-thread access**: Observer callbacks fire on the main thread but contexts
+   may be created from background threads (polling, RPC handlers).
+
+# Alternative Designs Considered
+
+- **Per-observer context storage**: Each observer could own its contexts. But we create
+  one observer per process and share it across many elements, making per-observer storage
+  complex.
+
+- **Registry-owned contexts**: Move context map into Registry. Would work but adds coupling
+  between core registry and platform-specific observer code.
+
+- **Box::into_raw for context**: Store actual data in the pointer instead of an ID.
+  Risk of use-after-free if handle outlives the Box. ID-based lookup is safer.
+*/
 
 use objc2_application_services::{AXError, AXObserver, AXObserverCallback, AXUIElement};
 use objc2_core_foundation::{kCFRunLoopDefaultMode, CFRetained, CFRunLoop, CFString};
@@ -19,12 +48,13 @@ use crate::accessibility::Notification;
 use crate::platform::handles::{ElementHandle, ObserverHandle};
 use crate::types::{AxioError, AxioResult, ElementId};
 
-/// Next available context ID
+/// Next available context ID.
+/// Atomically incremented to generate unique IDs for each observer context.
 static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
 
-/// Observer context for element-level and process-level.
-/// Element contexts are used for per-element notifications (destruction, value change).
-/// Process contexts are used for app-level notifications (focus, selection).
+/// Observer context for element-level and process-level notifications.
+/// - Element contexts are used for per-element notifications (destruction, value change).
+/// - Process contexts are used for app-level notifications (focus, selection).
 #[derive(Clone)]
 pub enum ObserverContext {
   /// Element-level notification (context identifies which element)
@@ -33,7 +63,8 @@ pub enum ObserverContext {
   Process(u32),
 }
 
-/// Opaque handle passed to macOS callbacks - contains only an ID.
+/// Opaque handle passed to macOS callbacks.
+/// Contains only an ID that maps to the actual context in OBSERVER_CONTEXTS.
 #[repr(C)]
 pub struct ContextHandle {
   context_id: u64,
@@ -41,7 +72,8 @@ pub struct ContextHandle {
 
 pub type ObserverContextHandle = ContextHandle;
 
-/// Registry for observer contexts.
+/// Global registry mapping context IDs to observer contexts.
+/// See module documentation for design rationale.
 static OBSERVER_CONTEXTS: LazyLock<Mutex<HashMap<u64, ObserverContext>>> =
   LazyLock::new(|| Mutex::new(HashMap::new()));
 

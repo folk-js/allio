@@ -1,16 +1,18 @@
-//! Element building and operations for macOS accessibility.
-//!
-//! This module handles:
-//! - Building AXElement from platform handles
-//! - Child discovery
-//! - Element refresh
-//! - Element hash for deduplication
-//! - Element operations (write, click)
+/*!
+Element building and operations for macOS accessibility.
+
+Handles:
+- Building AXElement from platform handles
+- Child/parent discovery
+- Element refresh
+- Hash-based deduplication
+- Element operations (write, click)
+*/
 
 use objc2_core_foundation::CFHash;
 
 use crate::platform::handles::ElementHandle;
-use crate::types::{AXElement, AxioError, AxioResult, ElementId, ParentRef, ProcessId, WindowId};
+use crate::types::{AXElement, AxioError, AxioResult, ElementId, ProcessId, WindowId};
 
 use super::mapping::{ax_action, role_from_macos};
 use crate::accessibility::Role;
@@ -54,7 +56,7 @@ pub fn build_element_from_handle(
     attrs.subrole
   };
 
-  // Determine parent reference.
+  // Determine if this is a root element.
   // In macOS, even windows have AXParent (the application element).
   // We consider an element a "root" if its parent is the application.
   let is_root = handle
@@ -63,22 +65,17 @@ pub fn build_element_from_handle(
     .as_deref()
     == Some("AXApplication");
 
-  let parent = if is_root {
-    ParentRef::Root
-  } else if let Some(pid) = parent_id {
-    ParentRef::Linked { id: *pid }
-  } else {
-    ParentRef::Orphan
-  };
+  // Parent ID is set if caller passed it (child discovery), otherwise None (orphan or root)
+  let parent_id_value = if is_root { None } else { parent_id.copied() };
 
   let element = AXElement {
     id: ElementId::new(),
     window_id: *window_id,
     pid: ProcessId(pid),
-    parent,
+    is_root,
+    parent_id: parent_id_value,
     children: None,
     role,
-    value_type: role.value_type(),
     subrole,
     label: attrs.title,
     value: attrs.value,
@@ -151,10 +148,10 @@ pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
     id: *element_id,
     window_id: info.window_id,
     pid: ProcessId(info.pid),
-    parent: info.parent,
+    is_root: info.is_root,
+    parent_id: info.parent_id,
     children: info.children,
     role,
-    value_type: role.value_type(),
     subrole,
     label: attrs.title,
     value: attrs.value,
