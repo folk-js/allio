@@ -68,15 +68,14 @@ export class AXIO extends EventEmitter<AxioEvents> {
   readonly windows = new Map<WindowId, AXWindow>();
   readonly elements = new Map<ElementId, AXElement>();
   readonly watched = new Set<ElementId>();
-  activeWindow: WindowId | null = null;
 
   /** Window IDs sorted by z-order (front to back) */
   depthOrder: WindowId[] = [];
 
-  // Tier 1: Element focus and selection tracking
+  // Focus tracking
+  focusedWindow: WindowId | null = null;
   focusedElement: AXElement | null = null;
   selection: Selection | null = null;
-  focusedWindow: WindowId | null = null;
   clickthrough = false;
 
   // === Options ===
@@ -137,14 +136,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
     return this.elements.get(id);
   }
 
-  /** Get the active window (last valid focused window) */
-  get active(): AXWindow | null {
-    return this.activeWindow
-      ? this.windows.get(this.activeWindow) ?? null
-      : null;
-  }
-
-  /** Get the currently focused window (null if desktop) */
+  /** Get the currently focused window (null if desktop is focused) */
   get focused(): AXWindow | null {
     return this.focusedWindow
       ? this.windows.get(this.focusedWindow) ?? null
@@ -292,7 +284,6 @@ export class AXIO extends EventEmitter<AxioEvents> {
         const {
           windows,
           elements,
-          active_window,
           focused_window,
           focused_element,
           selection,
@@ -303,7 +294,6 @@ export class AXIO extends EventEmitter<AxioEvents> {
         this.elements.clear();
         windows.forEach((w) => this.windows.set(w.id, w));
         elements.forEach((e) => this.elements.set(e.id, e));
-        this.activeWindow = active_window;
         this.focusedWindow = focused_window;
         this.focusedElement = focused_element;
         this.selection = selection;
@@ -368,11 +358,6 @@ export class AXIO extends EventEmitter<AxioEvents> {
 
       case "focus:changed": {
         this.focusedWindow = event.data.window_id;
-        break;
-      }
-
-      case "active:changed": {
-        this.activeWindow = event.data.window_id;
         break;
       }
 

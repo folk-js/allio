@@ -14,7 +14,6 @@ pub const DEFAULT_POLLING_INTERVAL_MS: u64 = 8;
 #[derive(Default)]
 struct PollingState {
   last_mouse_pos: Option<Point>,
-  last_active_id: Option<WindowId>,
   last_focused_id: Option<WindowId>,
   poll_count: u64,
 }
@@ -274,65 +273,16 @@ fn poll_iteration(config: &PollingOptions, state: &mut PollingState, cleanup_int
 
   // Window polling
   if let Some(raw_windows) = poll_windows(config) {
-    // Get previous window state for comparison
-    let prev_windows: HashSet<WindowId> =
-      registry::get_windows().into_iter().map(|w| w.id).collect();
-    let prev_window_data: std::collections::HashMap<WindowId, crate::AXWindow> =
-      registry::get_windows()
-        .into_iter()
-        .map(|w| (w.id, w))
-        .collect();
+    // Update registry (handles window events internally)
+    let added_pids = registry::update_windows(raw_windows.clone());
 
-    // Update registry (handles cascading cleanup internally)
-    registry::update_windows(raw_windows.clone());
+    // Enable accessibility for new windows
+    for pid in added_pids {
+      platform::enable_accessibility_for_pid(pid);
+    }
 
-    // Get new state
+    // Get new state for focus tracking
     let new_windows = registry::get_windows();
-    let new_ids: HashSet<WindowId> = new_windows.iter().map(|w| w.id).collect();
-    let depth_order = registry::get_depth_order();
-
-    // Calculate diffs
-    let removed: Vec<WindowId> = prev_windows.difference(&new_ids).copied().collect();
-    let added: Vec<WindowId> = new_ids.difference(&prev_windows).copied().collect();
-    let changed: Vec<WindowId> = new_windows
-      .iter()
-      .filter(|w| {
-        prev_window_data
-          .get(&w.id)
-          .map(|prev| prev != *w)
-          .unwrap_or(false)
-      })
-      .map(|w| w.id)
-      .collect();
-
-    // Emit events for removed windows
-    for removed_id in removed {
-      emit(Event::WindowRemoved {
-        window_id: removed_id,
-        depth_order: depth_order.clone(),
-      });
-    }
-
-    // Emit events for added windows
-    for added_id in added {
-      if let Some(window) = registry::get_window(&added_id) {
-        platform::enable_accessibility_for_pid(window.process_id);
-        emit(Event::WindowAdded {
-          window,
-          depth_order: depth_order.clone(),
-        });
-      }
-    }
-
-    // Emit events for changed windows
-    for changed_id in changed {
-      if let Some(window) = registry::get_window(&changed_id) {
-        emit(Event::WindowChanged {
-          window,
-          depth_order: depth_order.clone(),
-        });
-      }
-    }
 
     // Focus tracking
     let focused_window = new_windows.iter().find(|w| w.focused);
@@ -346,17 +296,6 @@ fn poll_iteration(config: &PollingOptions, state: &mut PollingState, cleanup_int
         window_id: current_focused_id,
       });
       state.last_focused_id = current_focused_id;
-    }
-
-    // Active window tracking
-    if let Some(focused_id) = current_focused_id {
-      if state.last_active_id.as_ref() != Some(&focused_id) {
-        registry::set_active_window(Some(focused_id));
-        emit(Event::ActiveChanged {
-          window_id: focused_id,
-        });
-        state.last_active_id = Some(focused_id);
-      }
     }
 
     // Periodic cleanup

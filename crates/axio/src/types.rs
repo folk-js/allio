@@ -185,7 +185,6 @@ pub struct Selection {
 pub struct SyncInit {
   pub windows: Vec<AXWindow>,
   pub elements: Vec<AXElement>,
-  pub active_window: Option<WindowId>,
   pub focused_window: Option<WindowId>,
   pub focused_element: Option<AXElement>,
   pub selection: Option<Selection>,
@@ -231,8 +230,6 @@ pub enum Event {
   // Window focus (from polling)
   #[serde(rename = "focus:changed")]
   FocusChanged { window_id: Option<WindowId> },
-  #[serde(rename = "active:changed")]
-  ActiveChanged { window_id: WindowId },
 
   // Element focus (from Tier 1 app-level observer)
   #[serde(rename = "focus:element")]

@@ -27,7 +27,24 @@ parent_id: ElementId | null,
 /**
  * Child element IDs. None = not yet fetched, Some([]) = no children
  */
-children: Array<ElementId> | null, role: Role, subrole: string | null, label: string | null, value: Value | null, description: string | null, placeholder: string | null, bounds: Bounds | null, focused: boolean | null, enabled: boolean | null, 
+children: Array<ElementId> | null, role: Role, subrole: string | null, 
+/**
+ * Display label (AXTitle). None = no label or empty label
+ */
+label: string | null, 
+/**
+ * Element value. None = element has no value attribute.
+ * Some(Value::String("")) = element has a string value that is empty (e.g., cleared text field)
+ */
+value: Value | null, 
+/**
+ * Accessibility description. None = no description or empty
+ */
+description: string | null, 
+/**
+ * Placeholder text. None = no placeholder or empty
+ */
+placeholder: string | null, bounds: Bounds | null, focused: boolean | null, enabled: boolean | null, 
 /**
  * Available actions for this element
  */

@@ -35,22 +35,24 @@ class AXTreeOverlay {
 
     // Fetch root when we get initial sync data
     this.axio.on("sync:init", async () => {
-      if (this.axio.activeWindow) {
-        await this.fetchWindowRoot(this.axio.activeWindow);
+      if (this.axio.focusedWindow) {
+        await this.fetchWindowRoot(this.axio.focusedWindow);
+      }
+      render();
+    });
+
+    // Fetch root elements when active window changes
+    this.axio.on("focus:changed", async (data) => {
+      if (data.window_id) {
+        await this.fetchWindowRoot(data.window_id);
         render();
       }
     });
 
-    // Fetch root elements when active window changes
-    this.axio.on("active:changed", async (data) => {
-      await this.fetchWindowRoot(data.window_id);
-      render();
-    });
-
-    // Fetch root when a new window is added (in case it's active)
+    // Fetch root when a new window is added (in case it's focused)
     this.axio.on("window:added", async () => {
-      if (this.axio.activeWindow) {
-        await this.fetchWindowRoot(this.axio.activeWindow);
+      if (this.axio.focusedWindow) {
+        await this.fetchWindowRoot(this.axio.focusedWindow);
       }
       render();
     });
@@ -97,9 +99,9 @@ class AXTreeOverlay {
   }
 
   private render() {
-    const win = this.axio.active;
+    const win = this.axio.focused;
 
-    // No active window - remove tree
+    // No focused window - remove tree
     if (!win) {
       this.treeEl?.remove();
       this.treeEl = null;

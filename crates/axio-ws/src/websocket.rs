@@ -81,12 +81,12 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
 
   // Send initial state as sync:init (run on blocking thread pool)
   let init_result = tokio::task::spawn_blocking(|| {
-    let active = windows::active();
+    let focused = windows::focused();
     let all_windows = windows::all();
     let depth_order = windows::depth_order();
 
-    // Query focused element and selection for the active window's app
-    let (focused_element, selection) = if let Some(ref window_id) = active {
+    // Query focused element and selection for the focused window's app
+    let (focused_element, selection) = if let Some(ref window_id) = focused {
       if let Some(window) = windows::get(window_id) {
         elements::focus(window.process_id.0)
       } else {
@@ -99,8 +99,7 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
     SyncInit {
       windows: all_windows,
       elements: elements::all(),
-      active_window: active.clone(),
-      focused_window: active,
+      focused_window: focused,
       focused_element,
       selection,
       depth_order,

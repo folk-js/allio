@@ -122,8 +122,6 @@ pub struct Registry {
   hash_to_window: HashMap<u64, WindowId>,
 
   // === Focus ===
-  /// Currently active window (sticky - last valid focused window).
-  active_window: Option<WindowId>,
   /// Currently focused window (can be None when desktop is focused).
   focused_window: Option<WindowId>,
   /// Window depth order (front to back, by z_index).
@@ -143,7 +141,6 @@ impl Registry {
       hash_to_element: HashMap::new(),
       dead_hashes: HashSet::new(),
       hash_to_window: HashMap::new(),
-      active_window: None,
       focused_window: None,
       depth_order: Vec::new(),
     }
@@ -222,9 +219,15 @@ impl Registry {
   // Window Management
   // ===========================================================================
 
-  /// Update windows from polling. Returns events for changes.
-  fn update_windows_internal(&mut self, new_windows: Vec<AXWindow>) -> Vec<Event> {
+  /// Update windows from polling. Returns (events, added PIDs).
+  fn update_windows_internal(
+    &mut self,
+    new_windows: Vec<AXWindow>,
+  ) -> (Vec<Event>, Vec<ProcessId>) {
     let mut events = Vec::new();
+    let mut added_ids = Vec::new();
+    let mut added_pids = Vec::new();
+    let mut changed_ids = Vec::new();
 
     // Build set of new window IDs
     let new_ids: HashSet<WindowId> = new_windows.iter().map(|w| w.id).collect();
@@ -249,9 +252,9 @@ impl Registry {
       let pid = process_id.0;
 
       if let Some(existing) = self.windows.get_mut(&window_id) {
-        // Check if changed (mark for later, need depth_order)
+        // Track if changed
         if existing.info != window_info {
-          // Will emit after depth_order is computed
+          changed_ids.push(window_id);
         }
         existing.info = window_info;
 
@@ -277,7 +280,8 @@ impl Registry {
           },
         );
         self.window_to_process.insert(window_id, process_id);
-        // Will emit WindowAdded after depth_order is computed
+        added_ids.push(window_id);
+        added_pids.push(process_id);
       }
     }
 
@@ -286,11 +290,27 @@ impl Registry {
     windows.sort_by_key(|w| w.z_index);
     self.depth_order = windows.into_iter().map(|w| w.id).collect();
 
-    // Note: For simplicity, we don't emit granular window events here.
-    // The polling code will handle event emission with proper depth_order.
-    // This internal method just updates state.
+    // Emit WindowAdded events
+    for added_id in added_ids {
+      if let Some(window) = self.windows.get(&added_id) {
+        events.push(Event::WindowAdded {
+          window: window.info.clone(),
+          depth_order: self.depth_order.clone(),
+        });
+      }
+    }
 
-    events
+    // Emit WindowChanged events
+    for changed_id in changed_ids {
+      if let Some(window) = self.windows.get(&changed_id) {
+        events.push(Event::WindowChanged {
+          window: window.info.clone(),
+          depth_order: self.depth_order.clone(),
+        });
+      }
+    }
+
+    (events, added_pids)
   }
 
   /// Remove a window and cascade to all its elements.
@@ -585,12 +605,13 @@ impl Registry {
 // Public API
 // =============================================================================
 
-/// Update windows from polling.
-pub fn update_windows(new_windows: Vec<AXWindow>) {
-  let events = Registry::with(|r| r.update_windows_internal(new_windows));
+/// Update windows from polling. Returns PIDs of newly added windows for accessibility setup.
+pub fn update_windows(new_windows: Vec<AXWindow>) -> Vec<ProcessId> {
+  let (events, added_pids) = Registry::with(|r| r.update_windows_internal(new_windows));
   for event in events {
     events::emit(event);
   }
+  added_pids
 }
 
 /// Get all windows.
@@ -603,14 +624,9 @@ pub fn get_window(window_id: &WindowId) -> Option<AXWindow> {
   Registry::with(|r| r.windows.get(window_id).map(|w| w.info.clone()))
 }
 
-/// Get active window ID (sticky - last valid focused window).
-pub fn get_active_window() -> Option<WindowId> {
-  Registry::with(|r| r.active_window)
-}
-
-/// Set active window.
-pub fn set_active_window(window_id: Option<WindowId>) {
-  Registry::with(|r| r.active_window = window_id);
+/// Get the focused window ID.
+pub fn get_focused_window() -> Option<WindowId> {
+  Registry::with(|r| r.focused_window)
 }
 
 /// Set currently focused window.

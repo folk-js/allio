@@ -17,9 +17,9 @@ pub fn get(window_id: &WindowId) -> Option<AXWindow> {
   registry::get_window(window_id)
 }
 
-/// Get the active window ID (preserved when desktop is focused).
-pub fn active() -> Option<WindowId> {
-  registry::get_active_window()
+/// Get the focused window ID (None if desktop is focused).
+pub fn focused() -> Option<WindowId> {
+  registry::get_focused_window()
 }
 
 /// Get window IDs in depth order (front to back).
