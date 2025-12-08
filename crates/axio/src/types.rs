@@ -151,9 +151,14 @@ pub struct AXElement {
   pub children: Option<Vec<ElementId>>,
   pub role: crate::accessibility::Role,
   pub subrole: Option<String>,
+  /// Display label (AXTitle). None = no label or empty label
   pub label: Option<String>,
+  /// Element value. None = element has no value attribute.
+  /// Some(Value::String("")) = element has a string value that is empty (e.g., cleared text field)
   pub value: Option<crate::accessibility::Value>,
+  /// Accessibility description. None = no description or empty
   pub description: Option<String>,
+  /// Placeholder text. None = no placeholder or empty
   pub placeholder: Option<String>,
   pub bounds: Option<Bounds>,
   pub focused: Option<bool>,

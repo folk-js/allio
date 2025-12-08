@@ -216,16 +216,14 @@ fn handle_element_notification(
 
     Notification::TitleChanged => {
       let handle = ElementHandle::new(ax_element);
-      if let Some(label) = handle.get_string("AXTitle") {
-        if !label.is_empty() {
-          if let Ok(mut element) = crate::registry::get_element(element_id) {
-            element.label = Some(label);
-            let _ = crate::registry::update_element(element_id, element.clone());
-            emit(Event::ElementChanged {
-              element: element.clone(),
-            });
-          }
-        }
+      // Always emit when title changes, even when it becomes empty
+      // get_string returns None for empty strings, which is fine for label storage
+      if let Ok(mut element) = crate::registry::get_element(element_id) {
+        element.label = handle.get_string("AXTitle");
+        let _ = crate::registry::update_element(element_id, element.clone());
+        emit(Event::ElementChanged {
+          element: element.clone(),
+        });
       }
     }
 
