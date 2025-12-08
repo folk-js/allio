@@ -2,7 +2,6 @@ use crate::events::emit;
 use crate::platform;
 use crate::types::{AXWindow, Event, Point, ProcessId};
 use parking_lot::Mutex;
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -14,7 +13,6 @@ pub const DEFAULT_POLLING_INTERVAL_MS: u64 = 8;
 #[derive(Default)]
 struct PollingState {
   last_mouse_pos: Option<Point>,
-  poll_count: u64,
 }
 
 /// Internal implementation of the polling handle.
@@ -203,17 +201,13 @@ fn start_thread_polling(config: PollingOptions) -> PollingHandle {
   let stop_signal = Arc::new(AtomicBool::new(false));
   let stop_signal_clone = Arc::clone(&stop_signal);
 
-  // How often to run cleanup (in poll cycles). At 8ms, 1250 cycles ≈ 10 seconds.
-  const CLEANUP_INTERVAL: u64 = 1250;
-
   let thread = thread::spawn(move || {
     let mut state = PollingState::default();
 
     while !stop_signal_clone.load(Ordering::SeqCst) {
       let loop_start = Instant::now();
-      state.poll_count += 1;
 
-      poll_iteration(&config, &mut state, CLEANUP_INTERVAL);
+      poll_iteration(&config, &mut state);
 
       let elapsed = loop_start.elapsed();
       let target = Duration::from_millis(config.interval_ms);
@@ -236,14 +230,9 @@ fn start_thread_polling(config: PollingOptions) -> PollingHandle {
 fn start_display_synced_polling(config: PollingOptions) -> PollingHandle {
   let state = Arc::new(Mutex::new(PollingState::default()));
 
-  // At 60Hz, 600 cycles ≈ 10 seconds
-  const CLEANUP_INTERVAL: u64 = 600;
-
   let handle = platform::start_display_link(move || {
     let mut state = state.lock();
-    state.poll_count += 1;
-
-    poll_iteration(&config, &mut state, CLEANUP_INTERVAL);
+    poll_iteration(&config, &mut state);
   })
   .expect("Failed to start display-synced polling");
 
@@ -253,7 +242,7 @@ fn start_display_synced_polling(config: PollingOptions) -> PollingHandle {
 }
 
 /// Shared polling logic for both thread and display-link implementations.
-fn poll_iteration(config: &PollingOptions, state: &mut PollingState, cleanup_interval: u64) {
+fn poll_iteration(config: &PollingOptions, state: &mut PollingState) {
   use crate::registry;
 
   // Mouse position polling
@@ -278,11 +267,5 @@ fn poll_iteration(config: &PollingOptions, state: &mut PollingState, cleanup_int
     // Focus tracking - registry emits FocusChanged if value changed
     let focused_window_id = raw_windows.iter().find(|w| w.focused).map(|w| w.id);
     registry::set_focused_window(focused_window_id);
-
-    // Periodic cleanup
-    if state.poll_count % cleanup_interval == 0 {
-      let active_pids: HashSet<ProcessId> = raw_windows.iter().map(|w| w.process_id).collect();
-      let _observers_cleaned = registry::cleanup_dead_processes(&active_pids);
-    }
   }
 }

@@ -196,26 +196,6 @@ impl Registry {
     Ok(process_id)
   }
 
-  /// Remove a process and cascade to all its windows.
-  fn remove_process_internal(&mut self, process_id: &ProcessId) -> Vec<Event> {
-    let mut events = Vec::new();
-
-    let window_ids: Vec<WindowId> = self
-      .windows
-      .iter()
-      .filter(|(_, w)| w.process_id == *process_id)
-      .map(|(id, _)| *id)
-      .collect();
-
-    for window_id in window_ids {
-      events.extend(self.remove_window_internal(&window_id));
-    }
-
-    self.processes.remove(process_id);
-
-    events
-  }
-
   /// Update windows from polling. Returns (events, added PIDs).
   fn update_windows_internal(
     &mut self,
@@ -1016,25 +996,4 @@ pub fn write_element_value(
 /// Click element.
 pub fn click_element(element_id: &ElementId) -> AxioResult<()> {
   with_element_handle(element_id, |handle, _| platform::click_element(handle))?
-}
-
-/// Clean up observers for dead processes.
-pub fn cleanup_dead_processes(active_pids: &HashSet<ProcessId>) -> usize {
-  Registry::write(|r| {
-    let dead: Vec<ProcessId> = r
-      .processes
-      .keys()
-      .filter(|pid| !active_pids.contains(pid))
-      .copied()
-      .collect();
-
-    let count = dead.len();
-    for pid in dead {
-      let events = r.remove_process_internal(&pid);
-      for event in events {
-        events::emit(event);
-      }
-    }
-    count
-  })
 }
