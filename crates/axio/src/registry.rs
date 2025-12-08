@@ -94,18 +94,8 @@ unsafe impl Sync for ProcessState {}
 unsafe impl Send for ElementState {}
 unsafe impl Sync for ElementState {}
 
-/// Unified registry for all accessibility state.
-///
-/// # Singleton Design
-///
-/// Registry is a global singleton accessed via `REGISTRY`. This design was chosen because:
-/// 1. Accessibility state is inherently global (one set of windows/elements per process)
-/// 2. Observer callbacks from macOS need to access state without explicit context passing
-/// 3. The event sink is write-once and observers don't call back into registry
-///
 /// Alternative designs considered:
-/// - **Dependency injection**: Pass `Arc<AxioInstance>` everywhere. Cleaner but requires
-///   changing all function signatures and doesn't work well with C callbacks.
+/// - **Dependency injection**: Pass `Arc<AxioInstance>` everywhere. Cleaner but doesn't work well with C callbacks.
 /// - **Thread-local storage**: Doesn't work across threads (observer callbacks).
 /// - **Context parameter**: Similar issues with C callbacks needing raw pointers.
 pub struct Registry {
@@ -117,8 +107,6 @@ pub struct Registry {
   elements: HashMap<ElementId, ElementState>,
 
   // === Reverse Indexes ===
-  /// WindowId → ProcessId (for cascade lookups).
-  window_to_process: HashMap<WindowId, ProcessId>,
   /// ElementId → WindowId (for cascade lookups).
   element_to_window: HashMap<ElementId, WindowId>,
   /// CFHash → ElementId (for O(1) duplicate detection).
@@ -141,7 +129,6 @@ impl Registry {
       processes: HashMap::new(),
       windows: HashMap::new(),
       elements: HashMap::new(),
-      window_to_process: HashMap::new(),
       element_to_window: HashMap::new(),
       hash_to_element: HashMap::new(),
       waiting_for_parent: HashMap::new(),
@@ -251,7 +238,6 @@ impl Registry {
             handle,
           },
         );
-        self.window_to_process.insert(window_id, process_id);
         added_ids.push(window_id);
         added_pids.push(process_id);
       }
@@ -298,8 +284,6 @@ impl Registry {
     }
 
     if let Some(window_state) = self.windows.remove(window_id) {
-      self.window_to_process.remove(window_id);
-
       let mut windows: Vec<_> = self.windows.values().map(|w| &w.info).collect();
       windows.sort_by_key(|w| w.z_index);
       self.depth_order = windows.into_iter().map(|w| w.id).collect();

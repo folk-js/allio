@@ -103,11 +103,6 @@ impl Point {
     Self { x, y }
   }
 
-  /// Euclidean distance to another point.
-  pub fn distance_to(&self, other: Point) -> f64 {
-    ((self.x - other.x).powi(2) + (self.y - other.y).powi(2)).sqrt()
-  }
-
   /// Check if this point moved more than threshold from another.
   pub fn moved_from(&self, other: Point, threshold: f64) -> bool {
     (self.x - other.x).abs() >= threshold || (self.y - other.y).abs() >= threshold

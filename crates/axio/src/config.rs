@@ -22,11 +22,6 @@ pub struct Config {
   /// Default: 1000 events.
   pub event_channel_capacity: usize,
 
-  /// Default polling interval in milliseconds.
-  /// Used when `PollingOptions::interval_ms` is not set.
-  /// Default: 8ms (~120Hz).
-  pub polling_interval_ms: u64,
-
   /// WebSocket server port.
   /// Default: 3030.
   #[cfg(feature = "ws")]
@@ -37,7 +32,6 @@ impl Default for Config {
   fn default() -> Self {
     Self {
       event_channel_capacity: 1000,
-      polling_interval_ms: 8,
       #[cfg(feature = "ws")]
       ws_port: 3030,
     }
