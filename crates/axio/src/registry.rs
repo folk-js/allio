@@ -74,6 +74,9 @@ struct ElementState {
   handle: ElementHandle,
   /// CFHash of the element (for duplicate detection).
   hash: u64,
+  /// CFHash of this element's OS parent (for lazy linking).
+  /// None means this is a root element (no parent in OS tree).
+  parent_hash: Option<u64>,
   /// Process ID (needed for observer operations).
   pid: u32,
   /// Platform role string (for notification decisions).
@@ -113,6 +116,8 @@ pub struct Registry {
   element_to_window: HashMap<ElementId, WindowId>,
   /// CFHash → ElementId (for O(1) duplicate detection).
   hash_to_element: HashMap<u64, ElementId>,
+  /// Parent hash → children waiting for that parent (lazy linking).
+  waiting_for_parent: HashMap<u64, Vec<ElementId>>,
 
   // === Dead Tracking ===
   /// Hashes of destroyed elements (prevents re-registration).
@@ -139,6 +144,7 @@ impl Registry {
       window_to_process: HashMap::new(),
       element_to_window: HashMap::new(),
       hash_to_element: HashMap::new(),
+      waiting_for_parent: HashMap::new(),
       dead_hashes: HashSet::new(),
       hash_to_window: HashMap::new(),
       focused_window: None,
@@ -331,11 +337,9 @@ impl Registry {
       .filter_map(|id| self.elements.get(id).map(|e| e.hash))
       .collect();
 
-    // Remove each element
+    // Remove each element (cascade handled internally)
     for element_id in &element_ids {
-      if let Some(event) = self.remove_element_internal(element_id) {
-        events.push(event);
-      }
+      events.extend(self.remove_element_internal(element_id));
     }
 
     // Prune dead_hashes for this window's elements
@@ -378,7 +382,7 @@ impl Registry {
   /// Returns None if the element's hash is in the dead set.
   fn register_internal(
     &mut self,
-    element: AXElement,
+    mut element: AXElement,
     handle: ElementHandle,
     pid: u32,
     platform_role: &str,
@@ -405,12 +409,32 @@ impl Registry {
       return None;
     }
 
+    // Get parent hash from OS (for lazy linking)
+    // element.root is already set correctly by build_element_from_handle based on AXParent
+    let parent_hash = if element.root {
+      None // Root elements have no parent
+    } else {
+      handle
+        .get_element("AXParent")
+        .map(|parent_handle| platform::element_hash(&parent_handle))
+    };
+
+    // Try to link to parent if it exists in registry (and not already set by caller)
+    if element.parent_id.is_none() {
+      if let Some(ref ph) = parent_hash {
+        if let Some(&parent_id) = self.hash_to_element.get(ph) {
+          element.parent_id = Some(parent_id);
+        }
+      }
+    }
+
     // Store element
     let element_id = element.id;
     let mut state = ElementState {
       element: element.clone(),
       handle,
       hash,
+      parent_hash,
       pid,
       platform_role: platform_role.to_string(),
       subscriptions: HashSet::new(),
@@ -429,12 +453,59 @@ impl Registry {
     self.hash_to_element.insert(hash, element_id);
     self.hash_to_window.insert(hash, window_id);
 
+    // Add to parent's children (if parent exists)
+    if let Some(parent_id) = element.parent_id {
+      self.add_child_to_parent(parent_id, element_id);
+    } else if let Some(ref ph) = parent_hash {
+      // Parent not in registry yet - add to waiting list
+      self
+        .waiting_for_parent
+        .entry(*ph)
+        .or_default()
+        .push(element_id);
+    }
+
+    // Check if any orphans are waiting for us as their parent
+    if let Some(orphans) = self.waiting_for_parent.remove(&hash) {
+      for orphan_id in orphans {
+        self.link_orphan_to_parent(orphan_id, element_id);
+      }
+    }
+
     // Emit event for newly registered element
     events::emit(Event::ElementAdded {
       element: element.clone(),
     });
 
     Some(element)
+  }
+
+  /// Link an orphan element to its newly-discovered parent.
+  fn link_orphan_to_parent(&mut self, orphan_id: ElementId, parent_id: ElementId) {
+    // Update orphan's parent_id
+    if let Some(orphan_state) = self.elements.get_mut(&orphan_id) {
+      orphan_state.element.parent_id = Some(parent_id);
+      // Emit ElementChanged for the orphan
+      events::emit(Event::ElementChanged {
+        element: orphan_state.element.clone(),
+      });
+    }
+    // Add orphan to parent's children
+    self.add_child_to_parent(parent_id, orphan_id);
+  }
+
+  /// Add a child to a parent's children list (if not already there).
+  fn add_child_to_parent(&mut self, parent_id: ElementId, child_id: ElementId) {
+    if let Some(parent_state) = self.elements.get_mut(&parent_id) {
+      let children = parent_state.element.children.get_or_insert_with(Vec::new);
+      if !children.contains(&child_id) {
+        children.push(child_id);
+        // Emit ElementChanged for parent
+        events::emit(Event::ElementChanged {
+          element: parent_state.element.clone(),
+        });
+      }
+    }
   }
 
   /// Subscribe to destruction notification for an element.
@@ -464,14 +535,41 @@ impl Registry {
   }
 
   /// Remove an element.
-  fn remove_element_internal(&mut self, element_id: &ElementId) -> Option<Event> {
+  fn remove_element_internal(&mut self, element_id: &ElementId) -> Vec<Event> {
+    let mut events = Vec::new();
+
     let Some(window_id) = self.element_to_window.remove(element_id) else {
-      return None;
+      return events;
     };
 
     let Some(mut state) = self.elements.remove(element_id) else {
-      return None;
+      return events;
     };
+
+    // Remove from parent's children list
+    if let Some(parent_id) = state.element.parent_id {
+      self.remove_child_from_parent(parent_id, *element_id, &mut events);
+    }
+
+    // Clean up waiting_for_parent (if we were waiting)
+    if let Some(ref ph) = state.parent_hash {
+      if let Some(waiting) = self.waiting_for_parent.get_mut(ph) {
+        waiting.retain(|&id| id != *element_id);
+        if waiting.is_empty() {
+          self.waiting_for_parent.remove(ph);
+        }
+      }
+    }
+
+    // Remove any orphans waiting for us (they'll never get a parent now)
+    self.waiting_for_parent.remove(&state.hash);
+
+    // Cascade: remove all children
+    if let Some(children) = &state.element.children {
+      for child_id in children.clone() {
+        events.extend(self.remove_element_internal(&child_id));
+      }
+    }
 
     // Add to dead set
     self.hash_to_element.remove(&state.hash);
@@ -484,9 +582,32 @@ impl Registry {
       self.unsubscribe_all(&mut state, &process.observer);
     }
 
-    Some(Event::ElementRemoved {
+    events.push(Event::ElementRemoved {
       element_id: *element_id,
-    })
+    });
+
+    events
+  }
+
+  /// Remove a child from a parent's children list.
+  fn remove_child_from_parent(
+    &mut self,
+    parent_id: ElementId,
+    child_id: ElementId,
+    events: &mut Vec<Event>,
+  ) {
+    if let Some(parent_state) = self.elements.get_mut(&parent_id) {
+      if let Some(children) = &mut parent_state.element.children {
+        let old_len = children.len();
+        children.retain(|&id| id != child_id);
+        if children.len() != old_len {
+          // Emit ElementChanged for parent
+          events.push(Event::ElementChanged {
+            element: parent_state.element.clone(),
+          });
+        }
+      }
+    }
   }
 
   /// Unsubscribe from all notifications for an element.
@@ -629,9 +750,19 @@ pub fn get_focused_window() -> Option<WindowId> {
   Registry::with(|r| r.focused_window)
 }
 
-/// Set currently focused window.
+/// Set currently focused window. Emits FocusChanged if value changed.
 pub fn set_focused_window(window_id: Option<WindowId>) {
-  Registry::with(|r| r.focused_window = window_id);
+  let changed = Registry::with(|r| {
+    if r.focused_window != window_id {
+      r.focused_window = window_id;
+      true
+    } else {
+      false
+    }
+  });
+  if changed {
+    events::emit(Event::FocusChanged { window_id });
+  }
 }
 
 /// Get the focused window for a specific PID.
@@ -805,10 +936,10 @@ pub fn set_element_children(element_id: &ElementId, children: Vec<ElementId>) ->
   Ok(())
 }
 
-/// Remove an element.
+/// Remove an element (cascades to children).
 pub fn remove_element(element_id: &ElementId) {
-  let event = Registry::with(|r| r.remove_element_internal(element_id));
-  if let Some(event) = event {
+  let events = Registry::with(|r| r.remove_element_internal(element_id));
+  for event in events {
     events::emit(event);
   }
 }
@@ -837,12 +968,13 @@ where
   })
 }
 
-/// Info about a stored element needed for child discovery.
+/// Info about a stored element needed for child discovery and refresh.
 pub struct StoredElementInfo {
   pub handle: ElementHandle,
   pub window_id: WindowId,
   pub pid: u32,
   pub platform_role: String,
+  pub root: bool,
   pub parent_id: Option<ElementId>,
   pub children: Option<Vec<ElementId>>,
 }
@@ -859,6 +991,7 @@ pub fn get_stored_element_info(element_id: &ElementId) -> AxioResult<StoredEleme
       window_id: state.element.window_id,
       pid: state.pid,
       platform_role: state.platform_role.clone(),
+      root: state.element.root,
       parent_id: state.element.parent_id,
       children: state.element.children.clone(),
     })

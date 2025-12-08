@@ -18,7 +18,9 @@ pub mod util;
 pub mod window;
 
 // Re-export public API items
-pub use element::{click_element, discover_children, element_hash, refresh_element, write_element_value};
+pub use element::{
+  children, click_element, element_hash, parent, refresh_element, write_element_value,
+};
 pub use focus::get_current_focus;
 pub use notifications::{
   subscribe_app_notifications, subscribe_destruction_notification, subscribe_notifications,

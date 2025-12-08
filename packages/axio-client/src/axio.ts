@@ -26,6 +26,7 @@ type RpcReturns = {
   get: AXElement;
   window_root: AXElement;
   children: AXElement[];
+  parent: AXElement | null;
   refresh: AXElement;
   write: boolean;
   click: boolean;
@@ -150,10 +151,10 @@ export class AXIO extends EventEmitter<AxioEvents> {
     );
   }
 
-  /** Get root elements for a window (parent_id is null) */
-  getRootElements(windowId: WindowId): AXElement[] {
-    return Array.from(this.elements.values()).filter(
-      (el) => el.window_id === windowId && el.parent_id === null
+  /** Get root elements for a window (elements with root=true) */
+  getRootElement(windowId: WindowId): AXElement | undefined {
+    return Array.from(this.elements.values()).find(
+      (el) => el.window_id === windowId && el.root
     );
   }
 
@@ -178,6 +179,10 @@ export class AXIO extends EventEmitter<AxioEvents> {
   /** Get children of element (fetches from OS) */
   children = (element_id: ElementId, max_children = 1000) =>
     this.call("children", { element_id, max_children });
+
+  /** Get parent of element (fetches from OS, null if element is root) */
+  parent = (element_id: ElementId): Promise<AXElement | null> =>
+    this.call("parent", { element_id });
 
   /** Force re-fetch element from OS */
   refresh = (element_id: ElementId) => this.call("refresh", { element_id });
@@ -279,6 +284,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
     }
 
     const event = msg as Event;
+
     switch (event.event) {
       case "sync:init": {
         const {

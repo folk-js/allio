@@ -1,6 +1,6 @@
 use crate::events::emit;
 use crate::platform;
-use crate::types::{AXWindow, Event, Point, ProcessId, WindowId};
+use crate::types::{AXWindow, Event, Point, ProcessId};
 use parking_lot::Mutex;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,7 +14,6 @@ pub const DEFAULT_POLLING_INTERVAL_MS: u64 = 8;
 #[derive(Default)]
 struct PollingState {
   last_mouse_pos: Option<Point>,
-  last_focused_id: Option<WindowId>,
   poll_count: u64,
 }
 
@@ -281,26 +280,13 @@ fn poll_iteration(config: &PollingOptions, state: &mut PollingState, cleanup_int
       platform::enable_accessibility_for_pid(pid);
     }
 
-    // Get new state for focus tracking
-    let new_windows = registry::get_windows();
-
-    // Focus tracking
-    let focused_window = new_windows.iter().find(|w| w.focused);
-    let current_focused_id = focused_window.map(|w| w.id);
-
-    // Update focused_window in registry
-    registry::set_focused_window(current_focused_id);
-
-    if current_focused_id != state.last_focused_id {
-      emit(Event::FocusChanged {
-        window_id: current_focused_id,
-      });
-      state.last_focused_id = current_focused_id;
-    }
+    // Focus tracking - registry emits FocusChanged if value changed
+    let focused_window_id = raw_windows.iter().find(|w| w.focused).map(|w| w.id);
+    registry::set_focused_window(focused_window_id);
 
     // Periodic cleanup
     if state.poll_count % cleanup_interval == 0 {
-      let active_pids: HashSet<ProcessId> = new_windows.iter().map(|w| w.process_id).collect();
+      let active_pids: HashSet<ProcessId> = raw_windows.iter().map(|w| w.process_id).collect();
       let _observers_cleaned = registry::cleanup_dead_processes(&active_pids);
     }
   }

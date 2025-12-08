@@ -221,6 +221,12 @@ fn handle_element_notification(
       crate::registry::remove_element(element_id);
     }
 
+    Notification::ChildrenChanged => {
+      // Re-fetch children - this registers new ones and updates the children list
+      // The linking logic in register_element handles parent-child relationships
+      let _ = super::element::children(element_id, 1000);
+    }
+
     _ => {}
   }
 }

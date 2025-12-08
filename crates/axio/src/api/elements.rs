@@ -22,9 +22,14 @@ pub fn get_many(element_ids: &[ElementId]) -> Vec<AXElement> {
   registry::get_elements(element_ids)
 }
 
-/// Discover children of element (registers them, updates parent's children).
+/// Fetch and register children of element.
 pub fn children(element_id: &ElementId, max_children: usize) -> AxioResult<Vec<AXElement>> {
-  platform::discover_children(element_id, max_children)
+  platform::children(element_id, max_children)
+}
+
+/// Fetch and register parent of element (None if element is root).
+pub fn parent(element_id: &ElementId) -> AxioResult<Option<AXElement>> {
+  platform::parent(element_id)
 }
 
 /// Refresh element from platform (re-fetch attributes).

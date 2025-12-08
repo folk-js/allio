@@ -4,4 +4,4 @@ import type { AXElement } from "./AXElement";
 /**
  * RPC response variants
  */
-export type RpcResponse = AXElement | Array<AXElement> | null;
+export type RpcResponse = AXElement | AXElement | null | Array<AXElement> | null;

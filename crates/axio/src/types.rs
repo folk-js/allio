@@ -145,7 +145,10 @@ pub struct AXElement {
   pub window_id: WindowId,
   /// Process that owns this element (may differ from window's process for helper processes)
   pub pid: ProcessId,
-  /// None = root element of window
+  /// True if this is a window root element (has no parent in the OS tree)
+  #[serde(default)]
+  pub root: bool,
+  /// None = root (if root=true) or parent not yet loaded (if root=false)
   pub parent_id: Option<ElementId>,
   /// Child element IDs. None = not yet fetched, Some([]) = no children
   pub children: Option<Vec<ElementId>>,

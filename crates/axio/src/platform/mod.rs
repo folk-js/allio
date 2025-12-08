@@ -18,15 +18,16 @@ pub mod macos;
 pub use macos::{
   // Core functionality
   check_accessibility_permissions,
+  children,
   click_element,
   create_observer_for_pid,
-  discover_children,
   element_hash,
   enable_accessibility_for_pid,
   fetch_window_handle,
   get_current_focus,
   get_element_at_position,
   get_window_root,
+  parent,
   refresh_element,
   // Notification subscriptions
   subscribe_app_notifications,

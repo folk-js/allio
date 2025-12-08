@@ -20,6 +20,8 @@ pub enum RpcRequest {
     #[serde(default = "default_max_children")]
     max_children: usize,
   },
+  /// Discover parent of element (None if element is a root)
+  Parent { element_id: ElementId },
   /// Refresh element attributes from macOS
   Refresh { element_id: ElementId },
   /// Write text to element
@@ -43,6 +45,8 @@ fn default_max_children() -> usize {
 pub enum RpcResponse {
   /// Single element (boxed to reduce enum size - AXElement is 288 bytes)
   Element(Box<AXElement>),
+  /// Optional element (for parent which can be None)
+  OptionalElement(Option<Box<AXElement>>),
   Elements(Vec<AXElement>),
   Null,
 }
@@ -85,6 +89,11 @@ pub fn dispatch(request: RpcRequest) -> Result<RpcResponse, String> {
     } => {
       let children = elements::children(&element_id, max_children).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Elements(children))
+    }
+
+    RpcRequest::Parent { element_id } => {
+      let parent = elements::parent(&element_id).map_err(|e| e.to_string())?;
+      Ok(RpcResponse::OptionalElement(parent.map(Box::new)))
     }
 
     RpcRequest::Refresh { element_id } => {

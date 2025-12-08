@@ -19,8 +19,8 @@ class AXTreeOverlay {
   private expanded = new Set<ElementId>();
   private treeEl: HTMLElement | null = null;
   private outlineEl: HTMLElement | null = null;
-  // Track the actual tree root per window (not all elements with parent_id: null)
-  private windowRoots = new Map<WindowId, ElementId>();
+  // Track which windows we've fetched the tree root for
+  private fetchedRoots = new Set<WindowId>();
 
   constructor() {
     this.container = document.getElementById("windowContainer")!;
@@ -59,7 +59,7 @@ class AXTreeOverlay {
 
     // Clean up tracked roots when windows are removed
     this.axio.on("window:removed", (data) => {
-      this.windowRoots.delete(data.window_id);
+      this.fetchedRoots.delete(data.window_id);
       render();
     });
 
@@ -87,9 +87,8 @@ class AXTreeOverlay {
   private async fetchWindowRoot(windowId: WindowId): Promise<void> {
     try {
       const root = await this.axio.windowRoot(windowId);
-      // Track the actual tree root (not just any element with parent_id: null)
       if (root) {
-        this.windowRoots.set(windowId, root.id);
+        this.fetchedRoots.add(windowId);
         // Also fetch immediate children so tree is usable
         await this.axio.children(root.id);
       }
@@ -108,9 +107,8 @@ class AXTreeOverlay {
       return;
     }
 
-    // Get the tracked tree root for this window (not all elements with parent_id: null)
-    const rootId = this.windowRoots.get(win.id);
-    const rootElement = rootId ? this.axio.get(rootId) : null;
+    // Get the root element for this window (elements with root=true)
+    const rootElement = this.axio.getRootElement(win.id);
 
     // Create tree container if needed
     if (!this.treeEl) {

@@ -62,10 +62,20 @@ pub fn build_element_from_handle(
     attrs.subrole
   };
 
+  // Determine if this is a window root element.
+  // In macOS, even windows have AXParent (the application element).
+  // We consider an element a "root" if its parent is the application.
+  let root = handle
+    .get_element("AXParent")
+    .and_then(|p| p.get_string("AXRole"))
+    .as_deref()
+    == Some("AXApplication");
+
   let element = AXElement {
     id: ElementId::new(),
     window_id: *window_id,
     pid: ProcessId(pid),
+    root,
     parent_id: parent_id.copied(),
     children: None,
     role,
@@ -84,13 +94,13 @@ pub fn build_element_from_handle(
 }
 
 // =============================================================================
-// Child Discovery
+// Children
 // =============================================================================
 
-/// Discover and register children of an element.
+/// Fetch and register children of an element.
 /// ElementAdded events are emitted by register_element for new children.
 /// ElementChanged is emitted by set_element_children if children changed.
-pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResult<Vec<AXElement>> {
+pub fn children(parent_id: &ElementId, max_children: usize) -> AxioResult<Vec<AXElement>> {
   let info = crate::registry::get_stored_element_info(parent_id)?;
 
   // Use safe ElementHandle method
@@ -122,6 +132,27 @@ pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResu
 }
 
 // =============================================================================
+// Parent
+// =============================================================================
+
+/// Fetch and register parent of an element.
+/// Returns None if element is a root (no parent in OS tree).
+/// The lazy linking in register_element will connect this element to the parent.
+pub fn parent(element_id: &ElementId) -> AxioResult<Option<AXElement>> {
+  let info = crate::registry::get_stored_element_info(element_id)?;
+
+  // Get parent handle from OS
+  let Some(parent_handle) = info.handle.get_element("AXParent") else {
+    // No parent - this is a root element
+    return Ok(None);
+  };
+
+  // Build and register parent (linking happens in register_element)
+  let parent = build_element_from_handle(parent_handle, &info.window_id, info.pid, None);
+  Ok(parent)
+}
+
+// =============================================================================
 // Element Refresh
 // =============================================================================
 
@@ -144,6 +175,7 @@ pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
     id: *element_id,
     window_id: info.window_id,
     pid: ProcessId(info.pid),
+    root: info.root,
     parent_id: info.parent_id,
     children: info.children,
     role,

@@ -21,7 +21,11 @@ window_id: WindowId,
  */
 pid: ProcessId, 
 /**
- * None = root element of window
+ * True if this is a window root element (has no parent in the OS tree)
+ */
+root: boolean, 
+/**
+ * None = root (if root=true) or parent not yet loaded (if root=false)
  */
 parent_id: ElementId | null, 
 /**
