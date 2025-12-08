@@ -34,13 +34,13 @@ pub fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
     Some(id) => id,
     None => {
       // Expected when desktop is focused or window not yet tracked
-      log::debug!("FocusChanged: no window_id found for PID {}, skipping", pid);
+      log::debug!("FocusChanged: no window_id found for PID {pid}, skipping");
       return;
     }
   };
 
   let Some(ax_element) = build_element_from_handle(handle, &window_id, pid, None) else {
-    log::warn!("FocusChanged: element build failed for PID {}", pid);
+    log::warn!("FocusChanged: element build failed for PID {pid}");
     return;
   };
 
@@ -92,15 +92,14 @@ pub fn handle_app_selection_changed(pid: u32, element: CFRetained<AXUIElement>) 
     None => {
       // Expected when desktop is focused or window not yet tracked
       log::debug!(
-        "SelectionChanged: no window_id found for PID {}, skipping",
-        pid
+        "SelectionChanged: no window_id found for PID {pid}, skipping"
       );
       return;
     }
   };
 
   let Some(ax_element) = build_element_from_handle(handle.clone(), &window_id, pid, None) else {
-    log::warn!("SelectionChanged: element build failed for PID {}", pid);
+    log::warn!("SelectionChanged: element build failed for PID {pid}");
     return;
   };
 

@@ -163,7 +163,7 @@ unsafe extern "C-unwind" fn unified_observer_callback(
 
     // Convert macOS string to our Notification type
     let Some(notif) = notification_from_macos(&notification_str) else {
-      log::warn!("Unknown macOS notification: {}", notification_str);
+      log::warn!("Unknown macOS notification: {notification_str}");
       return;
     };
 

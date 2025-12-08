@@ -284,7 +284,7 @@ mod tests {
     for n in notifs {
       let macos_str = notification_to_macos(n);
       let back = notification_from_macos(macos_str);
-      assert_eq!(back, Some(n), "Roundtrip failed for {:?}", n);
+      assert_eq!(back, Some(n), "Roundtrip failed for {n:?}");
     }
   }
 
@@ -293,7 +293,7 @@ mod tests {
     for action in Action::ALL {
       let macos_str = action_to_macos(*action);
       let back = action_from_macos(macos_str);
-      assert_eq!(back, Some(*action), "Roundtrip failed for {:?}", action);
+      assert_eq!(back, Some(*action), "Roundtrip failed for {action:?}");
     }
   }
 

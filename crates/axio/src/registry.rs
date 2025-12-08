@@ -180,9 +180,7 @@ impl Registry {
     // Subscribe to app-level notifications (focus, selection)
     if let Err(e) = platform::subscribe_app_notifications(pid, &observer) {
       log::warn!(
-        "Failed to subscribe app notifications for PID {}: {:?}",
-        pid,
-        e
+        "Failed to subscribe app notifications for PID {pid}: {e:?}"
       );
     }
 
@@ -271,7 +269,7 @@ impl Registry {
       } else {
         // New window - ensure process exists
         if let Err(e) = self.get_or_create_process(pid) {
-          log::warn!("Failed to create process for window {}: {:?}", window_id, e);
+          log::warn!("Failed to create process for window {window_id}: {e:?}");
           continue;
         }
 

@@ -37,7 +37,7 @@ pub fn get_window_elements(pid: u32) -> AxioResult<Vec<ElementHandle>> {
 /// Get the root element for a window.
 pub fn get_window_root(window_id: &WindowId) -> AxioResult<AXElement> {
   let (window, handle) = crate::registry::get_window_with_handle(window_id)
-    .ok_or_else(|| AxioError::WindowNotFound(*window_id))?;
+    .ok_or(AxioError::WindowNotFound(*window_id))?;
 
   let window_handle =
     handle.ok_or_else(|| AxioError::Internal(format!("Window {window_id} has no AX element")))?;
@@ -84,7 +84,7 @@ pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
   let mut element_handle = None;
   let mut fallback_container = None;
 
-  for (_, &delay_ms) in HIT_TEST_RETRY_DELAYS_MS.iter().enumerate() {
+  for &delay_ms in HIT_TEST_RETRY_DELAYS_MS.iter() {
     if delay_ms > 0 {
       std::thread::sleep(std::time::Duration::from_millis(delay_ms));
     }
