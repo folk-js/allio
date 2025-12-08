@@ -197,33 +197,23 @@ fn handle_element_notification(
   notif: Notification,
   ax_element: CFRetained<AXUIElement>,
 ) {
-  use crate::events::emit;
-  use crate::types::Event;
-
   match notif {
     Notification::ValueChanged => {
       let handle = ElementHandle::new(ax_element);
       let attrs = handle.get_attributes(None);
-      // Always emit when value changes, even when it becomes empty (None)
+      // update_element emits ElementChanged if value actually changed
       if let Ok(mut element) = crate::registry::get_element(element_id) {
         element.value = attrs.value;
-        let _ = crate::registry::update_element(element_id, element.clone());
-        emit(Event::ElementChanged {
-          element: element.clone(),
-        });
+        let _ = crate::registry::update_element(element_id, element);
       }
     }
 
     Notification::TitleChanged => {
       let handle = ElementHandle::new(ax_element);
-      // Always emit when title changes, even when it becomes empty
-      // get_string returns None for empty strings, which is fine for label storage
+      // update_element emits ElementChanged if label actually changed
       if let Ok(mut element) = crate::registry::get_element(element_id) {
         element.label = handle.get_string("AXTitle");
-        let _ = crate::registry::update_element(element_id, element.clone());
-        emit(Event::ElementChanged {
-          element: element.clone(),
-        });
+        let _ = crate::registry::update_element(element_id, element);
       }
     }
 

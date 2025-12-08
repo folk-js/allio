@@ -9,9 +9,8 @@
 
 use objc2_core_foundation::CFHash;
 
-use crate::events::emit;
 use crate::platform::handles::ElementHandle;
-use crate::types::{AXElement, AxioError, AxioResult, ElementId, Event, ProcessId, WindowId};
+use crate::types::{AXElement, AxioError, AxioResult, ElementId, ProcessId, WindowId};
 
 use super::mapping::{ax_action, role_from_macos};
 use crate::accessibility::Role;
@@ -90,12 +89,14 @@ pub fn build_element_from_handle(
 
 /// Discover and register children of an element.
 /// ElementAdded events are emitted by register_element for new children.
+/// ElementChanged is emitted by set_element_children if children changed.
 pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResult<Vec<AXElement>> {
   let info = crate::registry::get_stored_element_info(parent_id)?;
 
   // Use safe ElementHandle method
   let child_handles = info.handle.get_children();
   if child_handles.is_empty() {
+    // set_element_children emits ElementChanged if children changed
     crate::registry::set_element_children(parent_id, vec![])?;
     return Ok(vec![]);
   }
@@ -114,13 +115,8 @@ pub fn discover_children(parent_id: &ElementId, max_children: usize) -> AxioResu
     }
   }
 
+  // set_element_children emits ElementChanged if children changed
   crate::registry::set_element_children(parent_id, child_ids)?;
-
-  if let Ok(updated_parent) = crate::registry::get_element(parent_id) {
-    emit(Event::ElementChanged {
-      element: updated_parent.clone(),
-    });
-  }
 
   Ok(children)
 }

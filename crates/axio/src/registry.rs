@@ -740,28 +740,53 @@ pub fn get_all_elements() -> Vec<AXElement> {
   Registry::with(|r| r.elements.values().map(|e| e.element.clone()).collect())
 }
 
-/// Update element data.
+/// Update element data. Emits ElementChanged if the element actually changed.
 pub fn update_element(element_id: &ElementId, updated: AXElement) -> AxioResult<()> {
-  Registry::with(|r| {
+  let maybe_event = Registry::with(|r| {
     let state = r
       .elements
       .get_mut(element_id)
       .ok_or(AxioError::ElementNotFound(*element_id))?;
-    state.element = updated;
-    Ok(())
-  })
+
+    // Only emit if something changed
+    if state.element != updated {
+      state.element = updated.clone();
+      Ok(Some(Event::ElementChanged { element: updated }))
+    } else {
+      Ok(None)
+    }
+  })?;
+
+  if let Some(event) = maybe_event {
+    events::emit(event);
+  }
+  Ok(())
 }
 
-/// Set children for an element.
+/// Set children for an element. Emits ElementChanged if children changed.
 pub fn set_element_children(element_id: &ElementId, children: Vec<ElementId>) -> AxioResult<()> {
-  Registry::with(|r| {
+  let maybe_event = Registry::with(|r| {
     let state = r
       .elements
       .get_mut(element_id)
       .ok_or(AxioError::ElementNotFound(*element_id))?;
-    state.element.children = Some(children);
-    Ok(())
-  })
+
+    let new_children = Some(children);
+    // Only emit if children changed
+    if state.element.children != new_children {
+      state.element.children = new_children;
+      Ok(Some(Event::ElementChanged {
+        element: state.element.clone(),
+      }))
+    } else {
+      Ok(None)
+    }
+  })?;
+
+  if let Some(event) = maybe_event {
+    events::emit(event);
+  }
+  Ok(())
 }
 
 /// Remove an element.
