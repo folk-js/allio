@@ -8,7 +8,6 @@ use std::{
     Mutex,
   },
   thread,
-  time::Duration,
 };
 use tauri::{
   image::Image,
@@ -301,11 +300,6 @@ fn handle_tray_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
   // We spawn a thread, sleep briefly to let muda finish its internal cleanup,
   // then dispatch to main thread to handle the event.
   thread::spawn(move || {
-    // Wait for muda to finish accessing the old menu items.
-    // This delay is critical - without it, muda may still be iterating
-    // over menu items when we clear the tray_event_active flag.
-    thread::sleep(Duration::from_millis(50));
-
     let app = handle.clone();
     let _ = handle.run_on_main_thread(move || {
       // Re-enable menu updates now that muda has finished

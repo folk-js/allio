@@ -42,7 +42,7 @@ pub fn verify_permissions() -> bool {
 
 /// Get a snapshot of the current registry state for sync.
 /// Note: `accessibility_enabled` field will be `false` - caller should set it.
-pub fn snapshot() -> SyncInit {
+pub fn snapshot() -> Snapshot {
   registry::snapshot()
 }
 

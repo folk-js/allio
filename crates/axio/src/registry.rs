@@ -715,7 +715,7 @@ pub fn get_depth_order() -> Vec<WindowId> {
 
 /// Get a snapshot of the current registry state for sync.
 /// Note: `accessibility_enabled` must be set by caller (platform-specific check).
-pub fn snapshot() -> crate::types::SyncInit {
+pub fn snapshot() -> crate::types::Snapshot {
   Registry::with(|r| {
     let (focused_element, selection) = r
       .focused_window
@@ -739,7 +739,7 @@ pub fn snapshot() -> crate::types::SyncInit {
       })
       .unwrap_or((None, None));
 
-    crate::types::SyncInit {
+    crate::types::Snapshot {
       windows: r.windows.values().map(|w| w.info.clone()).collect(),
       elements: r.elements.values().map(|s| s.element.clone()).collect(),
       focused_window: r.focused_window,

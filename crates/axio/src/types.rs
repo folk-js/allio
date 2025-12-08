@@ -200,7 +200,7 @@ pub struct Selection {
 /// Initial state sent on connection
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
-pub struct SyncInit {
+pub struct Snapshot {
   pub windows: Vec<AXWindow>,
   pub elements: Vec<AXElement>,
   pub focused_window: Option<WindowId>,
@@ -218,7 +218,7 @@ pub struct SyncInit {
 pub enum Event {
   // Initial sync (on connection)
   #[serde(rename = "sync:init")]
-  SyncInit(SyncInit),
+  SyncInit(Snapshot),
 
   // Window lifecycle (from polling)
   #[serde(rename = "window:added")]
