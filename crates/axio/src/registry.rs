@@ -54,6 +54,8 @@ struct ProcessState {
   observer: ObserverHandle,
   /// Currently focused element in this app.
   focused_element: Option<ElementId>,
+  /// Last selection state for deduplication (element_id, text).
+  last_selection: Option<(ElementId, String)>,
 }
 
 /// Per-window state.
@@ -186,6 +188,7 @@ impl Registry {
       ProcessState {
         observer,
         focused_element: None,
+        last_selection: None,
       },
     );
 
@@ -663,6 +666,21 @@ pub fn set_process_focus(pid: u32, element_id: ElementId) -> Option<ElementId> {
       previous
     } else {
       None
+    }
+  })
+}
+
+/// Set selection for a process, returns true if selection changed (for deduplication).
+pub fn set_process_selection(pid: u32, element_id: ElementId, text: &str) -> bool {
+  Registry::with(|r| {
+    let process_id = ProcessId(pid);
+    if let Some(process) = r.processes.get_mut(&process_id) {
+      let new_selection = (element_id, text.to_string());
+      let changed = process.last_selection.as_ref() != Some(&new_selection);
+      process.last_selection = Some(new_selection);
+      changed
+    } else {
+      false
     }
   })
 }

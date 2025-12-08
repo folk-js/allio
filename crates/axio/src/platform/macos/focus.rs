@@ -44,26 +44,34 @@ pub fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
     return;
   };
 
-  let new_is_watchable = should_auto_watch(&ax_element.role);
+  // Only emit focus for elements that self-identify as focused.
+  // macOS sends AXFocusedUIElementChanged for intermediate elements during click propagation,
+  // but only the actual target has focused=true.
+  if ax_element.focused != Some(true) {
+    return;
+  }
 
   // Update focus in registry, get previous
   let previous_element_id = crate::registry::set_process_focus(pid, ax_element.id);
   let same_element = previous_element_id.as_ref() == Some(&ax_element.id);
 
+  // Skip if focus hasn't actually changed (macOS often sends duplicate notifications)
+  if same_element {
+    return;
+  }
+
   // Auto-watch/unwatch based on role
-  if !same_element {
-    if let Some(ref prev_id) = previous_element_id {
-      // Check if previous was watchable before unwatching
-      if let Ok(prev_elem) = crate::registry::get_element(prev_id) {
-        if should_auto_watch(&prev_elem.role) {
-          crate::registry::unwatch_element(prev_id);
-        }
+  if let Some(ref prev_id) = previous_element_id {
+    // Check if previous was watchable before unwatching
+    if let Ok(prev_elem) = crate::registry::get_element(prev_id) {
+      if should_auto_watch(&prev_elem.role) {
+        crate::registry::unwatch_element(prev_id);
       }
     }
+  }
 
-    if new_is_watchable {
-      let _ = crate::registry::watch_element(&ax_element.id);
-    }
+  if should_auto_watch(&ax_element.role) {
+    let _ = crate::registry::watch_element(&ax_element.id);
   }
 
   emit(Event::FocusElement {
@@ -97,6 +105,12 @@ pub fn handle_app_selection_changed(pid: u32, element: CFRetained<AXUIElement>) 
   };
 
   let selected_text = handle.get_string("AXSelectedText").unwrap_or_default();
+
+  // Skip if selection hasn't changed (macOS often sends duplicate notifications)
+  if !crate::registry::set_process_selection(pid, ax_element.id, &selected_text) {
+    return;
+  }
+
   let range = if selected_text.is_empty() {
     None
   } else {

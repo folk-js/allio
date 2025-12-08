@@ -19,6 +19,8 @@ class AXTreeOverlay {
   private expanded = new Set<ElementId>();
   private treeEl: HTMLElement | null = null;
   private outlineEl: HTMLElement | null = null;
+  // Track the actual tree root per window (not all elements with parent_id: null)
+  private windowRoots = new Map<WindowId, ElementId>();
 
   constructor() {
     this.container = document.getElementById("windowContainer")!;
@@ -53,6 +55,12 @@ class AXTreeOverlay {
       render();
     });
 
+    // Clean up tracked roots when windows are removed
+    this.axio.on("window:removed", (data) => {
+      this.windowRoots.delete(data.window_id);
+      render();
+    });
+
     // Re-render on window/element changes
     // Note: Tier 2 auto-watches text elements on focus, so element:changed fires automatically
     (
@@ -61,7 +69,6 @@ class AXTreeOverlay {
         "focus:element", // Tier 1: element focus changes
         "selection:changed", // Tier 1: text selection changes
         "window:changed",
-        "window:removed",
         "element:added",
         "element:changed",
         "element:removed",
@@ -78,8 +85,10 @@ class AXTreeOverlay {
   private async fetchWindowRoot(windowId: WindowId): Promise<void> {
     try {
       const root = await this.axio.windowRoot(windowId);
-      // Also fetch immediate children so tree is usable
+      // Track the actual tree root (not just any element with parent_id: null)
       if (root) {
+        this.windowRoots.set(windowId, root.id);
+        // Also fetch immediate children so tree is usable
         await this.axio.children(root.id);
       }
     } catch (err) {
@@ -97,8 +106,9 @@ class AXTreeOverlay {
       return;
     }
 
-    // Get root elements for this window
-    const rootElements = this.axio.getRootElements(win.id);
+    // Get the tracked tree root for this window (not all elements with parent_id: null)
+    const rootId = this.windowRoots.get(win.id);
+    const rootElement = rootId ? this.axio.get(rootId) : null;
 
     // Create tree container if needed
     if (!this.treeEl) {
@@ -116,13 +126,13 @@ class AXTreeOverlay {
       height: `${win.bounds.h}px`,
     });
 
-    // Only render content if we have elements
-    if (rootElements.length === 0) {
+    // Only render content if we have the root element
+    if (!rootElement) {
       this.treeEl.innerHTML = `<div class="tree-loading">Loading...</div>`;
       return;
     }
 
-    // Render content
+    // Render content starting from the tracked root
     this.treeEl.innerHTML = `
       <div class="tree-legend">
         <span class="legend-item"><span class="tree-role">role</span></span>
@@ -131,7 +141,7 @@ class AXTreeOverlay {
         <span class="legend-item"><span class="tree-actions">[actions]</span></span>
         <span class="legend-item"><span class="tree-pid">[pid]</span></span>
       </div>
-      <div class="tree-content">${this.renderNodes(rootElements)}</div>
+      <div class="tree-content">${this.renderNodes([rootElement])}</div>
     `;
   }
 

@@ -283,7 +283,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
     if (!msg.event) return;
 
     if (msg.event !== "mouse:position") {
-      this.log(JSON.stringify(msg, null, 2));
+      this.log(msg.event, msg.data);
     }
 
     const event = msg as Event;
