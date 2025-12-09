@@ -15,9 +15,6 @@ mod platform;
 mod polling;
 mod registry;
 
-#[cfg(feature = "ws")]
-pub mod ws;
-
 pub mod accessibility;
 
 mod types;

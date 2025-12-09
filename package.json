@@ -12,7 +12,7 @@
     "build": "tsc && vite build",
     "check": "cargo check",
     "docs": "cargo doc -p axio --open",
-    "typegen": "rm -rf packages/axio-client/src/types/generated && cargo test -p axio --features ws export_bindings"
+    "typegen": "rm -rf packages/axio-client/src/types/generated && cargo test -p axio -p axio-ws export_bindings"
   },
   "dependencies": {
     "d3-force": "^3.0.0"

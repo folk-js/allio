@@ -20,8 +20,8 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 #[cfg(target_os = "macos")]
 use tauri_nspanel::{tauri_panel, ManagerExt as _, PanelLevel, StyleMask, WebviewWindowExt as _};
 
-use axio::ws::WebSocketState;
 use axio::{PollingHandle, PollingOptions};
+use axio_ws::WebSocketState;
 
 #[cfg(target_os = "macos")]
 tauri_panel! {
@@ -373,7 +373,7 @@ fn load_file(app: &AppHandle, path: &Path) -> Result<(), Box<dyn std::error::Err
   Ok(())
 }
 
-fn create_rpc_handler(app_handle: AppHandle) -> axio::ws::CustomRpcHandler {
+fn create_rpc_handler(app_handle: AppHandle) -> axio_ws::CustomRpcHandler {
   let last_state = std::sync::Arc::new(AtomicBool::new(true));
 
   std::sync::Arc::new(move |method, args| {
@@ -556,7 +556,7 @@ fn main() {
       thread::spawn(move || {
         tokio::runtime::Runtime::new()
           .expect("Failed to create runtime")
-          .block_on(axio::ws::start_server(ws));
+          .block_on(axio_ws::start_server(ws));
       });
 
       Ok(())

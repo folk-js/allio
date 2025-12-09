@@ -4,8 +4,8 @@ RPC request/response types and dispatch.
 
 #![allow(missing_docs)]
 
-use crate::accessibility::Value as AXValue;
-use crate::{elements, AXElement, ElementId, Snapshot, WindowId};
+use axio::accessibility::Value as AXValue;
+use axio::{elements, AXElement, ElementId, Snapshot, WindowId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use ts_rs::TS;
@@ -83,7 +83,7 @@ pub fn dispatch_json(method: &str, args: &JsonValue) -> JsonValue {
 pub fn dispatch(request: RpcRequest) -> Result<RpcResponse, String> {
   match request {
     RpcRequest::Snapshot => {
-      let snapshot = crate::snapshot();
+      let snapshot = axio::snapshot();
       Ok(RpcResponse::Snapshot(Box::new(snapshot)))
     }
 
@@ -142,3 +142,4 @@ pub fn dispatch(request: RpcRequest) -> Result<RpcResponse, String> {
     }
   }
 }
+

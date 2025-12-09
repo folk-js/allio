@@ -13,10 +13,6 @@ categories = ["accessibility", "api-bindings"]
 [lints]
 workspace = true
 
-[features]
-default = []
-ws = ["axum", "tower-http", "tokio/rt-multi-thread", "tokio/net"]
-
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -26,10 +22,6 @@ parking_lot = "0.12"
 thiserror = "2"
 tokio = { version = "1", features = ["sync"] }
 ts-rs = "10"
-
-# WebSocket server (optional, enabled with "ws" feature)
-axum = { version = "0.7", features = ["ws"], optional = true }
-tower-http = { version = "0.5", features = ["cors"], optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.3"

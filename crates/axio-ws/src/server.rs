@@ -2,7 +2,7 @@
 WebSocket server implementation.
 */
 
-use crate::Event;
+use axio::Event;
 use axum::{
   extract::{
     ws::{Message, WebSocket, WebSocketUpgrade},
@@ -81,7 +81,7 @@ pub async fn start_server(ws_state: WebSocketState) {
   let port = ws_state.port;
   // Spawn event forwarding task
   let sender = ws_state.json_sender.clone();
-  let mut rx = crate::subscribe();
+  let mut rx = axio::subscribe();
   tokio::spawn(async move {
     while let Ok(event) = rx.recv().await {
       if let Ok(json) = serde_json::to_string(&event) {
@@ -130,7 +130,7 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
   println!("[client] connected");
 
   // Send initial state as sync:init (run on blocking thread pool)
-  let init_result = tokio::task::spawn_blocking(crate::snapshot).await;
+  let init_result = tokio::task::spawn_blocking(axio::snapshot).await;
 
   let Ok(init) = init_result else {
     return;
@@ -217,7 +217,7 @@ async fn handle_request_async(request: &str, ws_state: &WebSocketState) -> Strin
 
   // Axio RPC - run on blocking thread pool (AX API calls are slow IPC)
   let dispatch_result =
-    tokio::task::spawn_blocking(move || super::rpc::dispatch_json(&method, &args)).await;
+    tokio::task::spawn_blocking(move || crate::rpc::dispatch_json(&method, &args)).await;
 
   let mut response = match dispatch_result {
     Ok(r) => r,
@@ -228,3 +228,4 @@ async fn handle_request_async(request: &str, ws_state: &WebSocketState) -> Strin
   }
   response.to_string()
 }
+
