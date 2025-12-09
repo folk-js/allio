@@ -2,7 +2,8 @@
 Read-only state queries.
 */
 
-use super::{Axio, StoredElementInfo};
+use super::state::ElementState;
+use super::Axio;
 use crate::platform::ElementHandle;
 use crate::types::{AXElement, AXWindow, AxioError, AxioResult, ElementId, WindowId};
 
@@ -144,37 +145,19 @@ impl Axio {
     }
   }
 
-  /// Get stored element info for operations that need it.
-  pub(crate) fn get_stored_element_info(
-    &self,
-    element_id: ElementId,
-  ) -> AxioResult<StoredElementInfo> {
-    let state = self.state.read();
-    let elem_state = state
-      .elements
-      .get(&element_id)
-      .ok_or(AxioError::ElementNotFound(element_id))?;
-    Ok(StoredElementInfo {
-      handle: elem_state.handle.clone(),
-      window_id: elem_state.element.window_id,
-      pid: elem_state.pid,
-      platform_role: elem_state.platform_role.clone(),
-      is_root: elem_state.element.is_root,
-      parent_id: elem_state.element.parent_id,
-      children: elem_state.element.children.clone(),
-    })
-  }
-
-  /// Access stored element handle for operations (click, write).
-  pub(crate) fn with_element_handle<F, R>(&self, element_id: ElementId, f: F) -> AxioResult<R>
+  /// Access element state via closure.
+  ///
+  /// Use this to extract what you need from element state without
+  /// copying everything into a separate struct.
+  pub(crate) fn with_element<F, R>(&self, element_id: ElementId, f: F) -> AxioResult<R>
   where
-    F: FnOnce(&ElementHandle, &str) -> R,
+    F: FnOnce(&ElementState) -> R,
   {
     let state = self.state.read();
     let elem_state = state
       .elements
       .get(&element_id)
       .ok_or(AxioError::ElementNotFound(element_id))?;
-    Ok(f(&elem_state.handle, &elem_state.platform_role))
+    Ok(f(elem_state))
   }
 }

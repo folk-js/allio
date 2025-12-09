@@ -38,16 +38,41 @@ pub(crate) struct ElementState {
   pub(crate) hash: u64,
   /// `CFHash` of this element's OS parent (for lazy linking).
   pub(crate) parent_hash: Option<u64>,
-  /// Process ID (needed for observer operations).
-  pub(crate) pid: u32,
-  /// Platform role string (for notification decisions).
-  pub(crate) platform_role: String,
+  /// Raw platform role string, e.g. "AXButton" (for role mapping).
+  pub(crate) raw_role: String,
   /// Active notification subscriptions.
   pub(crate) subscriptions: HashSet<Notification>,
   /// Context handle for destruction tracking (always set).
   pub(crate) destruction_context: Option<*mut c_void>,
   /// Context handle for watch notifications (when watched).
   pub(crate) watch_context: Option<*mut c_void>,
+}
+
+impl ElementState {
+  /// Create a new element state (subscriptions initialized empty).
+  pub(crate) fn new(
+    element: AXElement,
+    handle: ElementHandle,
+    hash: u64,
+    parent_hash: Option<u64>,
+    raw_role: String,
+  ) -> Self {
+    Self {
+      element,
+      handle,
+      hash,
+      parent_hash,
+      raw_role,
+      subscriptions: HashSet::new(),
+      destruction_context: None,
+      watch_context: None,
+    }
+  }
+
+  /// Get process ID from the element.
+  pub(crate) fn pid(&self) -> u32 {
+    self.element.pid.0
+  }
 }
 
 // SAFETY: State is protected by RwLock, and raw pointers (context handles)
@@ -99,22 +124,3 @@ impl State {
   }
 }
 
-/// Data returned by platform element building (before registration).
-pub(crate) struct ElementData {
-  pub(crate) element: AXElement,
-  pub(crate) handle: ElementHandle,
-  pub(crate) hash: u64,
-  pub(crate) parent_hash: Option<u64>,
-  pub(crate) raw_role: String,
-}
-
-/// Info about a stored element needed for child discovery and refresh.
-pub(crate) struct StoredElementInfo {
-  pub(crate) handle: ElementHandle,
-  pub(crate) window_id: WindowId,
-  pub(crate) pid: u32,
-  pub(crate) platform_role: String,
-  pub(crate) is_root: bool,
-  pub(crate) parent_id: Option<ElementId>,
-  pub(crate) children: Option<Vec<ElementId>>,
-}

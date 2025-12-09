@@ -36,7 +36,7 @@ impl Axio {
       return Ok(()); // Already watching
     }
 
-    let process_id = ProcessId(elem_state.pid);
+    let process_id = ProcessId(elem_state.pid());
     let observer = state
       .processes
       .get(&process_id)
@@ -52,7 +52,7 @@ impl Axio {
       &elem_state.element.id,
       &elem_state.handle,
       observer,
-      &elem_state.platform_role,
+      &elem_state.raw_role,
       &notifs,
       axio,
     )?;
@@ -79,7 +79,7 @@ impl Axio {
       return Ok(());
     };
 
-    let process_id = ProcessId(elem_state.pid);
+    let process_id = ProcessId(elem_state.pid());
     let process = state
       .processes
       .get(&process_id)

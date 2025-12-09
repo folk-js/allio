@@ -2,7 +2,7 @@
 State mutation methods.
 */
 
-use super::state::{ElementData, ElementState, ProcessState, State, WindowState};
+use super::state::{ElementState, ProcessState, State, WindowState};
 use super::Axio;
 use crate::accessibility::Notification;
 use crate::platform::{self, ObserverHandle};
@@ -169,11 +169,11 @@ impl Axio {
   }
 
   /// Register an element. Returns existing if hash matches.
-  pub(crate) fn register_element(&self, data: ElementData) -> Option<AXElement> {
+  pub(crate) fn register_element(&self, elem_state: ElementState) -> Option<AXElement> {
     let mut events = Vec::new();
     let result = {
       let mut state = self.state.write();
-      Self::register_internal(&mut state, data, self, &mut events)
+      Self::register_internal(&mut state, elem_state, self, &mut events)
     };
     self.emit_all(events);
     result
@@ -329,14 +329,14 @@ impl Axio {
     element_id: ElementId,
     value: &crate::accessibility::Value,
   ) -> AxioResult<()> {
-    self.with_element_handle(element_id, |handle, platform_role| {
-      platform::write_element_value(handle, value, platform_role)
+    self.with_element(element_id, |e| {
+      platform::write_element_value(&e.handle, value, &e.raw_role)
     })?
   }
 
   /// Click element.
   pub(crate) fn click_element(&self, element_id: ElementId) -> AxioResult<()> {
-    self.with_element_handle(element_id, |handle, _| platform::click_element(handle))?
+    self.with_element(element_id, |e| platform::click_element(&e.handle))?
   }
 }
 
@@ -378,19 +378,12 @@ impl Axio {
   /// Register a new element. Returns existing if hash matches.
   pub(super) fn register_internal(
     state: &mut State,
-    data: ElementData,
+    mut elem_state: ElementState,
     axio: &Axio,
     events: &mut Vec<Event>,
   ) -> Option<AXElement> {
-    let ElementData {
-      mut element,
-      handle,
-      hash,
-      parent_hash,
-      raw_role,
-    } = data;
-
-    let window_id = element.window_id;
+    let hash = elem_state.hash;
+    let parent_hash = elem_state.parent_hash;
 
     // Check for existing element with same hash
     if let Some(existing_id) = state.hash_to_element.get(&hash) {
@@ -400,43 +393,36 @@ impl Axio {
     }
 
     // Try to link orphan to parent if parent exists in registry
-    if !element.is_root && element.parent_id.is_none() {
+    if !elem_state.element.is_root && elem_state.element.parent_id.is_none() {
       if let Some(ref ph) = parent_hash {
         if let Some(&parent_id) = state.hash_to_element.get(ph) {
-          element.parent_id = Some(parent_id);
+          elem_state.element.parent_id = Some(parent_id);
         }
       }
     }
 
-    let element_id = element.id;
-    let pid = element.pid.0;
-    let process_id = element.pid;
-
-    let mut elem_state = ElementState {
-      element: element.clone(),
-      handle,
-      hash,
-      parent_hash,
-      pid,
-      platform_role: raw_role,
-      subscriptions: HashSet::new(),
-      destruction_context: None,
-      watch_context: None,
-    };
+    let element_id = elem_state.element.id;
+    let window_id = elem_state.element.window_id;
+    let process_id = elem_state.element.pid;
+    let element_parent_id = elem_state.element.parent_id;
+    let is_root = elem_state.element.is_root;
 
     // Subscribe to destruction notification
     if let Some(process) = state.processes.get(&process_id) {
       Self::subscribe_destruction(&mut elem_state, &process.observer, axio);
     }
 
+    // Clone element for return value and event before moving into state
+    let element = elem_state.element.clone();
+
     state.elements.insert(element_id, elem_state);
     state.element_to_window.insert(element_id, window_id);
     state.hash_to_element.insert(hash, element_id);
 
     // Link to parent
-    if let Some(parent_id) = element.parent_id {
+    if let Some(parent_id) = element_parent_id {
       Self::add_child_to_parent(state, parent_id, element_id, events);
-    } else if !element.is_root {
+    } else if !is_root {
       // Orphan: has parent in OS but not loaded yet
       if let Some(ref ph) = parent_hash {
         state
@@ -515,7 +501,7 @@ impl Axio {
         log::debug!(
           "Failed to register destruction for element {} (role: {}): {:?}",
           elem_state.element.id,
-          elem_state.platform_role,
+          elem_state.raw_role,
           e
         );
       }
@@ -561,7 +547,7 @@ impl Axio {
     state.hash_to_element.remove(&elem_state.hash);
 
     // Unsubscribe from notifications
-    let process_id = ProcessId(elem_state.pid);
+    let process_id = ProcessId(elem_state.pid());
     if let Some(process) = state.processes.get(&process_id) {
       Self::unsubscribe_all(&mut elem_state, &process.observer);
     }

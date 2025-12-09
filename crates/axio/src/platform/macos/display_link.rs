@@ -35,12 +35,6 @@ impl DisplayLinkHandle {
       self.link.as_ref().stop();
     }
   }
-
-  /// Check if the display link is running.
-  #[allow(deprecated)]
-  pub(crate) fn is_running(&self) -> bool {
-    unsafe { self.link.as_ref().is_running() }
-  }
 }
 
 impl Drop for DisplayLinkHandle {

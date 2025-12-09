@@ -24,7 +24,7 @@ mod queries;
 mod state;
 mod subscriptions;
 
-pub(crate) use state::{ElementData, State, StoredElementInfo};
+pub(crate) use state::{ElementState, State};
 
 use crate::platform;
 use crate::polling::{self, AxioOptions, PollingHandle};

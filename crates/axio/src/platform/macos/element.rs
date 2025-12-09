@@ -12,7 +12,7 @@ Handles:
 use objc2_core_foundation::CFHash;
 
 use super::handles::ElementHandle;
-use crate::core::{Axio, ElementData};
+use crate::core::{Axio, ElementState};
 use crate::types::{AXElement, AxioError, AxioResult, ElementId, ProcessId, WindowId};
 
 use super::mapping::{ax_action, role_from_macos};
@@ -37,14 +37,14 @@ fn refine_role(
   }
 }
 
-/// Build element data from a handle (pure - no side effects).
-/// Returns `ElementData` for the caller to register.
-pub(super) fn build_element_data(
+/// Build element state from a handle (pure - no side effects).
+/// Returns `ElementState` for the caller to register.
+pub(super) fn build_element_state(
   handle: ElementHandle,
   window_id: WindowId,
   pid: u32,
   parent_id: Option<ElementId>,
-) -> Option<ElementData> {
+) -> Option<ElementState> {
   // Fetch all attributes in ONE IPC call
   let attrs = handle.get_attributes(None);
 
@@ -115,13 +115,13 @@ pub(super) fn build_element_data(
     actions: attrs.actions,
   };
 
-  Some(ElementData {
+  Some(ElementState::new(
     element,
     handle,
     hash,
     parent_hash,
     raw_role,
-  })
+  ))
 }
 
 /// Build and register an element (convenience wrapper).
@@ -132,8 +132,8 @@ pub(super) fn build_and_register_element(
   pid: u32,
   parent_id: Option<ElementId>,
 ) -> Option<AXElement> {
-  let data = build_element_data(handle, window_id, pid, parent_id)?;
-  axio.register_element(data)
+  let elem_state = build_element_state(handle, window_id, pid, parent_id)?;
+  axio.register_element(elem_state)
 }
 
 /// Fetch and register children of an element.
@@ -142,25 +142,24 @@ pub(crate) fn children(
   parent_id: ElementId,
   max_children: usize,
 ) -> AxioResult<Vec<AXElement>> {
-  let info = axio.get_stored_element_info(parent_id)?;
+  // Extract what we need from state (quick)
+  let (child_handles, window_id, pid) = axio.with_element(parent_id, |e| {
+    (e.handle.get_children(), e.element.window_id, e.pid())
+  })?;
 
-  let child_handles = info.handle.get_children();
   if child_handles.is_empty() {
     axio.set_element_children(parent_id, vec![])?;
     return Ok(vec![]);
   }
 
+  // Build and register children (lock released)
   let mut children = Vec::new();
   let mut child_ids = Vec::new();
 
   for child_handle in child_handles.into_iter().take(max_children) {
-    if let Some(child) = build_and_register_element(
-      axio,
-      child_handle,
-      info.window_id,
-      info.pid,
-      Some(parent_id),
-    ) {
+    if let Some(child) =
+      build_and_register_element(axio, child_handle, window_id, pid, Some(parent_id))
+    {
       child_ids.push(child.id);
       children.push(child);
     }
@@ -173,43 +172,61 @@ pub(crate) fn children(
 
 /// Fetch and register parent of an element.
 pub(crate) fn parent(axio: &Axio, element_id: ElementId) -> AxioResult<Option<AXElement>> {
-  let info = axio.get_stored_element_info(element_id)?;
+  // Extract what we need from state (quick)
+  let (parent_handle, window_id, pid) = axio.with_element(element_id, |e| {
+    (
+      e.handle.get_element("AXParent"),
+      e.element.window_id,
+      e.pid(),
+    )
+  })?;
 
-  let Some(parent_handle) = info.handle.get_element("AXParent") else {
+  let Some(parent_handle) = parent_handle else {
     return Ok(None);
   };
 
-  let parent = build_and_register_element(axio, parent_handle, info.window_id, info.pid, None);
+  // Build and register parent (lock released)
+  let parent = build_and_register_element(axio, parent_handle, window_id, pid, None);
   Ok(parent)
 }
 
 /// Refresh an element's attributes from the platform.
 pub(crate) fn refresh_element(axio: &Axio, element_id: ElementId) -> AxioResult<AXElement> {
-  let info = axio.get_stored_element_info(element_id)?;
+  // Extract what we need and fetch attributes (handle operation is in closure but that's ok - it's read-only)
+  let (attrs, raw_role, window_id, pid, is_root, parent_id, children) =
+    axio.with_element(element_id, |e| {
+      (
+        e.handle.get_attributes(Some(&e.raw_role)),
+        e.raw_role.clone(),
+        e.element.window_id,
+        e.pid(),
+        e.element.is_root,
+        e.element.parent_id,
+        e.element.children.clone(),
+      )
+    })?;
 
-  let attrs = info.handle.get_attributes(Some(&info.platform_role));
-
-  let base_role = role_from_macos(&info.platform_role);
+  let base_role = role_from_macos(&raw_role);
   let role = refine_role(
     base_role,
-    &info.platform_role,
+    &raw_role,
     attrs.title.as_ref(),
     attrs.value.as_ref(),
   );
 
   // Combine role + subrole for debugging display
   let platform_role = match &attrs.subrole {
-    Some(sr) => format!("{}/{sr}", info.platform_role),
-    None => info.platform_role.to_string(),
+    Some(sr) => format!("{raw_role}/{sr}"),
+    None => raw_role,
   };
 
   let updated = AXElement {
     id: element_id,
-    window_id: info.window_id,
-    pid: ProcessId(info.pid),
-    is_root: info.is_root,
-    parent_id: info.parent_id,
-    children: info.children,
+    window_id,
+    pid: ProcessId(pid),
+    is_root,
+    parent_id,
+    children,
     role,
     platform_role,
     label: attrs.title,
