@@ -43,14 +43,14 @@ impl WatchHandleInner {
         continue;
       }
       let notif_str = notification_to_macos(*notif);
-      let notif_cfstring = CFString::from_str(notif_str);
-      let result = unsafe {
+  let notif_cfstring = CFString::from_str(notif_str);
+  let result = unsafe {
         self.observer.inner().add_notification(
           self.handle.inner(),
-          &notif_cfstring,
+      &notif_cfstring,
           self.context.cast::<c_void>(),
-        )
-      };
+    )
+  };
       if result == AXError::Success {
         self.notifications.insert(*notif);
         added += 1;
@@ -83,13 +83,13 @@ impl Drop for WatchHandleInner {
     // Unsubscribe from all notifications
     for notification in &self.notifications {
       let notif_str = notification_to_macos(*notification);
-      let notif_cfstring = CFString::from_str(notif_str);
-      unsafe {
+  let notif_cfstring = CFString::from_str(notif_str);
+  unsafe {
         let _ = self
           .observer
-          .inner()
+      .inner()
           .remove_notification(self.handle.inner(), &notif_cfstring);
-      }
+  }
     }
     // Clean up the context
     unregister_observer_context(self.context);
@@ -115,7 +115,7 @@ pub(super) fn create_watch(
         .inner()
         .add_notification(handle.inner(), &notif_cfstring, context.cast::<c_void>())
     };
-    if result == AXError::Success {
+      if result == AXError::Success {
       notifications.insert(*notif);
     }
   }

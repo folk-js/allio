@@ -3,11 +3,8 @@ important TODOs:
 - currently we have a hardcoded websocket connection. We need to look at this wiring and see how we might do better discovery here. this isn't immediately obvious, partly because the websocket client is running in a web view...
 - we should drop the AX prefix from the crate. For typegen we should either rename to include the prefix or find a different strategy (like importing as namespaced to avoid collisions with browser types)
 - find oppertunities to use more compile-time pure functions. find places where indirection is unnecesary or hurting us (wrapper functions, etc)
-- a naming principle we could apply for both Rust and TS: `get_` hits the registry. `fetch_` hits the platform. `get_or_fetch_` hits the registry and if not found, fetches from the platform.
 - our watch logic is a bit weird, we special case destruction. can we simplify this? Same should be investigated for other notifications and state changes. Should element_watch and destruction_watch be merged? Would it make sense for watch+unwatch to just take a list of notifications, which are added/removed from the watch set (which we'd use to not double-subscribe to notifications)? Would this approach work for macOS, are there any platform-specific idiosyncrasies to consider here?
 - for watching, actions, getting/setting values: can we make these both more flexible (watch+unwatch takes a list of notifications, actions takes a list of actions, etc) while also improving type safety? these seem perhaps at odds. E.g. we use specifically the destruction notification for cleaning up our state, but this feels special, and its a pattern that extends beyond just destruction.
-- We do a bit of stuff like `let app_handle = ElementHandle::new(app_element(pid));` which feels off. app element = process lifetime right? should this be part of ProcessState or something?
-- wanna know more about "Used through concrete type (trait bound satisfied)"
 - add mock platform + fuzz for testing
 - suspicious indirection, shouldnt these just call platform code?:
   fn set_value(&self, value: &Value) -> AxioResult<()> {
@@ -33,6 +30,7 @@ important TODOs:
 }` re-firing that on every poll?
 
 - is `self.state.write().set_focused_window(window_id);` sneaking past the state separation? if its just a naming thing, should this be `update` or is `set` correct?
+- should `get_element_by_hash` be removed from public API?
 
 TODOs:
 

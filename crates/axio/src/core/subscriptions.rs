@@ -9,46 +9,36 @@ use crate::types::{AxioError, AxioResult, ElementId};
 impl Axio {
   /// Watch an element for change notifications (value, title, children, etc).
   pub fn watch(&self, element_id: ElementId) -> AxioResult<()> {
-    let mut state = self.state.write();
+    self.write(|s| {
+      let role = s.get_element(element_id).map(|e| e.role).ok_or(AxioError::ElementNotFound(element_id))?;
 
-    // Get the element's role to determine what to watch
-    let role = state
-      .get_element(element_id)
-      .map(|e| e.role)
-      .ok_or(AxioError::ElementNotFound(element_id))?;
+      let notifs = Notification::for_watching(role);
+      if notifs.is_empty() {
+        return Ok(());
+      }
 
-    let notifs = Notification::for_watching(role);
-    if notifs.is_empty() {
-      return Ok(()); // Nothing to watch for this role
-    }
+      if let Some(watch) = s.get_element_watch_mut(element_id) {
+        watch.add(&notifs);
+      } else {
+        log::warn!("Element {element_id} has no watch handle");
+      }
 
-    // Add notifications to existing watch
-    if let Some(watch) = state.get_element_watch_mut(element_id) {
-      watch.add(&notifs);
-    } else {
-      log::warn!("Element {element_id} has no watch handle");
-    }
-
-    Ok(())
+      Ok(())
+    })
   }
 
   /// Stop watching an element for change notifications.
   pub fn unwatch(&self, element_id: ElementId) -> AxioResult<()> {
-    let mut state = self.state.write();
+    self.write(|s| {
+      let role = s.get_element(element_id).map(|e| e.role).ok_or(AxioError::ElementNotFound(element_id))?;
 
-    // Get the element's role to determine what to unwatch
-    let role = state
-      .get_element(element_id)
-      .map(|e| e.role)
-      .ok_or(AxioError::ElementNotFound(element_id))?;
+      let notifs = Notification::for_watching(role);
 
-    let notifs = Notification::for_watching(role);
+      if let Some(watch) = s.get_element_watch_mut(element_id) {
+        watch.remove(&notifs);
+      }
 
-    // Remove notifications from watch (keeps Destroyed)
-    if let Some(watch) = state.get_element_watch_mut(element_id) {
-      watch.remove(&notifs);
-    }
-
-    Ok(())
+      Ok(())
+    })
   }
 }

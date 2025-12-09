@@ -139,4 +139,22 @@ impl Axio {
   pub fn subscribe(&self) -> async_broadcast::Receiver<Event> {
     self.events_keepalive.activate_cloned()
   }
+
+  // ==========================================================================
+  // State Access - NEVER do I/O inside these closures
+  // ==========================================================================
+
+  /// Read state. Lock released when closure returns.
+  /// **Never call platform/OS functions inside the closure.**
+  #[inline]
+  pub(crate) fn read<R>(&self, f: impl FnOnce(&State) -> R) -> R {
+    f(&self.state.read())
+  }
+
+  /// Write state. Lock released when closure returns.
+  /// **Never call platform/OS functions inside the closure.**
+  #[inline]
+  pub(crate) fn write<R>(&self, f: impl FnOnce(&mut State) -> R) -> R {
+    f(&mut self.state.write())
+  }
 }

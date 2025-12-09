@@ -108,12 +108,10 @@ pub(crate) fn fetch_children(
   parent_id: ElementId,
   max_children: usize,
 ) -> AxioResult<Vec<AXElement>> {
-  // Get handle and metadata, then release lock BEFORE platform call
-  let (handle, window_id, pid) = axio.with_element(parent_id, |e| {
-    (e.handle.clone(), e.element.window_id, e.pid())
-  })?;
+  // Step 1: Extract handle (quick read, lock released)
+  let (handle, window_id, pid) = axio.get_element_handle(parent_id)?;
 
-  // Platform call with NO lock held
+  // Step 2: Platform call (NO LOCK)
   let child_handles = handle.fetch_children();
 
   if child_handles.is_empty() {
@@ -139,12 +137,10 @@ pub(crate) fn fetch_children(
 
 /// Fetch and register parent of an element from platform.
 pub(crate) fn fetch_parent(axio: &Axio, element_id: ElementId) -> AxioResult<Option<AXElement>> {
-  // Get handle and metadata, then release lock BEFORE platform call
-  let (handle, window_id, pid) = axio.with_element(element_id, |e| {
-    (e.handle.clone(), e.element.window_id, e.pid())
-  })?;
+  // Step 1: Extract handle (quick read, lock released)
+  let (handle, window_id, pid) = axio.get_element_handle(element_id)?;
 
-  // Platform call with NO lock held
+  // Step 2: Platform call (NO LOCK)
   let parent_handle = handle.fetch_parent();
 
   let Some(parent_handle) = parent_handle else {
@@ -162,21 +158,11 @@ pub(crate) fn fetch_parent(axio: &Axio, element_id: ElementId) -> AxioResult<Opt
 
 /// Fetch fresh attributes for an element from platform.
 pub(crate) fn fetch_element(axio: &Axio, element_id: ElementId) -> AxioResult<AXElement> {
-  // Get handle and metadata, then release lock BEFORE platform call
-  let (handle, raw_role, window_id, pid, is_root, parent_id, existing_children) = axio
-    .with_element(element_id, |e| {
-      (
-        e.handle.clone(),
-        e.raw_role.clone(),
-        e.element.window_id,
-        e.pid(),
-        e.element.is_root,
-        e.element.parent_id,
-        e.element.children.clone(),
-      )
-    })?;
+  // Step 1: Extract handle and metadata (quick read, lock released)
+  let (handle, raw_role, window_id, pid, is_root, parent_id, existing_children) =
+    axio.get_element_for_refresh(element_id)?;
 
-  // Platform call with NO lock held
+  // Step 2: Platform call (NO LOCK)
   let attrs = handle.fetch_attributes();
 
   let base_role = crate::platform::role_from_raw(&raw_role);
