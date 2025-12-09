@@ -142,7 +142,7 @@ pub mod windows {
   /// Get currently focused element and text selection for a window.
   pub fn focus(window_id: WindowId) -> AxioResult<(Option<AXElement>, Option<TextSelection>)> {
     let window = registry::get_window(window_id)
-      .ok_or_else(|| crate::types::AxioError::WindowNotFound(window_id))?;
+      .ok_or(crate::types::AxioError::WindowNotFound(window_id))?;
     Ok(platform::get_current_focus(window.process_id.0))
   }
 }

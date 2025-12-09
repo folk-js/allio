@@ -2,16 +2,16 @@
 macOS platform implementation.
 
 All macOS-specific code lives here:
-- `handles`: ElementHandle, ObserverHandle implementations
+- `handles`: `ElementHandle`, `ObserverHandle` implementations
 - `mapping`: Bidirectional mappings between our types and macOS AX* strings
 - `observer`: Observer management and unified callback
 - `element`: Element building, discovery, and operations
 - `focus`: Focus and selection handling
 - `notifications`: Notification subscription management
 - `window`: Window-related operations
-- `window_list`: CGWindowList enumeration
+- `window_list`: `CGWindowList` enumeration
 - `display`: Screen dimensions
-- `display_link`: CVDisplayLink for vsync callbacks
+- `display_link`: `CVDisplayLink` for vsync callbacks
 - `mouse`: Mouse position tracking
 - `cf_utils`: Core Foundation helpers
 - `util`: Shared utilities

@@ -27,7 +27,7 @@ impl TextSelection {
   }
 
   /// Check if the selection is empty (cursor with no selection).
-  pub fn is_empty(&self) -> bool {
+  pub const fn is_empty(&self) -> bool {
     self.text.is_empty()
   }
 
