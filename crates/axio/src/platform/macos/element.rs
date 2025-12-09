@@ -49,7 +49,12 @@ pub(super) fn build_element_from_handle(
   // Fetch all attributes in ONE IPC call - safe method!
   let attrs = handle.get_attributes(None);
 
-  let raw_role = attrs.role.clone().unwrap_or_else(|| "Unknown".to_string());
+  let raw_role = if let Some(role) = &attrs.role {
+    role.clone()
+  } else {
+    log::debug!("Element missing AXRole attribute, using AXUnknown fallback");
+    "AXUnknown".to_string()
+  };
   let base_role = role_from_macos(&raw_role);
   let role = refine_role(
     base_role,
