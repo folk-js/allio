@@ -73,9 +73,15 @@ pub fn dispatch_json(axio: &Axio, method: &str, args: &JsonValue) -> JsonValue {
   match serde_json::from_value::<RpcRequest>(request_value) {
     Ok(request) => match dispatch(axio, request) {
       Ok(response) => json!({ "result": response }),
-      Err(e) => json!({ "error": e }),
+      Err(e) => {
+        log::warn!("[rpc] {method} failed: {e}");
+        json!({ "error": e })
+      }
     },
-    Err(e) => json!({ "error": format!("Invalid request: {}", e) }),
+    Err(e) => {
+      log::warn!("[rpc] Invalid request for {method}: {e}");
+      json!({ "error": format!("Invalid request: {}", e) })
+    }
   }
 }
 

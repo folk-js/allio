@@ -68,17 +68,26 @@ impl Axio {
   pub(crate) fn sync_windows(&self, new_windows: Vec<AXWindow>) {
     let new_ids: HashSet<WindowId> = new_windows.iter().map(|w| w.id).collect();
 
-    // Step 1: Get existing window IDs to determine which are new (quick read)
-    let existing_ids: HashSet<WindowId> = self.read(|s| s.get_all_window_ids().collect());
+    // Step 1: Get existing windows that need handle fetch (new or missing handle)
+    let windows_needing_handle: HashSet<WindowId> = self.read(|s| {
+      new_ids
+        .iter()
+        .filter(|id| {
+          // Fetch handle if: window is new OR existing window has no handle
+          s.get_window_handle(**id).is_none()
+        })
+        .copied()
+        .collect()
+    });
 
-    // Step 2: Platform calls OUTSIDE lock - only fetch handles for NEW windows
+    // Step 2: Platform calls OUTSIDE lock - only fetch handles when needed
     let windows_with_handles: Vec<_> = new_windows
       .into_iter()
       .map(|w| {
-        let handle = if existing_ids.contains(&w.id) {
-          None // Skip fetch for existing windows (handle already cached)
-        } else {
+        let handle = if windows_needing_handle.contains(&w.id) {
           CurrentPlatform::fetch_window_handle(&w)
+        } else {
+          None // Already have a cached handle
         };
         (w, handle)
       })
@@ -107,7 +116,10 @@ impl Axio {
           new_pids.push(process_id);
         } else {
           s.update_window(window_id, window_info);
-          // Don't overwrite existing handle - it was fetched on insertion
+          // Update handle if we fetched one (retrying for windows that had None)
+          if let Some(h) = handle {
+            s.set_window_handle(window_id, h);
+          }
         }
       }
       new_pids

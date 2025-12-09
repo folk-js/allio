@@ -381,6 +381,13 @@ impl State {
     true
   }
 
+  /// Set window handle (may be obtained lazily after initial insertion).
+  pub(crate) fn set_window_handle(&mut self, id: WindowId, handle: Handle) {
+    if let Some(window) = self.windows.get_mut(&id) {
+      window.handle = Some(handle);
+    }
+  }
+
   /// Remove a window and cascade to all its elements.
   pub(crate) fn remove_window(&mut self, id: WindowId) {
     // First remove all elements belonging to this window
