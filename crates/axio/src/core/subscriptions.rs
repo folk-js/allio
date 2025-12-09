@@ -4,9 +4,8 @@ Watch/unwatch subscription management.
 
 use super::Axio;
 use crate::accessibility::Notification;
-use crate::platform::{self, ObserverContextHandle};
+use crate::platform::PlatformObserver;
 use crate::types::{AxioError, AxioResult, ElementId, ProcessId};
-use std::ffi::c_void;
 
 impl Axio {
   /// Watch an element for notifications.
@@ -32,7 +31,7 @@ impl Axio {
       .get_mut(element_id)
       .ok_or(AxioError::ElementNotFound(*element_id))?;
 
-    if elem_state.watch_context.is_some() {
+    if elem_state.element_watch.is_some() {
       return Ok(()); // Already watching
     }
 
@@ -48,16 +47,10 @@ impl Axio {
       return Ok(()); // Nothing to watch
     }
 
-    let context = platform::subscribe_notifications(
-      &elem_state.element.id,
-      &elem_state.handle,
-      observer,
-      &elem_state.raw_role,
-      &notifs,
-      axio,
-    )?;
+    let watch_handle =
+      observer.watch_element(&elem_state.handle, *element_id, &notifs, axio)?;
 
-    elem_state.watch_context = Some(context.cast::<c_void>());
+    elem_state.element_watch = Some(watch_handle);
     for n in notifs {
       elem_state.subscriptions.insert(n);
     }
@@ -66,6 +59,7 @@ impl Axio {
   }
 
   /// Unsubscribe from watch notifications.
+  /// With WatchHandle, this just drops the handle (RAII cleanup).
   pub(super) fn unwatch_internal(
     state: &mut super::State,
     element_id: &ElementId,
@@ -75,29 +69,8 @@ impl Axio {
       .get_mut(element_id)
       .ok_or(AxioError::ElementNotFound(*element_id))?;
 
-    let Some(context) = elem_state.watch_context.take() else {
-      return Ok(());
-    };
-
-    let process_id = ProcessId(elem_state.pid());
-    let process = state
-      .processes
-      .get(&process_id)
-      .ok_or_else(|| AxioError::Internal("Process not found during unwatch".into()))?;
-
-    let notifs: Vec<_> = elem_state
-      .subscriptions
-      .iter()
-      .filter(|n| **n != Notification::Destroyed)
-      .copied()
-      .collect();
-
-    platform::unsubscribe_notifications(
-      &elem_state.handle,
-      &process.observer,
-      context.cast::<ObserverContextHandle>(),
-      &notifs,
-    );
+    // Drop the watch handle - this automatically unsubscribes
+    elem_state.element_watch.take();
 
     elem_state
       .subscriptions

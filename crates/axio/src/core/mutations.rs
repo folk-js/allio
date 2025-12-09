@@ -5,12 +5,11 @@ State mutation methods.
 use super::state::{ElementState, ProcessState, State, WindowState};
 use super::Axio;
 use crate::accessibility::Notification;
-use crate::platform::{self, ObserverHandle};
+use crate::platform::{self, Observer, PlatformObserver};
 use crate::types::{
   AXElement, AXWindow, AxioError, AxioResult, ElementId, Event, ProcessId, TextSelection, WindowId,
 };
 use std::collections::HashSet;
-use std::ffi::c_void;
 
 impl Axio {
   /// Get or create process state for a PID.
@@ -24,10 +23,10 @@ impl Axio {
     }
 
     // Slow path: create observer and insert
-    let observer = platform::create_observer_for_pid(pid, self.clone())?;
+    let observer = platform::create_observer(pid, self.clone())?;
 
     // Subscribe to app-level notifications (focus, selection)
-    if let Err(e) = platform::subscribe_app_notifications(pid, &observer, self.clone()) {
+    if let Err(e) = observer.subscribe_app_notifications(pid, self.clone()) {
       log::warn!("Failed to subscribe app notifications for PID {pid}: {e:?}");
     }
 
@@ -79,11 +78,11 @@ impl Axio {
           existing.info = window_info;
 
           if existing.handle.is_none() {
-            existing.handle = platform::fetch_window_handle(&existing.info);
+            existing.handle = platform::window_handle(&existing.info);
           }
         } else {
           // New window
-          let handle = platform::fetch_window_handle(&window_info);
+          let handle = platform::window_handle(&window_info);
 
           state.windows.insert(
             window_id,
@@ -329,14 +328,26 @@ impl Axio {
     element_id: ElementId,
     value: &crate::accessibility::Value,
   ) -> AxioResult<()> {
+    // Validation happens HERE in core, not in platform code
+    let role = self.with_element(element_id, |e| e.element.role)?;
+    if !role.is_writable() {
+      return Err(AxioError::NotSupported(format!(
+        "Element with role '{role:?}' is not writable"
+      )));
+    }
+
     self.with_element(element_id, |e| {
-      platform::write_element_value(&e.handle, value, &e.raw_role)
+      use crate::platform::PlatformHandle;
+      e.handle.set_value(value)
     })?
   }
 
   /// Click element.
   pub(crate) fn click_element(&self, element_id: ElementId) -> AxioResult<()> {
-    self.with_element(element_id, |e| platform::click_element(&e.handle))?
+    self.with_element(element_id, |e| {
+      use crate::platform::PlatformHandle;
+      e.handle.perform_action("AXPress")
+    })?
   }
 }
 
@@ -482,19 +493,14 @@ impl Axio {
   }
 
   /// Subscribe to destruction notification for an element.
-  fn subscribe_destruction(elem_state: &mut ElementState, observer: &ObserverHandle, axio: &Axio) {
-    if elem_state.destruction_context.is_some() {
+  fn subscribe_destruction(elem_state: &mut ElementState, observer: &Observer, axio: &Axio) {
+    if elem_state.destruction_watch.is_some() {
       return;
     }
 
-    match platform::subscribe_destruction_notification(
-      &elem_state.element.id,
-      &elem_state.handle,
-      observer,
-      axio.clone(),
-    ) {
-      Ok(context) => {
-        elem_state.destruction_context = Some(context.cast::<c_void>());
+    match observer.watch_destruction(&elem_state.handle, elem_state.element.id, axio.clone()) {
+      Ok(watch_handle) => {
+        elem_state.destruction_watch = Some(watch_handle);
         elem_state.subscriptions.insert(Notification::Destroyed);
       }
       Err(e) => {
@@ -578,33 +584,11 @@ impl Axio {
   }
 
   /// Unsubscribe from all notifications for an element.
-  fn unsubscribe_all(elem_state: &mut ElementState, observer: &ObserverHandle) {
-    // Unsubscribe destruction tracking
-    if let Some(context) = elem_state.destruction_context.take() {
-      platform::unsubscribe_destruction_notification(
-        &elem_state.handle,
-        observer,
-        context.cast::<platform::ObserverContextHandle>(),
-      );
-    }
-
-    // Unsubscribe watch notifications
-    if let Some(context) = elem_state.watch_context.take() {
-      let notifs: Vec<_> = elem_state
-        .subscriptions
-        .iter()
-        .filter(|n| **n != Notification::Destroyed)
-        .copied()
-        .collect();
-
-      platform::unsubscribe_notifications(
-        &elem_state.handle,
-        observer,
-        context.cast::<platform::ObserverContextHandle>(),
-        &notifs,
-      );
-    }
-
+  /// With WatchHandle, this just drops the handles (RAII cleanup).
+  fn unsubscribe_all(elem_state: &mut ElementState, _observer: &Observer) {
+    // Drop the watch handles - this automatically unsubscribes
+    elem_state.destruction_watch.take();
+    elem_state.element_watch.take();
     elem_state.subscriptions.clear();
   }
 }

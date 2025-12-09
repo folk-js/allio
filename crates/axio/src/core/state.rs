@@ -2,18 +2,15 @@
 State types for the Axio registry.
 */
 
-#![allow(unsafe_code)]
-
 use crate::accessibility::Notification;
-use crate::platform::{ElementHandle, ObserverHandle};
+use crate::platform::{Handle, Observer, WatchHandle};
 use crate::types::{AXElement, AXWindow, ElementId, ProcessId, TextSelection, WindowId};
 use std::collections::{HashMap, HashSet};
-use std::ffi::c_void;
 
 /// Per-process state: owns the `AXObserver` for this application.
 pub(crate) struct ProcessState {
   /// The observer for this process (one per PID).
-  pub(crate) observer: ObserverHandle,
+  pub(crate) observer: Observer,
   /// Currently focused element in this app.
   pub(crate) focused_element: Option<ElementId>,
   /// Last selection state for deduplication.
@@ -25,7 +22,7 @@ pub(crate) struct WindowState {
   pub(crate) process_id: ProcessId,
   pub(crate) info: AXWindow,
   /// Platform handle for window-level operations.
-  pub(crate) handle: Option<ElementHandle>,
+  pub(crate) handle: Option<Handle>,
 }
 
 /// Per-element state: element data + platform handle + subscriptions.
@@ -33,7 +30,7 @@ pub(crate) struct ElementState {
   /// The element data (what we return to callers).
   pub(crate) element: AXElement,
   /// Platform handle for operations.
-  pub(crate) handle: ElementHandle,
+  pub(crate) handle: Handle,
   /// `CFHash` of the element (for duplicate detection).
   pub(crate) hash: u64,
   /// `CFHash` of this element's OS parent (for lazy linking).
@@ -42,17 +39,17 @@ pub(crate) struct ElementState {
   pub(crate) raw_role: String,
   /// Active notification subscriptions.
   pub(crate) subscriptions: HashSet<Notification>,
-  /// Context handle for destruction tracking (always set).
-  pub(crate) destruction_context: Option<*mut c_void>,
-  /// Context handle for watch notifications (when watched).
-  pub(crate) watch_context: Option<*mut c_void>,
+  /// Destruction watch handle (unsubscribes on drop).
+  pub(crate) destruction_watch: Option<WatchHandle>,
+  /// Element watch handle (unsubscribes on drop).
+  pub(crate) element_watch: Option<WatchHandle>,
 }
 
 impl ElementState {
   /// Create a new element state (subscriptions initialized empty).
   pub(crate) fn new(
     element: AXElement,
-    handle: ElementHandle,
+    handle: Handle,
     hash: u64,
     parent_hash: Option<u64>,
     raw_role: String,
@@ -64,8 +61,8 @@ impl ElementState {
       parent_hash,
       raw_role,
       subscriptions: HashSet::new(),
-      destruction_context: None,
-      watch_context: None,
+      destruction_watch: None,
+      element_watch: None,
     }
   }
 
@@ -74,13 +71,6 @@ impl ElementState {
     self.element.pid.0
   }
 }
-
-// SAFETY: State is protected by RwLock, and raw pointers (context handles)
-// are only accessed while holding the lock.
-unsafe impl Send for ProcessState {}
-unsafe impl Sync for ProcessState {}
-unsafe impl Send for ElementState {}
-unsafe impl Sync for ElementState {}
 
 /// Internal state storage.
 pub(crate) struct State {
@@ -123,4 +113,3 @@ impl State {
     }
   }
 }
-

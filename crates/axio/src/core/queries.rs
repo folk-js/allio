@@ -4,7 +4,7 @@ Read-only state queries.
 
 use super::state::ElementState;
 use super::Axio;
-use crate::platform::ElementHandle;
+use crate::platform::Handle;
 use crate::types::{AXElement, AXWindow, AxioError, AxioResult, ElementId, WindowId};
 
 impl Axio {
@@ -124,7 +124,7 @@ impl Axio {
   pub(crate) fn get_window_with_handle(
     &self,
     window_id: WindowId,
-  ) -> Option<(AXWindow, Option<ElementHandle>)> {
+  ) -> Option<(AXWindow, Option<Handle>)> {
     self
       .state
       .read()

@@ -173,7 +173,7 @@ pub(in crate::platform::macos) mod ax_role {
 /// - Layout-only groups → Group (then refined to `GenericContainer` if no label/value)
 /// - Known non-semantic chrome → `GenericElement` (scrollbars, handles, etc.)
 /// - Unknown → Unknown (logs warning, indicates gap in mappings)
-pub(super) fn role_from_macos(platform_role: &str) -> Role {
+pub(in crate::platform) fn role_from_macos(platform_role: &str) -> Role {
   match platform_role {
     // Structural
     ax_role::APPLICATION => Role::Application,

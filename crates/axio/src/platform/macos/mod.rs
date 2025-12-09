@@ -1,59 +1,157 @@
 /*!
 macOS platform implementation.
 
-All macOS-specific code lives here:
-- `handles`: `ElementHandle`, `ObserverHandle` implementations
-- `mapping`: Bidirectional mappings between our types and macOS AX* strings
-- `observer`: Observer management and unified callback
-- `element`: Element building, discovery, and operations
-- `focus`: Focus and selection handling
-- `notifications`: Notification subscription management
-- `window`: Window-related operations
-- `window_list`: `CGWindowList` enumeration
-- `display`: Screen dimensions
-- `display_link`: `CVDisplayLink` for vsync callbacks
-- `mouse`: Mouse position tracking
-- `cf_utils`: Core Foundation helpers
-- `util`: Shared utilities
+Implements the platform traits defined in `platform/mod.rs`.
+All macOS-specific code (AXUIElement, CoreFoundation, etc.) stays within this module.
 */
 
-// Core handles
-mod handles;
-pub(crate) use handles::{ElementHandle, ObserverHandle};
-
-// Accessibility
-mod element;
-mod focus;
-pub(crate) mod mapping;
-mod notifications;
-mod observer;
-mod window;
-
-pub(crate) use element::{children, click_element, parent, refresh_element, write_element_value};
-pub(crate) use focus::get_current_focus;
-pub(crate) use notifications::{
-  subscribe_app_notifications, subscribe_destruction_notification, subscribe_notifications,
-  unsubscribe_destruction_notification, unsubscribe_notifications,
-};
-pub(crate) use observer::{create_observer_for_pid, ObserverContextHandle};
-pub(crate) use window::{
-  enable_accessibility_for_pid, fetch_window_handle, get_element_at_position, get_window_root,
-};
-
-// Window enumeration
+// === Internal modules ===
 mod cf_utils;
-mod window_list;
-pub(crate) use window_list::enumerate_windows;
-
-// Display and input
 mod display;
 mod display_link;
+mod element;
+mod focus;
+mod handles;
+pub(crate) mod mapping;
 mod mouse;
-
-pub(crate) use display::get_main_screen_dimensions;
-pub(crate) use display_link::{start_display_link, DisplayLinkHandle};
-pub(crate) use mouse::get_mouse_position;
-
-// Utilities
+mod notifications;
+mod observer;
 mod util;
-pub(crate) use util::check_accessibility_permissions;
+mod window;
+mod window_list;
+
+// === Re-exports for internal use ===
+pub(super) use handles::{ElementHandle, ObserverHandle};
+
+// === Trait Implementations ===
+
+use crate::accessibility::{Notification, Value};
+use crate::core::Axio;
+use crate::platform::traits::{
+  DisplayLinkHandle, ElementAttributes, Platform, PlatformHandle, PlatformObserver, WatchHandle,
+};
+use crate::types::{AxioError, AxioResult, ElementId, Point};
+
+/// macOS platform implementation.
+pub(crate) struct MacOS;
+
+impl Platform for MacOS {
+  type Handle = ElementHandle;
+  type Observer = ObserverHandle;
+
+  fn check_permissions() -> bool {
+    util::check_accessibility_permissions()
+  }
+
+  fn fetch_windows(_exclude_pid: Option<u32>) -> Vec<crate::types::AXWindow> {
+    // Note: exclude_pid filtering happens in polling.rs, not here
+    window_list::enumerate_windows()
+  }
+
+  fn screen_size() -> (f64, f64) {
+    display::get_main_screen_dimensions()
+  }
+
+  fn mouse_position() -> Point {
+    mouse::get_mouse_position().unwrap_or_else(|| Point::new(0.0, 0.0))
+  }
+
+  fn window_handle(window: &crate::types::AXWindow) -> Option<Self::Handle> {
+    window::fetch_window_handle(window)
+  }
+
+  fn create_observer(pid: u32, axio: Axio) -> AxioResult<Self::Observer> {
+    observer::create_observer_for_pid(pid, axio)
+  }
+
+  fn start_display_link<F: Fn() + Send + Sync + 'static>(callback: F) -> Option<DisplayLinkHandle> {
+    display_link::start_display_link(callback)
+      .ok()
+      .map(|inner| DisplayLinkHandle { inner })
+  }
+
+  fn enable_accessibility_for_pid(pid: u32) {
+    window::enable_accessibility_for_pid(crate::ProcessId(pid));
+  }
+
+  fn focused_element(pid: u32) -> Option<Self::Handle> {
+    let app_handle = ElementHandle::new(util::app_element(pid));
+    app_handle.get_element("AXFocusedUIElement")
+  }
+
+  fn app_element(pid: u32) -> Self::Handle {
+    ElementHandle::new(util::app_element(pid))
+  }
+}
+
+impl PlatformHandle for ElementHandle {
+  fn children(&self) -> Vec<Self> {
+    self.get_children()
+  }
+
+  fn parent(&self) -> Option<Self> {
+    self.get_element("AXParent")
+  }
+
+  fn element_hash(&self) -> u64 {
+    element::element_hash(self)
+  }
+
+  fn set_value(&self, value: &Value) -> AxioResult<()> {
+    self
+      .set_typed_value(value)
+      .map_err(|e| AxioError::AccessibilityError(format!("Failed to set value: {e:?}")))
+  }
+
+  fn perform_action(&self, action: &str) -> AxioResult<()> {
+    self
+      .perform_action_internal(action)
+      .map_err(|e| AxioError::AccessibilityError(format!("Action '{action}' failed: {e:?}")))
+  }
+
+  fn get_attributes(&self) -> ElementAttributes {
+    self.fetch_attributes(None)
+  }
+
+  fn element_at_position(&self, x: f64, y: f64) -> Option<Self> {
+    handles::ElementHandle::element_at_position(self, x, y)
+  }
+
+  fn get_selection(&self) -> Option<(String, Option<(u32, u32)>)> {
+    focus::get_selection_from_handle(self)
+  }
+}
+
+impl PlatformObserver for ObserverHandle {
+  type Handle = ElementHandle;
+
+  fn subscribe_app_notifications(&self, pid: u32, axio: Axio) -> AxioResult<()> {
+    notifications::subscribe_app_notifications(pid, self, axio)
+  }
+
+  fn watch_destruction(
+    &self,
+    handle: &Self::Handle,
+    element_id: ElementId,
+    axio: Axio,
+  ) -> AxioResult<WatchHandle> {
+    let inner = notifications::watch_destruction(self, handle, element_id, axio)?;
+    Ok(WatchHandle { inner })
+  }
+
+  fn watch_element(
+    &self,
+    handle: &Self::Handle,
+    element_id: ElementId,
+    notifs: &[Notification],
+    axio: Axio,
+  ) -> AxioResult<WatchHandle> {
+    let inner = notifications::watch_element(self, handle, element_id, notifs, axio)?;
+    Ok(WatchHandle { inner })
+  }
+}
+
+// === Type Exports ===
+
+pub(crate) type MacOSDisplayLinkHandle = display_link::DisplayLinkHandle;
+pub(crate) type WatchHandleInner = notifications::WatchHandleInner;

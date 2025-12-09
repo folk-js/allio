@@ -19,12 +19,13 @@ while let Ok(event) = events.recv().await {
 ```
 */
 
+pub(crate) mod element_ops;
 mod mutations;
 mod queries;
 mod state;
 mod subscriptions;
 
-pub(crate) use state::{ElementState, State};
+pub(crate) use state::State;
 
 use crate::platform;
 use crate::polling::{self, AxioOptions, PollingHandle};

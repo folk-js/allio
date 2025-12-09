@@ -211,7 +211,7 @@ fn handle_element_notification(
   match notif {
     Notification::ValueChanged => {
       let handle = ElementHandle::new(ax_element);
-      let attrs = handle.get_attributes(None);
+      let attrs = handle.fetch_attributes(None);
       if let Some(mut element) = axio.get_element(element_id) {
         element.value = attrs.value;
         if let Err(e) = axio.update_element(element_id, element) {
@@ -236,7 +236,7 @@ fn handle_element_notification(
 
     Notification::ChildrenChanged => {
       // Re-fetch children - this registers new ones and updates the children list
-      if let Err(e) = super::element::children(axio, element_id, 1000) {
+      if let Err(e) = crate::core::element_ops::children(axio, element_id, 1000) {
         log::debug!("Failed to refresh children: {e}");
       }
     }

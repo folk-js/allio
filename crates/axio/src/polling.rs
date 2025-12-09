@@ -185,9 +185,9 @@ fn start_display_synced_polling(axio: Axio, config: AxioOptions) -> PollingHandl
   let handle = match platform::start_display_link(move || {
     poll_iteration(&axio, &config);
   }) {
-    Ok(h) => h,
-    Err(e) => {
-      error!("Failed to start display-synced polling: {e}");
+    Some(h) => h,
+    None => {
+      error!("Failed to start display-synced polling");
       std::process::exit(1);
     }
   };
@@ -209,7 +209,7 @@ fn poll_iteration(axio: &Axio, config: &AxioOptions) {
 
     // Enable accessibility for new windows
     for pid in added_pids {
-      platform::enable_accessibility_for_pid(pid);
+      platform::enable_accessibility_for_pid(pid.0);
     }
 
     // Focus tracking - axio emits FocusWindow if value changed

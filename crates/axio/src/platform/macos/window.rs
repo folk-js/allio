@@ -15,10 +15,7 @@ use objc2_application_services::AXError;
 use objc2_core_foundation::{CFBoolean, CFString};
 
 use super::handles::ElementHandle;
-use crate::core::Axio;
-use crate::types::{AXElement, AxioError, AxioResult, WindowId};
 
-use super::element::build_and_register_element;
 use super::mapping::ax_role;
 use super::util::app_element;
 
@@ -31,101 +28,6 @@ fn get_window_elements(pid: u32) -> Vec<ElementHandle> {
     .into_iter()
     .filter(|child| child.get_string("AXRole").as_deref() == Some(ax_role::WINDOW))
     .collect()
-}
-
-/// Get the root element for a window.
-pub(crate) fn get_window_root(axio: &Axio, window_id: WindowId) -> AxioResult<AXElement> {
-  let (window, handle) = axio
-    .get_window_with_handle(window_id)
-    .ok_or(AxioError::WindowNotFound(window_id))?;
-
-  let window_handle =
-    handle.ok_or_else(|| AxioError::Internal(format!("Window {window_id} has no AX element")))?;
-
-  build_and_register_element(axio, window_handle, window_id, window.process_id.0, None)
-    .ok_or_else(|| AxioError::Internal("Window root element was previously destroyed".to_string()))
-}
-
-/// Retry delays (in ms) for Chromium/Electron lazy accessibility initialization.
-///
-/// Chromium/Electron apps lazily build their accessibility spatial index on a per-region
-/// basis. The first hit test at any coordinate triggers async initialization of that region,
-/// returning a window-sized fallback container. Subsequent queries return the actual element.
-///
-/// We retry with increasing delays to give Chromium time to process:
-/// - Attempt 0: Immediate (often returns fallback)
-/// - Attempt 1: 10ms delay (usually sufficient for Chromium to initialize)
-/// - Attempt 2: 25ms delay
-const HIT_TEST_RETRY_DELAYS_MS: [u64; 3] = [0, 10, 25];
-
-/// Get the accessibility element at a specific screen position.
-pub(crate) fn get_element_at_position(axio: &Axio, x: f64, y: f64) -> AxioResult<AXElement> {
-  const MAX_DEPTH: u8 = 10;
-
-  let window = axio.find_window_at_point(x, y).ok_or_else(|| {
-    AxioError::AccessibilityError(format!("No tracked window found at position ({x}, {y})"))
-  })?;
-
-  let window_id = window.id;
-  let pid = window.process_id.0;
-
-  let app_handle = ElementHandle::new(app_element(pid));
-
-  let mut element_handle = None;
-  let mut fallback_container = None;
-
-  for &delay_ms in &HIT_TEST_RETRY_DELAYS_MS {
-    if delay_ms > 0 {
-      std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-    }
-
-    let Some(hit) = app_handle.element_at_position(x, y) else {
-      continue;
-    };
-
-    let attrs = hit.get_attributes(None);
-    let is_fallback_container = attrs.role.as_deref() == Some("AXGroup")
-      && attrs
-        .bounds
-        .as_ref()
-        .is_some_and(|b| b.matches(&window.bounds, 0.0));
-
-    if is_fallback_container {
-      fallback_container = Some(hit);
-      continue;
-    }
-
-    element_handle = Some(hit);
-    break;
-  }
-
-  // Use real element if found, otherwise fall back to container (better than nothing)
-  let mut element_handle = element_handle.or(fallback_container).ok_or_else(|| {
-    AxioError::AccessibilityError(format!("No element found at ({x}, {y}) in app {pid}"))
-  })?;
-
-  // Try recursive hit testing - drill down through nested containers
-  let raw_attrs = element_handle.get_attributes(None);
-  for _ in 1..=MAX_DEPTH {
-    let Some(deeper) = element_handle.element_at_position(x, y) else {
-      break;
-    };
-
-    let deeper_attrs = deeper.get_attributes(None);
-    let same_element = deeper_attrs.bounds == raw_attrs.bounds
-      && deeper_attrs.role == raw_attrs.role
-      && deeper_attrs.title == raw_attrs.title;
-
-    if same_element {
-      break;
-    }
-
-    element_handle = deeper;
-  }
-
-  build_and_register_element(axio, element_handle, window_id, pid, None).ok_or_else(|| {
-    AxioError::AccessibilityError(format!("Element at ({x}, {y}) was previously destroyed"))
-  })
 }
 
 /// Enable accessibility (mostly for Chromium/Electron apps)

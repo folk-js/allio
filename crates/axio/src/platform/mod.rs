@@ -1,71 +1,50 @@
-/*! Platform Abstraction Layer.
+/*!
+Platform Abstraction Layer.
 
-This module provides platform-agnostic interfaces to OS-specific functionality.
-The actual implementations live in platform-specific submodules (e.g., `macos/`).
+This module defines the contract between core code and platform implementations.
+Core code should only import from this module - never from platform-specific submodules.
+
+# Architecture
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│                    Core (uses traits)                        │
+│  - Only sees: Handle, Observer, Platform functions           │
+│  - Never sees: CFType, AXUIElement, etc.                     │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+┌──────────────────────────▼──────────────────────────────────┐
+│              platform/mod.rs (THE BOUNDARY)                  │
+│  - Trait definitions                                         │
+│  - Type aliases for current platform                         │
+│  - Re-exported platform functions                            │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+┌──────────────────────────▼──────────────────────────────────┐
+│              platform/macos/ (implementation)                │
+│  - impl Platform for MacOS                                   │
+│  - impl PlatformHandle for ElementHandle                     │
+│  - All macOS-specific code                                   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+# Adding a New Platform
+
+1. Create `platform/newos/mod.rs`
+2. Implement `Platform`, `PlatformHandle`, `PlatformObserver` traits
+3. Add conditional compilation in this file
 */
 
-use crate::accessibility::{Action, Value};
-use crate::types::Bounds;
+mod traits;
 
-/// All commonly-needed element attributes, fetched in a batch for performance.
-/// This is the cross-platform interface between platform code and core.
-#[derive(Debug, Default)]
-pub(crate) struct ElementAttributes {
-  pub(crate) role: Option<String>,
-  pub(crate) subrole: Option<String>,
-  pub(crate) title: Option<String>,
-  pub(crate) value: Option<Value>,
-  pub(crate) description: Option<String>,
-  pub(crate) placeholder: Option<String>,
-  pub(crate) url: Option<String>,
-  pub(crate) bounds: Option<Bounds>,
-  pub(crate) focused: Option<bool>,
-  pub(crate) disabled: bool,
-  pub(crate) selected: Option<bool>,
-  pub(crate) expanded: Option<bool>,
-  pub(crate) row_index: Option<usize>,
-  pub(crate) column_index: Option<usize>,
-  pub(crate) row_count: Option<usize>,
-  pub(crate) column_count: Option<usize>,
-  pub(crate) actions: Vec<Action>,
-}
-
-// Platform implementations
-#[cfg(target_os = "macos")]
-mod macos;
-
-#[cfg(target_os = "macos")]
-pub(crate) use macos::{
-  // Accessibility
-  check_accessibility_permissions,
-  children,
-  click_element,
-  create_observer_for_pid,
-  enable_accessibility_for_pid,
-  // Window enumeration
-  enumerate_windows,
-  fetch_window_handle,
-  get_current_focus,
-  get_element_at_position,
-  // Display and input
-  get_main_screen_dimensions,
-  get_mouse_position,
-  get_window_root,
-  parent,
-  refresh_element,
-  start_display_link,
-  subscribe_app_notifications,
-  subscribe_destruction_notification,
-  subscribe_notifications,
-  unsubscribe_destruction_notification,
-  unsubscribe_notifications,
-  write_element_value,
-  DisplayLinkHandle,
-  // Handles
-  ElementHandle,
-  ObserverContextHandle,
-  ObserverHandle,
+pub(crate) use traits::{
+  DisplayLinkHandle, ElementAttributes, Platform, PlatformHandle, PlatformObserver, WatchHandle,
 };
+
+// === Platform Implementations ===
+
+#[cfg(target_os = "macos")]
+pub(crate) mod macos;
 
 #[cfg(target_os = "windows")]
 compile_error!("Windows support is not yet implemented");
@@ -75,3 +54,71 @@ compile_error!("Linux support is not yet implemented");
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 compile_error!("Unsupported platform - AXIO only supports macOS currently");
+
+// === Type Aliases for Current Platform ===
+
+/// The platform implementation for the current OS.
+#[cfg(target_os = "macos")]
+pub(crate) type CurrentPlatform = macos::MacOS;
+
+/// Opaque handle to a UI element.
+/// Core code can hold and clone this, but cannot inspect its contents.
+pub(crate) type Handle = <CurrentPlatform as Platform>::Handle;
+
+/// Opaque handle to a notification observer.
+pub(crate) type Observer = <CurrentPlatform as Platform>::Observer;
+
+// === Convenience Functions ===
+// These delegate to CurrentPlatform methods for ergonomic use.
+
+use crate::core::Axio;
+use crate::types::{AXWindow, AxioResult, Point};
+
+/// Check if accessibility permissions are granted.
+pub(crate) fn check_accessibility_permissions() -> bool {
+  CurrentPlatform::check_permissions()
+}
+
+/// Create an observer for a process.
+pub(crate) fn create_observer(pid: u32, axio: Axio) -> AxioResult<Observer> {
+  CurrentPlatform::create_observer(pid, axio)
+}
+
+/// Get the root element handle for a window.
+pub(crate) fn window_handle(window: &AXWindow) -> Option<Handle> {
+  CurrentPlatform::window_handle(window)
+}
+
+/// Start a display-linked callback.
+pub(crate) fn start_display_link<F: Fn() + Send + Sync + 'static>(
+  callback: F,
+) -> Option<DisplayLinkHandle> {
+  CurrentPlatform::start_display_link(callback)
+}
+
+/// Enumerate all visible windows.
+pub(crate) fn enumerate_windows() -> Vec<AXWindow> {
+  CurrentPlatform::fetch_windows(None)
+}
+
+/// Get main screen dimensions (width, height).
+pub(crate) fn get_main_screen_dimensions() -> (f64, f64) {
+  CurrentPlatform::screen_size()
+}
+
+/// Get current mouse position.
+pub(crate) fn get_mouse_position() -> Option<Point> {
+  Some(CurrentPlatform::mouse_position())
+}
+
+/// Enable accessibility for a process (mostly for Chromium/Electron apps).
+pub(crate) fn enable_accessibility_for_pid(pid: u32) {
+  CurrentPlatform::enable_accessibility_for_pid(pid);
+}
+
+/// Convert raw platform role string to our Role enum.
+#[cfg(target_os = "macos")]
+pub(crate) fn role_from_raw(raw: &str) -> crate::accessibility::Role {
+  macos::mapping::role_from_macos(raw)
+}
+

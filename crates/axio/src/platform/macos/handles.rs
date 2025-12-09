@@ -112,8 +112,8 @@ impl ElementHandle {
     }
   }
 
-  /// Perform an action on this element.
-  pub(crate) fn perform_action(&self, action: &str) -> Result<(), AXError> {
+  /// Perform an action on this element (internal - returns AXError).
+  pub(in crate::platform) fn perform_action_internal(&self, action: &str) -> Result<(), AXError> {
     let action_name = CFString::from_str(action);
     unsafe {
       let result = self.0.perform_action(&action_name);
@@ -171,7 +171,10 @@ impl ElementHandle {
   /// Fetch all common attributes in a single batch call (10x faster).
   /// This is the recommended way to build an `AXElement`.
   #[allow(clippy::too_many_lines)]
-  pub(crate) fn get_attributes(&self, role_hint: Option<&str>) -> ElementAttributes {
+  pub(in crate::platform) fn fetch_attributes(
+    &self,
+    role_hint: Option<&str>,
+  ) -> crate::platform::ElementAttributes {
     // Fetch attributes in batch
     let role = CFString::from_static_str("AXRole");
     let subrole = CFString::from_static_str("AXSubrole");
