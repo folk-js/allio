@@ -2,7 +2,7 @@
 WebSocket server implementation.
 */
 
-use crate::{Config, Event};
+use crate::Event;
 use axum::{
   extract::{
     ws::{Message, WebSocket, WebSocketUpgrade},
@@ -17,6 +17,12 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
+
+/// Default WebSocket server port.
+pub const DEFAULT_WS_PORT: u16 = 3030;
+
+/// Default capacity for the event broadcast channel.
+const DEFAULT_CHANNEL_CAPACITY: usize = 1000;
 
 /// Handler for app-specific RPC methods not in axio core.
 pub type CustomRpcHandler = Arc<dyn Fn(&str, &Value) -> Option<Value> + Send + Sync>;
@@ -39,18 +45,18 @@ impl std::fmt::Debug for WebSocketState {
 }
 
 impl WebSocketState {
-  /// Create WebSocket state with default config.
+  /// Create WebSocket state with default port (3030).
   pub fn new() -> Self {
-    Self::with_config(&Config::default())
+    Self::with_port(DEFAULT_WS_PORT)
   }
 
-  /// Create WebSocket state with custom config.
-  pub fn with_config(config: &Config) -> Self {
-    let (json_tx, _) = broadcast::channel::<String>(config.event_channel_capacity);
+  /// Create WebSocket state with custom port.
+  pub fn with_port(port: u16) -> Self {
+    let (json_tx, _) = broadcast::channel::<String>(DEFAULT_CHANNEL_CAPACITY);
     Self {
       json_sender: Arc::new(json_tx),
       custom_handler: None,
-      port: config.ws_port,
+      port,
     }
   }
 
