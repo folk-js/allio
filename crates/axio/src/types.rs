@@ -1,5 +1,7 @@
 /*! Regenerate: `npm run typegen` */
 
+#![allow(missing_docs)]
+
 use derive_more::{Display, From, Into};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -17,11 +19,11 @@ pub struct WindowId(pub u32);
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub struct ElementId(pub u32);
 
-/// Global counter for ElementId generation. Starts at 1 (0 could be confused with "null").
+/// Global counter for `ElementId` generation. Starts at 1 (0 could be confused with "null").
 static ELEMENT_COUNTER: AtomicU32 = AtomicU32::new(1);
 
 impl ElementId {
-  /// Generate a new unique ElementId.
+  /// Generate a new unique `ElementId`.
   pub fn new() -> Self {
     Self(ELEMENT_COUNTER.fetch_add(1, Ordering::Relaxed))
   }
@@ -88,6 +90,17 @@ impl Bounds {
       && point.y >= self.y
       && point.y <= self.y + self.h
   }
+
+  /// Check if bounds match a given size at origin (0,0) within a margin.
+  pub fn matches_size_at_origin(&self, width: f64, height: f64) -> bool {
+    let target = Bounds {
+      x: 0.0,
+      y: 0.0,
+      w: width,
+      h: height,
+    };
+    self.matches(&target, 1.0)
+  }
 }
 
 /// A 2D point in screen coordinates.
@@ -99,7 +112,7 @@ pub struct Point {
 }
 
 impl Point {
-  pub fn new(x: f64, y: f64) -> Self {
+  pub const fn new(x: f64, y: f64) -> Self {
     Self { x, y }
   }
 
@@ -142,7 +155,7 @@ pub struct AXElement {
   pub parent_id: Option<ElementId>,
   pub children: Option<Vec<ElementId>>,
   pub role: crate::accessibility::Role,
-  /// Raw platform role string for debugging (e.g., "AXRadioGroup", "AXButton/AXCloseButton")
+  /// Raw platform role string for debugging (e.g., "`AXRadioGroup`", "AXButton/AXCloseButton")
   pub platform_role: String,
 
   // === Text properties ===
@@ -254,7 +267,7 @@ pub enum Event {
 }
 
 /// Text selection range within an element
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "packages/axio-client/src/types/generated/")]
 pub struct TextRange {
   pub start: u32,
@@ -262,21 +275,21 @@ pub struct TextRange {
 }
 
 impl TextRange {
-  pub fn new(start: u32, length: u32) -> Self {
+  pub const fn new(start: u32, length: u32) -> Self {
     Self { start, length }
   }
 
   /// End position (exclusive).
-  pub fn end(&self) -> u32 {
+  pub const fn end(&self) -> u32 {
     self.start + self.length
   }
 
-  pub fn is_empty(&self) -> bool {
+  pub const fn is_empty(&self) -> bool {
     self.length == 0
   }
 
   /// Check if a position falls within this range.
-  pub fn contains(&self, position: u32) -> bool {
+  pub const fn contains(&self, position: u32) -> bool {
     position >= self.start && position < self.end()
   }
 }

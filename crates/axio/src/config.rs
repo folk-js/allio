@@ -16,7 +16,7 @@ let config = Config {
 */
 
 /// AXIO configuration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Config {
   /// Capacity of the event broadcast channel.
   /// Default: 1000 events.

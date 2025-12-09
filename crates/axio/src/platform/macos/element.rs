@@ -2,7 +2,7 @@
 Element building and operations for macOS accessibility.
 
 Handles:
-- Building AXElement from platform handles
+- Building `AXElement` from platform handles
 - Child/parent discovery
 - Element refresh
 - Hash-based deduplication
@@ -19,14 +19,14 @@ use crate::accessibility::Role;
 
 /// Refine role based on element attributes.
 ///
-/// Plain AXGroup with no label/value is likely just a layout container
-/// with no semantic meaning—classify as GenericGroup.
-/// Semantic group types (AXSplitGroup, AXRadioGroup) stay as Group.
+/// Plain `AXGroup` with no label/value is likely just a layout container
+/// with no semantic meaning—classify as `GenericGroup`.
+/// Semantic group types (`AXSplitGroup`, `AXRadioGroup`) stay as Group.
 fn refine_role(
   role: Role,
   raw_role: &str,
-  label: &Option<String>,
-  value: &Option<crate::accessibility::Value>,
+  label: Option<&String>,
+  value: Option<&crate::accessibility::Value>,
 ) -> Role {
   // Only demote plain AXGroup, not semantic group types
   if role == Role::Group && raw_role == "AXGroup" && label.is_none() && value.is_none() {
@@ -36,22 +36,27 @@ fn refine_role(
   }
 }
 
-/// Build an AXElement from an ElementHandle and register it.
+/// Build an `AXElement` from an `ElementHandle` and register it.
 /// Uses batch attribute fetching for ~10x faster element creation.
-/// All unsafe code is encapsulated in ElementHandle methods.
+/// All unsafe code is encapsulated in `ElementHandle` methods.
 /// Returns None if the element's hash is in the dead set (was previously destroyed).
-pub fn build_element_from_handle(
+pub(super) fn build_element_from_handle(
   handle: ElementHandle,
-  window_id: &WindowId,
+  window_id: WindowId,
   pid: u32,
-  parent_id: Option<&ElementId>,
+  parent_id: Option<ElementId>,
 ) -> Option<AXElement> {
   // Fetch all attributes in ONE IPC call - safe method!
   let attrs = handle.get_attributes(None);
 
   let raw_role = attrs.role.clone().unwrap_or_else(|| "Unknown".to_string());
   let base_role = role_from_macos(&raw_role);
-  let role = refine_role(base_role, &raw_role, &attrs.title, &attrs.value);
+  let role = refine_role(
+    base_role,
+    &raw_role,
+    attrs.title.as_ref(),
+    attrs.value.as_ref(),
+  );
 
   // Combine role + subrole for debugging display (e.g., "AXButton/AXCloseButton")
   let platform_role = match &attrs.subrole {
@@ -69,11 +74,11 @@ pub fn build_element_from_handle(
     == Some("AXApplication");
 
   // Parent ID is set if caller passed it (child discovery), otherwise None (orphan or root)
-  let parent_id_value = if is_root { None } else { parent_id.copied() };
+  let parent_id_value = if is_root { None } else { parent_id };
 
   let element = AXElement {
     id: ElementId::new(),
-    window_id: *window_id,
+    window_id,
     pid: ProcessId(pid),
     is_root,
     parent_id: parent_id_value,
@@ -101,7 +106,7 @@ pub fn build_element_from_handle(
 }
 
 /// Fetch and register children of an element.
-pub fn children(parent_id: &ElementId, max_children: usize) -> AxioResult<Vec<AXElement>> {
+pub(crate) fn children(parent_id: ElementId, max_children: usize) -> AxioResult<Vec<AXElement>> {
   let info = crate::registry::get_stored_element_info(parent_id)?;
 
   let child_handles = info.handle.get_children();
@@ -115,7 +120,7 @@ pub fn children(parent_id: &ElementId, max_children: usize) -> AxioResult<Vec<AX
 
   for child_handle in child_handles.into_iter().take(max_children) {
     if let Some(child) =
-      build_element_from_handle(child_handle, &info.window_id, info.pid, Some(parent_id))
+      build_element_from_handle(child_handle, info.window_id, info.pid, Some(parent_id))
     {
       child_ids.push(child.id);
       children.push(child);
@@ -128,26 +133,31 @@ pub fn children(parent_id: &ElementId, max_children: usize) -> AxioResult<Vec<AX
 }
 
 /// Fetch and register parent of an element.
-/// The lazy linking in register_element will connect this element to the parent.
-pub fn parent(element_id: &ElementId) -> AxioResult<Option<AXElement>> {
+/// The lazy linking in `register_element` will connect this element to the parent.
+pub(crate) fn parent(element_id: ElementId) -> AxioResult<Option<AXElement>> {
   let info = crate::registry::get_stored_element_info(element_id)?;
 
   let Some(parent_handle) = info.handle.get_element("AXParent") else {
     return Ok(None);
   };
 
-  let parent = build_element_from_handle(parent_handle, &info.window_id, info.pid, None);
+  let parent = build_element_from_handle(parent_handle, info.window_id, info.pid, None);
   Ok(parent)
 }
 
 /// Refresh an element's attributes from the platform.
-pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
+pub(crate) fn refresh_element(element_id: ElementId) -> AxioResult<AXElement> {
   let info = crate::registry::get_stored_element_info(element_id)?;
 
   let attrs = info.handle.get_attributes(Some(&info.platform_role));
 
   let base_role = role_from_macos(&info.platform_role);
-  let role = refine_role(base_role, &info.platform_role, &attrs.title, &attrs.value);
+  let role = refine_role(
+    base_role,
+    &info.platform_role,
+    attrs.title.as_ref(),
+    attrs.value.as_ref(),
+  );
 
   // Combine role + subrole for debugging display
   let platform_role = match &attrs.subrole {
@@ -156,7 +166,7 @@ pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
   };
 
   let updated = AXElement {
-    id: *element_id,
+    id: element_id,
     window_id: info.window_id,
     pid: ProcessId(info.pid),
     is_root: info.is_root,
@@ -186,12 +196,12 @@ pub fn refresh_element(element_id: &ElementId) -> AxioResult<AXElement> {
 }
 
 /// Get hash for element handle (for O(1) dedup lookup).
-pub fn element_hash(handle: &ElementHandle) -> u64 {
+pub(crate) fn element_hash(handle: &ElementHandle) -> u64 {
   CFHash(Some(handle.inner())) as u64
 }
 
 /// Write a typed value to an element.
-pub fn write_element_value(
+pub(crate) fn write_element_value(
   handle: &ElementHandle,
   value: &crate::accessibility::Value,
   platform_role: &str,
@@ -209,7 +219,7 @@ pub fn write_element_value(
 }
 
 /// Perform a click (press) action on an element.
-pub fn click_element(handle: &ElementHandle) -> AxioResult<()> {
+pub(crate) fn click_element(handle: &ElementHandle) -> AxioResult<()> {
   handle
     .perform_action(ax_action::PRESS)
     .map_err(|e| AxioError::AccessibilityError(format!("AXPress failed: {e:?}")))

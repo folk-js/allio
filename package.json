@@ -12,9 +12,7 @@
     "build": "tsc && vite build",
     "check": "cargo check",
     "docs": "cargo doc -p axio --open",
-    "typegen": "TS_RS_EXPORT_DIR=$PWD cargo test -p axio --features ws export_bindings",
-    "profile:leaks": "./scripts/check-leaks.sh",
-    "profile:watch": "./scripts/watch-memory.sh"
+    "typegen": "TS_RS_EXPORT_DIR=$PWD cargo test -p axio --features ws export_bindings"
   },
   "dependencies": {
     "d3-force": "^3.0.0"

@@ -8,6 +8,9 @@ Handles:
 - Window ID lookup for elements
 */
 
+#![allow(unsafe_code)]
+#![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+
 use objc2_application_services::{AXUIElement, AXValueType};
 use objc2_core_foundation::{CFRange, CFRetained, CFString};
 use std::ffi::c_void;
@@ -21,7 +24,7 @@ use super::util::app_element;
 
 /// Handle focus change notification from callback.
 /// Builds the element and delegates to registry for state update and event emission.
-pub fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
+pub(super) fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
   let handle = ElementHandle::new(element);
 
   let Some(window_id) = get_window_id_for_handle(&handle, pid) else {
@@ -30,7 +33,7 @@ pub fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
     return;
   };
 
-  let Some(ax_element) = build_element_from_handle(handle, &window_id, pid, None) else {
+  let Some(ax_element) = build_element_from_handle(handle, window_id, pid, None) else {
     log::warn!("FocusChanged: element build failed for PID {pid}");
     return;
   };
@@ -48,7 +51,7 @@ pub fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
 
 /// Handle selection change notification from the unified callback.
 /// Builds the element and delegates to registry for state update and event emission.
-pub fn handle_app_selection_changed(pid: u32, element: CFRetained<AXUIElement>) {
+pub(super) fn handle_app_selection_changed(pid: u32, element: CFRetained<AXUIElement>) {
   let handle = ElementHandle::new(element);
 
   let Some(window_id) = get_window_id_for_handle(&handle, pid) else {
@@ -57,7 +60,7 @@ pub fn handle_app_selection_changed(pid: u32, element: CFRetained<AXUIElement>) 
     return;
   };
 
-  let Some(ax_element) = build_element_from_handle(handle.clone(), &window_id, pid, None) else {
+  let Some(ax_element) = build_element_from_handle(handle.clone(), window_id, pid, None) else {
     log::warn!("SelectionChanged: element build failed for PID {pid}");
     return;
   };
@@ -74,7 +77,7 @@ pub fn handle_app_selection_changed(pid: u32, element: CFRetained<AXUIElement>) 
 }
 
 /// Query the currently focused element and selection for an app.
-pub fn get_current_focus(
+pub(crate) fn get_current_focus(
   pid: u32,
 ) -> (
   Option<crate::types::AXElement>,
@@ -86,12 +89,11 @@ pub fn get_current_focus(
     return (None, None);
   };
 
-  let window_id = match get_window_id_for_handle(&focused_handle, pid) {
-    Some(id) => id,
-    None => return (None, None),
+  let Some(window_id) = get_window_id_for_handle(&focused_handle, pid) else {
+    return (None, None);
   };
 
-  let Some(element) = build_element_from_handle(focused_handle.clone(), &window_id, pid, None)
+  let Some(element) = build_element_from_handle(focused_handle.clone(), window_id, pid, None)
   else {
     return (None, None);
   };
@@ -106,7 +108,7 @@ pub fn get_current_focus(
   (Some(element), selection)
 }
 
-/// Get window ID for an ElementHandle using hash-based lookup.
+/// Get window ID for an `ElementHandle` using hash-based lookup.
 /// First checks if element is already registered, then falls back to focused window.
 fn get_window_id_for_handle(handle: &ElementHandle, pid: u32) -> Option<WindowId> {
   // First: check if element is already registered (by hash)
@@ -136,7 +138,7 @@ fn get_selected_text_range(handle: &ElementHandle) -> Option<crate::types::TextR
     };
     if ax_value.value(
       AXValueType::CFRange,
-      NonNull::new(&mut range as *mut _ as *mut c_void)?,
+      NonNull::new((&raw mut range).cast::<c_void>())?,
     ) {
       Some(crate::types::TextRange {
         start: range.location as u32,

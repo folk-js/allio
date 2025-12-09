@@ -9,6 +9,8 @@ Handles:
 - Fetching window handles by bounds matching
 */
 
+#![allow(unsafe_code)]
+
 use objc2_application_services::AXError;
 use objc2_core_foundation::{CFBoolean, CFString};
 
@@ -19,23 +21,21 @@ use super::element::build_element_from_handle;
 use super::mapping::ax_role;
 use super::util::app_element;
 
-/// Get all window ElementHandles for a given PID.
-pub fn get_window_elements(pid: u32) -> AxioResult<Vec<ElementHandle>> {
+/// Get all window `ElementHandles` for a given PID.
+fn get_window_elements(pid: u32) -> Vec<ElementHandle> {
   let app_handle = ElementHandle::new(app_element(pid));
   let children = app_handle.get_children();
 
-  let windows = children
+  children
     .into_iter()
     .filter(|child| child.get_string("AXRole").as_deref() == Some(ax_role::WINDOW))
-    .collect();
-
-  Ok(windows)
+    .collect()
 }
 
 /// Get the root element for a window.
-pub fn get_window_root(window_id: &WindowId) -> AxioResult<AXElement> {
+pub(crate) fn get_window_root(window_id: WindowId) -> AxioResult<AXElement> {
   let (window, handle) = crate::registry::get_window_with_handle(window_id)
-    .ok_or(AxioError::WindowNotFound(*window_id))?;
+    .ok_or(AxioError::WindowNotFound(window_id))?;
 
   let window_handle =
     handle.ok_or_else(|| AxioError::Internal(format!("Window {window_id} has no AX element")))?;
@@ -58,7 +58,9 @@ pub fn get_window_root(window_id: &WindowId) -> AxioResult<AXElement> {
 const HIT_TEST_RETRY_DELAYS_MS: [u64; 3] = [0, 10, 25];
 
 /// Get the accessibility element at a specific screen position.
-pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
+pub(crate) fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
+  const MAX_DEPTH: u8 = 10;
+
   let window = crate::registry::find_window_at_point(x, y).ok_or_else(|| {
     AxioError::AccessibilityError(format!("No tracked window found at position ({x}, {y})"))
   })?;
@@ -71,7 +73,7 @@ pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
   let mut element_handle = None;
   let mut fallback_container = None;
 
-  for &delay_ms in HIT_TEST_RETRY_DELAYS_MS.iter() {
+  for &delay_ms in &HIT_TEST_RETRY_DELAYS_MS {
     if delay_ms > 0 {
       std::thread::sleep(std::time::Duration::from_millis(delay_ms));
     }
@@ -85,8 +87,7 @@ pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
       && attrs
         .bounds
         .as_ref()
-        .map(|b| b.matches(&window.bounds, 0.0))
-        .unwrap_or(false);
+        .is_some_and(|b| b.matches(&window.bounds, 0.0));
 
     if is_fallback_container {
       fallback_container = Some(hit);
@@ -104,7 +105,6 @@ pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
 
   // Try recursive hit testing - drill down through nested containers
   let raw_attrs = element_handle.get_attributes(None);
-  const MAX_DEPTH: u8 = 10;
   for _ in 1..=MAX_DEPTH {
     let Some(deeper) = element_handle.element_at_position(x, y) else {
       break;
@@ -122,13 +122,13 @@ pub fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
     element_handle = deeper;
   }
 
-  build_element_from_handle(element_handle, &window_id, pid, None).ok_or_else(|| {
+  build_element_from_handle(element_handle, window_id, pid, None).ok_or_else(|| {
     AxioError::AccessibilityError(format!("Element at ({x}, {y}) was previously destroyed"))
   })
 }
 
 /// Enable accessibility (mostly for Chromium/Electron apps)
-pub fn enable_accessibility_for_pid(pid: crate::ProcessId) {
+pub(crate) fn enable_accessibility_for_pid(pid: crate::ProcessId) {
   let raw_pid = pid.0;
   let app_el = app_element(raw_pid);
   let attr_name = CFString::from_static_str("AXManualAccessibility");
@@ -147,16 +147,16 @@ pub fn enable_accessibility_for_pid(pid: crate::ProcessId) {
 
 /// Fetch an element handle for a window by matching bounds
 /// TODO: find a way to not do this...
-pub fn fetch_window_handle(window: &crate::AXWindow) -> Option<ElementHandle> {
-  let window_elements = get_window_elements(window.process_id.0).ok()?;
+pub(crate) fn fetch_window_handle(window: &crate::AXWindow) -> Option<ElementHandle> {
+  const MARGIN: f64 = 2.0;
+
+  let window_elements = get_window_elements(window.process_id.0);
 
   if window_elements.is_empty() {
     return None;
   }
 
-  const MARGIN: f64 = 2.0;
-
-  for element in window_elements.iter() {
+  for element in &window_elements {
     if let Some(element_bounds) = element.get_bounds() {
       if window.bounds.matches(&element_bounds, MARGIN) {
         return Some(element.clone());
@@ -166,7 +166,7 @@ pub fn fetch_window_handle(window: &crate::AXWindow) -> Option<ElementHandle> {
 
   // Fallback: use only element if there's just one
   if window_elements.len() == 1 {
-    return Some(window_elements[0].clone());
+    return window_elements.first().cloned();
   }
 
   None

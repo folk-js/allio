@@ -5,13 +5,15 @@ Roles describe what an element *is* in the UI hierarchy.
 Platform-specific role strings are mapped in `platform/macos/mapping.rs`.
 */
 
+#![allow(missing_docs)]
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 /// Semantic UI role (cross-platform).
 ///
 /// These roles are inspired by WAI-ARIA but simplified for our use case.
-/// Platform mappings (macOS AXRole strings, Windows UIA ControlTypes) are
+/// Platform mappings (macOS `AXRole` strings, Windows UIA `ControlTypes`) are
 /// handled by the platform layer. See `platform::map_role_from_platform`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
@@ -64,12 +66,12 @@ pub enum Role {
   // === Generic / Fallback ===
   /// Generic container - layout-only groups with no semantic meaning.
   /// Candidates for tree-collapsing (e.g., a group containing just one group).
-  /// Mapped from AXGroup when there's no label/value.
+  /// Mapped from `AXGroup` when there's no label/value.
   GenericGroup,
 
   /// Generic element - known platform elements without specific semantics.
   /// Explicitly mapped (not unknown), but non-interactive chrome like scrollbars.
-  /// Will be pruned from simplified views; platform_role preserved for debugging.
+  /// Will be pruned from simplified views; `platform_role` preserved for debugging.
   GenericElement,
 
   /// Unknown role - platform role didn't map to anything known.
@@ -85,23 +87,50 @@ pub enum Role {
 pub enum ValueType {
   /// Element does not have a meaningful value
   None,
-  /// Text value (TextField, TextArea, SearchField, ComboBox)
+  /// Text value (`TextField`, `TextArea`, `SearchField`, `ComboBox`)
   String,
-  /// Numeric value (Slider, ProgressBar, Stepper)
+  /// Numeric value (Slider, `ProgressBar`, Stepper)
   /// Use `Role::expects_integer()` to check if integer vs float.
   Number,
-  /// Boolean value (Checkbox, Switch, RadioButton)
+  /// Boolean value (Checkbox, Switch, `RadioButton`)
   Boolean,
 }
 
 impl Role {
   /// Expected value type for elements with this role.
-  pub fn value_type(&self) -> ValueType {
+  pub const fn value_type(&self) -> ValueType {
     match self {
       Self::TextField | Self::TextArea | Self::SearchField | Self::ComboBox => ValueType::String,
       Self::Checkbox | Self::Switch | Self::RadioButton => ValueType::Boolean,
       Self::Slider | Self::ProgressBar | Self::Stepper => ValueType::Number,
-      _ => ValueType::None,
+      // Structural/navigation/static roles have no editable value
+      Self::Application
+      | Self::Window
+      | Self::Document
+      | Self::Group
+      | Self::ScrollArea
+      | Self::Toolbar
+      | Self::Menu
+      | Self::MenuBar
+      | Self::MenuItem
+      | Self::Tab
+      | Self::TabList
+      | Self::List
+      | Self::ListItem
+      | Self::Table
+      | Self::Row
+      | Self::Cell
+      | Self::Tree
+      | Self::TreeItem
+      | Self::Button
+      | Self::Link
+      | Self::StaticText
+      | Self::Heading
+      | Self::Image
+      | Self::Separator
+      | Self::GenericGroup
+      | Self::GenericElement
+      | Self::Unknown => ValueType::None,
     }
   }
 
@@ -109,24 +138,24 @@ impl Role {
   ///
   /// Returns true for roles like Stepper where values are discrete.
   /// Returns false for roles like Slider where values are continuous.
-  pub fn expects_integer(&self) -> bool {
+  pub const fn expects_integer(&self) -> bool {
     matches!(self, Self::Stepper)
   }
 
   /// Can values be written to elements with this role?
-  pub fn is_writable(&self) -> bool {
+  pub const fn is_writable(&self) -> bool {
     !matches!(self.value_type(), ValueType::None)
   }
 
   /// Should we automatically watch for value changes when this element is focused?
   ///
   /// True for text inputs where we want to track typing in real-time.
-  pub fn auto_watch_on_focus(&self) -> bool {
+  pub const fn auto_watch_on_focus(&self) -> bool {
     matches!(self.value_type(), ValueType::String)
   }
 
   /// Can elements with this role typically receive keyboard focus?
-  pub fn is_focusable(&self) -> bool {
+  pub const fn is_focusable(&self) -> bool {
     matches!(
       self,
       // Windows and documents
@@ -143,7 +172,7 @@ impl Role {
   }
 
   /// Does this role typically contain other elements?
-  pub fn is_container(&self) -> bool {
+  pub const fn is_container(&self) -> bool {
     matches!(
       self,
       Self::Application
@@ -165,7 +194,7 @@ impl Role {
   }
 
   /// Is this a generic/placeholder role that may be pruned from simplified views?
-  pub fn is_generic(&self) -> bool {
+  pub const fn is_generic(&self) -> bool {
     matches!(
       self,
       Self::GenericGroup | Self::GenericElement | Self::Unknown
@@ -173,7 +202,7 @@ impl Role {
   }
 
   /// Is this an interactive element that users can click/activate?
-  pub fn is_interactive(&self) -> bool {
+  pub const fn is_interactive(&self) -> bool {
     matches!(
       self,
       Self::Button
@@ -196,7 +225,7 @@ impl Role {
   }
 
   /// Is this a text input element?
-  pub fn is_text_input(&self) -> bool {
+  pub const fn is_text_input(&self) -> bool {
     matches!(
       self,
       Self::TextField | Self::TextArea | Self::SearchField | Self::ComboBox
@@ -204,7 +233,7 @@ impl Role {
   }
 
   /// Can elements with this role have a meaningful value attribute?
-  pub fn can_have_value(&self) -> bool {
+  pub const fn can_have_value(&self) -> bool {
     matches!(
       self,
       Self::TextField

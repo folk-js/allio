@@ -10,18 +10,18 @@ and the macOS Accessibility API string constants.
 use crate::accessibility::{Action, Notification, Role};
 
 /// macOS notification string constants (kAX*Notification).
-pub mod ax_notification {
-  pub const DESTROYED: &str = "AXUIElementDestroyed";
-  pub const VALUE_CHANGED: &str = "AXValueChanged";
-  pub const TITLE_CHANGED: &str = "AXTitleChanged";
-  pub const FOCUS_CHANGED: &str = "AXFocusedUIElementChanged";
-  pub const SELECTION_CHANGED: &str = "AXSelectedTextChanged";
-  pub const BOUNDS_CHANGED: &str = "AXMoved"; // Also AXResized
-  pub const CHILDREN_CHANGED: &str = "AXLayoutChanged";
+mod ax_notification {
+  pub(super) const DESTROYED: &str = "AXUIElementDestroyed";
+  pub(super) const VALUE_CHANGED: &str = "AXValueChanged";
+  pub(super) const TITLE_CHANGED: &str = "AXTitleChanged";
+  pub(super) const FOCUS_CHANGED: &str = "AXFocusedUIElementChanged";
+  pub(super) const SELECTION_CHANGED: &str = "AXSelectedTextChanged";
+  pub(super) const BOUNDS_CHANGED: &str = "AXMoved"; // Also AXResized
+  pub(super) const CHILDREN_CHANGED: &str = "AXLayoutChanged";
 }
 
 /// Convert our Notification to macOS notification string.
-pub fn notification_to_macos(n: Notification) -> &'static str {
+pub(super) const fn notification_to_macos(n: Notification) -> &'static str {
   match n {
     Notification::Destroyed => ax_notification::DESTROYED,
     Notification::ValueChanged => ax_notification::VALUE_CHANGED,
@@ -34,7 +34,7 @@ pub fn notification_to_macos(n: Notification) -> &'static str {
 }
 
 /// Convert macOS notification string to our Notification.
-pub fn notification_from_macos(s: &str) -> Option<Notification> {
+pub(super) fn notification_from_macos(s: &str) -> Option<Notification> {
   match s {
     ax_notification::DESTROYED => Some(Notification::Destroyed),
     ax_notification::VALUE_CHANGED => Some(Notification::ValueChanged),
@@ -48,22 +48,22 @@ pub fn notification_from_macos(s: &str) -> Option<Notification> {
 }
 
 /// macOS action string constants (kAX*Action).
-pub mod ax_action {
-  pub const PRESS: &str = "AXPress";
-  pub const SHOW_MENU: &str = "AXShowMenu";
-  pub const INCREMENT: &str = "AXIncrement";
-  pub const DECREMENT: &str = "AXDecrement";
-  pub const CONFIRM: &str = "AXConfirm";
-  pub const CANCEL: &str = "AXCancel";
-  pub const RAISE: &str = "AXRaise";
-  pub const PICK: &str = "AXPick";
-  pub const EXPAND: &str = "AXExpand";
-  pub const COLLAPSE: &str = "AXCollapse";
-  pub const SCROLL_TO_VISIBLE: &str = "AXScrollToVisible";
+pub(in crate::platform::macos) mod ax_action {
+  pub(in crate::platform::macos) const PRESS: &str = "AXPress";
+  pub(super) const SHOW_MENU: &str = "AXShowMenu";
+  pub(super) const INCREMENT: &str = "AXIncrement";
+  pub(super) const DECREMENT: &str = "AXDecrement";
+  pub(super) const CONFIRM: &str = "AXConfirm";
+  pub(super) const CANCEL: &str = "AXCancel";
+  pub(super) const RAISE: &str = "AXRaise";
+  pub(super) const PICK: &str = "AXPick";
+  pub(super) const EXPAND: &str = "AXExpand";
+  pub(super) const COLLAPSE: &str = "AXCollapse";
+  pub(super) const SCROLL_TO_VISIBLE: &str = "AXScrollToVisible";
 }
 
 /// Convert our Action to macOS action string.
-pub fn action_to_macos(a: Action) -> &'static str {
+const fn action_to_macos(a: Action) -> &'static str {
   match a {
     Action::Press => ax_action::PRESS,
     Action::ShowMenu => ax_action::SHOW_MENU,
@@ -80,7 +80,7 @@ pub fn action_to_macos(a: Action) -> &'static str {
 }
 
 /// Convert macOS action string to our Action.
-pub fn action_from_macos(s: &str) -> Option<Action> {
+pub(in crate::platform) fn action_from_macos(s: &str) -> Option<Action> {
   match s {
     ax_action::PRESS => Some(Action::Press),
     ax_action::SHOW_MENU => Some(Action::ShowMenu),
@@ -98,85 +98,85 @@ pub fn action_from_macos(s: &str) -> Option<Action> {
 }
 
 /// macOS role string constants (kAX*Role).
-pub mod ax_role {
+pub(in crate::platform::macos) mod ax_role {
   // Structural
-  pub const APPLICATION: &str = "AXApplication";
-  pub const WINDOW: &str = "AXWindow";
-  pub const STANDARD_WINDOW: &str = "AXStandardWindow";
-  pub const DOCUMENT: &str = "AXDocument";
-  pub const WEB_AREA: &str = "AXWebArea";
-  pub const GROUP: &str = "AXGroup";
-  pub const SPLIT_GROUP: &str = "AXSplitGroup";
-  pub const RADIO_GROUP: &str = "AXRadioGroup";
-  pub const SCROLL_AREA: &str = "AXScrollArea";
-  pub const TOOLBAR: &str = "AXToolbar";
+  pub(super) const APPLICATION: &str = "AXApplication";
+  pub(in crate::platform::macos) const WINDOW: &str = "AXWindow";
+  pub(super) const STANDARD_WINDOW: &str = "AXStandardWindow";
+  pub(super) const DOCUMENT: &str = "AXDocument";
+  pub(super) const WEB_AREA: &str = "AXWebArea";
+  pub(super) const GROUP: &str = "AXGroup";
+  pub(super) const SPLIT_GROUP: &str = "AXSplitGroup";
+  pub(super) const RADIO_GROUP: &str = "AXRadioGroup";
+  pub(super) const SCROLL_AREA: &str = "AXScrollArea";
+  pub(super) const TOOLBAR: &str = "AXToolbar";
 
   // Navigation
-  pub const MENU: &str = "AXMenu";
-  pub const MENU_BAR: &str = "AXMenuBar";
-  pub const MENU_ITEM: &str = "AXMenuItem";
-  pub const TAB: &str = "AXTab";
-  pub const TAB_GROUP: &str = "AXTabGroup";
+  pub(super) const MENU: &str = "AXMenu";
+  pub(super) const MENU_BAR: &str = "AXMenuBar";
+  pub(super) const MENU_ITEM: &str = "AXMenuItem";
+  pub(super) const TAB: &str = "AXTab";
+  pub(super) const TAB_GROUP: &str = "AXTabGroup";
 
   // Collections
-  pub const LIST: &str = "AXList";
-  pub const ROW: &str = "AXRow";
-  pub const TABLE: &str = "AXTable";
-  pub const CELL: &str = "AXCell";
-  pub const OUTLINE: &str = "AXOutline"; // Tree
-  pub const OUTLINE_ROW: &str = "AXOutlineRow"; // TreeItem
+  pub(super) const LIST: &str = "AXList";
+  pub(super) const ROW: &str = "AXRow";
+  pub(super) const TABLE: &str = "AXTable";
+  pub(super) const CELL: &str = "AXCell";
+  pub(super) const OUTLINE: &str = "AXOutline"; // Tree
+  pub(super) const OUTLINE_ROW: &str = "AXOutlineRow"; // TreeItem
 
   // Interactive
-  pub const BUTTON: &str = "AXButton";
-  pub const DEFAULT_BUTTON: &str = "AXDefaultButton";
-  pub const MENU_BUTTON: &str = "AXMenuButton";
-  pub const LINK: &str = "AXLink";
-  pub const TEXT_FIELD: &str = "AXTextField";
-  pub const TEXT_AREA: &str = "AXTextArea";
-  pub const SECURE_TEXT_FIELD: &str = "AXSecureTextField";
-  pub const SEARCH_FIELD: &str = "AXSearchField";
-  pub const COMBO_BOX: &str = "AXComboBox";
-  pub const CHECKBOX: &str = "AXCheckBox";
-  pub const RADIO_BUTTON: &str = "AXRadioButton";
-  pub const SLIDER: &str = "AXSlider";
-  pub const STEPPER: &str = "AXStepper";
-  pub const INCREMENTOR: &str = "AXIncrementor"; // Also stepper
-  pub const PROGRESS_INDICATOR: &str = "AXProgressIndicator";
+  pub(super) const BUTTON: &str = "AXButton";
+  pub(super) const DEFAULT_BUTTON: &str = "AXDefaultButton";
+  pub(super) const MENU_BUTTON: &str = "AXMenuButton";
+  pub(super) const LINK: &str = "AXLink";
+  pub(super) const TEXT_FIELD: &str = "AXTextField";
+  pub(super) const TEXT_AREA: &str = "AXTextArea";
+  pub(super) const SECURE_TEXT_FIELD: &str = "AXSecureTextField";
+  pub(super) const SEARCH_FIELD: &str = "AXSearchField";
+  pub(super) const COMBO_BOX: &str = "AXComboBox";
+  pub(super) const CHECKBOX: &str = "AXCheckBox";
+  pub(super) const RADIO_BUTTON: &str = "AXRadioButton";
+  pub(super) const SLIDER: &str = "AXSlider";
+  pub(super) const STEPPER: &str = "AXStepper";
+  pub(super) const INCREMENTOR: &str = "AXIncrementor"; // Also stepper
+  pub(super) const PROGRESS_INDICATOR: &str = "AXProgressIndicator";
 
   // Static content
-  pub const STATIC_TEXT: &str = "AXStaticText";
-  pub const HEADING: &str = "AXHeading";
-  pub const IMAGE: &str = "AXImage";
-  pub const SPLITTER: &str = "AXSplitter";
+  pub(super) const STATIC_TEXT: &str = "AXStaticText";
+  pub(super) const HEADING: &str = "AXHeading";
+  pub(super) const IMAGE: &str = "AXImage";
+  pub(super) const SPLITTER: &str = "AXSplitter";
 
   // Generic elements (known, non-semantic chrome)
-  pub const SCROLL_BAR: &str = "AXScrollBar";
-  pub const VALUE_INDICATOR: &str = "AXValueIndicator";
-  pub const HANDLE: &str = "AXHandle";
-  pub const MATTE: &str = "AXMatte";
-  pub const RULER: &str = "AXRuler";
-  pub const RULER_MARKER: &str = "AXRulerMarker";
-  pub const GROW_AREA: &str = "AXGrowArea";
-  pub const DRAWER: &str = "AXDrawer";
-  pub const POPOVER: &str = "AXPopover";
-  pub const LAYOUT_AREA: &str = "AXLayoutArea";
-  pub const LAYOUT_ITEM: &str = "AXLayoutItem";
-  pub const RELEVANCE_INDICATOR: &str = "AXRelevanceIndicator";
-  pub const LEVEL_INDICATOR: &str = "AXLevelIndicator";
-  pub const BUSY_INDICATOR: &str = "AXBusyIndicator";
+  pub(super) const SCROLL_BAR: &str = "AXScrollBar";
+  pub(super) const VALUE_INDICATOR: &str = "AXValueIndicator";
+  pub(super) const HANDLE: &str = "AXHandle";
+  pub(super) const MATTE: &str = "AXMatte";
+  pub(super) const RULER: &str = "AXRuler";
+  pub(super) const RULER_MARKER: &str = "AXRulerMarker";
+  pub(super) const GROW_AREA: &str = "AXGrowArea";
+  pub(super) const DRAWER: &str = "AXDrawer";
+  pub(super) const POPOVER: &str = "AXPopover";
+  pub(super) const LAYOUT_AREA: &str = "AXLayoutArea";
+  pub(super) const LAYOUT_ITEM: &str = "AXLayoutItem";
+  pub(super) const RELEVANCE_INDICATOR: &str = "AXRelevanceIndicator";
+  pub(super) const LEVEL_INDICATOR: &str = "AXLevelIndicator";
+  pub(super) const BUSY_INDICATOR: &str = "AXBusyIndicator";
 
-  pub const UNKNOWN: &str = "AXUnknown";
+  pub(super) const UNKNOWN: &str = "AXUnknown";
 }
 
 /// Convert macOS role string to our Role.
 ///
 /// Mapping strategy:
-/// - Semantic roles → specific Role variants (Button, TextField, etc.)
+/// - Semantic roles → specific Role variants (Button, `TextField`, etc.)
 /// - Semantic groups → Group (split groups, radio groups, etc.)
-/// - Layout-only groups → Group (then refined to GenericContainer if no label/value)
-/// - Known non-semantic chrome → GenericElement (scrollbars, handles, etc.)
+/// - Layout-only groups → Group (then refined to `GenericContainer` if no label/value)
+/// - Known non-semantic chrome → `GenericElement` (scrollbars, handles, etc.)
 /// - Unknown → Unknown (logs warning, indicates gap in mappings)
-pub fn role_from_macos(platform_role: &str) -> Role {
+pub(super) fn role_from_macos(platform_role: &str) -> Role {
   match platform_role {
     // Structural
     ax_role::APPLICATION => Role::Application,
@@ -252,13 +252,13 @@ pub fn role_from_macos(platform_role: &str) -> Role {
 /// Convert our Role to macOS role string.
 ///
 /// Returns the canonical macOS role string (with "AX" prefix).
-pub fn role_to_macos(r: Role) -> &'static str {
+const fn role_to_macos(r: Role) -> &'static str {
   match r {
     // Structural
     Role::Application => ax_role::APPLICATION,
     Role::Window => ax_role::WINDOW,
     Role::Document => ax_role::DOCUMENT,
-    Role::Group => ax_role::GROUP,
+    Role::Group | Role::GenericGroup => ax_role::GROUP,
     Role::ScrollArea => ax_role::SCROLL_AREA,
     Role::Toolbar => ax_role::TOOLBAR,
 
@@ -271,9 +271,8 @@ pub fn role_to_macos(r: Role) -> &'static str {
 
     // Collections
     Role::List => ax_role::LIST,
-    Role::ListItem => ax_role::ROW,
+    Role::ListItem | Role::Row => ax_role::ROW,
     Role::Table => ax_role::TABLE,
-    Role::Row => ax_role::ROW,
     Role::Cell => ax_role::CELL,
     Role::Tree => ax_role::OUTLINE,
     Role::TreeItem => ax_role::OUTLINE_ROW,
@@ -285,8 +284,7 @@ pub fn role_to_macos(r: Role) -> &'static str {
     Role::TextArea => ax_role::TEXT_AREA,
     Role::SearchField => ax_role::SEARCH_FIELD,
     Role::ComboBox => ax_role::COMBO_BOX,
-    Role::Checkbox => ax_role::CHECKBOX,
-    Role::Switch => ax_role::CHECKBOX, // macOS doesn't have a distinct switch role
+    Role::Checkbox | Role::Switch => ax_role::CHECKBOX, // macOS doesn't have distinct switch role
     Role::RadioButton => ax_role::RADIO_BUTTON,
     Role::Slider => ax_role::SLIDER,
     Role::Stepper => ax_role::STEPPER,
@@ -299,9 +297,7 @@ pub fn role_to_macos(r: Role) -> &'static str {
     Role::Separator => ax_role::SPLITTER,
 
     // Fallback
-    Role::GenericGroup => ax_role::GROUP,
-    Role::GenericElement => ax_role::GROUP, // Best approximation
-    Role::Unknown => ax_role::UNKNOWN,
+    Role::Unknown | Role::GenericElement => ax_role::UNKNOWN,
   }
 }
 

@@ -1,12 +1,15 @@
 /*!
-Display-synchronized callbacks using CVDisplayLink.
+Display-synchronized callbacks using `CVDisplayLink`.
 
-CVDisplayLink fires a callback synchronized to the display's actual refresh rate.
+`CVDisplayLink` fires a callback synchronized to the display's actual refresh rate.
 This ensures:
 - No drift (tied to hardware vsync)
 - Auto-adapts to display rate (60Hz, 120Hz, throttled, etc.)
 - Perfect frame alignment
 */
+
+#![allow(unsafe_code)]
+#![allow(clippy::unwrap_used)] // NonNull::new on stack pointers - never null
 
 use objc2_core_video::{kCVReturnSuccess, CVDisplayLink, CVOptionFlags, CVReturn, CVTimeStamp};
 use std::ffi::c_void;
@@ -14,7 +17,7 @@ use std::ptr::NonNull;
 
 /// Handle to a running display link.
 /// Stops the link when dropped.
-pub struct DisplayLinkHandle {
+pub(crate) struct DisplayLinkHandle {
   link: NonNull<CVDisplayLink>,
   // Keep the callback alive - double-boxed for stable pointer
   _callback: Box<Box<dyn Fn() + Send + Sync>>,
@@ -27,7 +30,7 @@ unsafe impl Sync for DisplayLinkHandle {}
 impl DisplayLinkHandle {
   /// Stop the display link (it will also stop on drop).
   #[allow(deprecated)] // CVDisplayLink deprecated in macOS 15, but still works
-  pub fn stop(&self) {
+  pub(crate) fn stop(&self) {
     unsafe {
       self.link.as_ref().stop();
     }
@@ -35,7 +38,7 @@ impl DisplayLinkHandle {
 
   /// Check if the display link is running.
   #[allow(deprecated)]
-  pub fn is_running(&self) -> bool {
+  pub(crate) fn is_running(&self) -> bool {
     unsafe { self.link.as_ref().is_running() }
   }
 }
@@ -92,13 +95,13 @@ unsafe extern "C-unwind" fn display_link_callback(
 /// // handle.stop(); // or just let it drop
 /// ```
 #[allow(deprecated)] // CVDisplayLink deprecated in macOS 15, but still works
-pub fn start_display_link<F>(callback: F) -> Result<DisplayLinkHandle, &'static str>
+pub(crate) fn start_display_link<F>(callback: F) -> Result<DisplayLinkHandle, &'static str>
 where
   F: Fn() + Send + Sync + 'static,
 {
   let mut link: *mut CVDisplayLink = std::ptr::null_mut();
   let result =
-    unsafe { CVDisplayLink::create_with_active_cg_displays(NonNull::new(&mut link).unwrap()) };
+    unsafe { CVDisplayLink::create_with_active_cg_displays(NonNull::new(&raw mut link).unwrap()) };
 
   if result != kCVReturnSuccess || link.is_null() {
     return Err("Failed to create CVDisplayLink");
@@ -107,7 +110,7 @@ where
   let link = unsafe { NonNull::new_unchecked(link) };
 
   let callback: Box<Box<dyn Fn() + Send + Sync>> = Box::new(Box::new(callback));
-  let callback_ptr = &*callback as *const _ as *mut c_void;
+  let callback_ptr = &raw const *callback as *mut c_void;
 
   let result = unsafe {
     link

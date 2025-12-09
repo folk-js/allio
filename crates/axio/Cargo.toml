@@ -5,6 +5,13 @@ edition = "2021"
 description = "Accessibility I/O - window tracking and accessibility API"
 authors = ["Orion Reed"]
 license = "MIT"
+repository = "https://github.com/folkjs/axio"
+readme = "README.md"
+keywords = ["accessibility", "interoperability", "ui-automation"]
+categories = ["accessibility", "api-bindings"]
+
+[lints]
+workspace = true
 
 [features]
 default = []
@@ -16,7 +23,7 @@ serde_json = "1"
 derive_more = { version = "1", features = ["display", "from", "into"] }
 log = "0.4"
 parking_lot = "0.12"
-thiserror = "1.0"
+thiserror = "2"
 tokio = { version = "1", features = ["sync"] }
 ts-rs = "10"
 

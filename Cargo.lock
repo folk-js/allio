@@ -204,7 +204,7 @@ dependencies = [
  "parking_lot",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "tokio",
  "tower-http 0.5.2",
  "ts-rs",

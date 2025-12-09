@@ -1,7 +1,14 @@
 /*! Window enumeration for macOS.
 
-Uses CGWindowListCopyWindowInfo to enumerate on-screen windows.
+Uses `CGWindowListCopyWindowInfo` to enumerate on-screen windows.
 */
+
+#![allow(unsafe_code)]
+#![allow(
+  clippy::cast_possible_truncation,
+  clippy::cast_sign_loss,
+  clippy::cast_possible_wrap
+)]
 
 use super::macos_cf::{
   get_cf_boolean, get_cf_number, get_cf_string, get_cf_window_bounds, retain_cf_dictionary,
@@ -22,7 +29,7 @@ const FILTERED_BUNDLE_IDS: &[&str] = &[
 /// Enumerate all on-screen windows.
 /// Returns windows in z-order (frontmost first).
 /// Filters out system UI windows.
-pub fn enumerate_windows() -> Vec<AXWindow> {
+pub(crate) fn enumerate_windows() -> Vec<AXWindow> {
   // IMPORTANT: Wrap in autorelease pool to prevent memory leaks.
   objc2::rc::autoreleasepool(|_pool| enumerate_windows_inner())
 }
@@ -44,7 +51,7 @@ fn enumerate_windows_inner() -> Vec<AXWindow> {
 
   for idx in 0..windows_count {
     let window_cf_dictionary_ref =
-      unsafe { CFArray::value_at_index(&window_list_info, idx) as *const CFDictionary };
+      unsafe { CFArray::value_at_index(&window_list_info, idx).cast::<CFDictionary>() };
 
     let Some(dict) = retain_cf_dictionary(window_cf_dictionary_ref) else {
       continue;

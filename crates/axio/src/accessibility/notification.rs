@@ -49,8 +49,8 @@ impl Notification {
 
   /// Additional notifications to subscribe when "watching" an element.
   ///
-  /// These are role-dependent: text fields get ValueChanged + SelectionChanged,
-  /// windows get TitleChanged, etc. This does NOT include Destroyed (that's implicit).
+  /// These are role-dependent: text fields get `ValueChanged` + `SelectionChanged`,
+  /// windows get `TitleChanged`, etc. This does NOT include Destroyed (that's implicit).
   ///
   /// # Example
   /// ```
@@ -88,7 +88,7 @@ impl Notification {
   ///
   /// Element-level notifications (the default) are subscribed per-element
   /// and the callback context identifies which element changed.
-  pub fn is_app_level(&self) -> bool {
+  pub const fn is_app_level(&self) -> bool {
     matches!(self, Self::FocusChanged | Self::SelectionChanged)
   }
 }

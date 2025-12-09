@@ -1,14 +1,14 @@
 /*! Platform Abstraction Layer */
 
 mod handles;
-pub use handles::{ElementHandle, ObserverHandle};
+pub(crate) use handles::{ElementHandle, ObserverHandle};
 
 // macOS-specific implementations
-pub mod macos;
+mod macos;
 mod macos_cf;
 mod macos_windows;
 
-pub use macos::{
+pub(crate) use macos::{
   // Core functionality
   check_accessibility_permissions,
   children,
@@ -33,13 +33,13 @@ pub use macos::{
   ObserverContextHandle,
 };
 
-pub use macos_windows::enumerate_windows;
+pub(crate) use macos_windows::enumerate_windows;
 
 mod display;
 mod mouse;
 
-pub use display::get_main_screen_dimensions;
-pub use mouse::get_mouse_position;
+pub(crate) use display::get_main_screen_dimensions;
+pub(crate) use mouse::get_mouse_position;
 
 mod display_link;
-pub use display_link::{start_display_link, DisplayLinkHandle};
+pub(crate) use display_link::{start_display_link, DisplayLinkHandle};

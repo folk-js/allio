@@ -4,8 +4,14 @@ version = "0.0.1"
 description = "AXIO Tauri Application"
 authors = ["Orion Reed"]
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/folkjs/axio"
+readme = "../README.md"
+keywords = ["accessibility", "tauri", "desktop"]
+categories = ["gui"]
+publish = false
 
-# Binary name stays "axio" for user convenience
+
 [[bin]]
 name = "axio"
 path = "src/main.rs"
@@ -14,7 +20,6 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# AXIO crate with WebSocket server
 axio = { path = "../crates/axio", features = ["ws"] }
 
 # Tauri framework
@@ -27,13 +32,8 @@ tauri = { version = "2", features = [
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 
-# Async runtime (needed for WebSocket server)
 tokio = { version = "1", features = ["full"] }
-
-# Serialization (for mouse position broadcast)
 serde_json = "1"
-
-# Logging
 env_logger = "0.11"
 
 [target.'cfg(target_os = "macos")'.dependencies]

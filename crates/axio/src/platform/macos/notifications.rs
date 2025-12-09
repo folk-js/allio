@@ -7,6 +7,8 @@ Handles:
 - Destruction notification subscription
 */
 
+#![allow(unsafe_code)]
+
 use objc2_application_services::AXError;
 use objc2_core_foundation::CFString;
 use std::ffi::c_void;
@@ -23,10 +25,10 @@ use super::observer::{
 use super::util::app_element;
 
 /// Subscribe to destruction notification only (lightweight tracking for all elements).
-pub fn subscribe_destruction_notification(
+pub(crate) fn subscribe_destruction_notification(
   element_id: &ElementId,
   handle: &ElementHandle,
-  observer: ObserverHandle,
+  observer: &ObserverHandle,
 ) -> AxioResult<*mut ObserverContextHandle> {
   let context_handle = register_observer_context(*element_id);
 
@@ -36,7 +38,7 @@ pub fn subscribe_destruction_notification(
     observer.inner().add_notification(
       handle.inner(),
       &notif_cfstring,
-      context_handle as *mut c_void,
+      context_handle.cast::<c_void>(),
     )
   };
 
@@ -51,9 +53,9 @@ pub fn subscribe_destruction_notification(
 }
 
 /// Unsubscribe from destruction notification.
-pub fn unsubscribe_destruction_notification(
+pub(crate) fn unsubscribe_destruction_notification(
   handle: &ElementHandle,
-  observer: ObserverHandle,
+  observer: &ObserverHandle,
   context_handle: *mut ObserverContextHandle,
 ) {
   let notif_str = notification_to_macos(Notification::Destroyed);
@@ -67,10 +69,10 @@ pub fn unsubscribe_destruction_notification(
 }
 
 /// Subscribe to notifications for an element.
-pub fn subscribe_notifications(
+pub(crate) fn subscribe_notifications(
   element_id: &ElementId,
   handle: &ElementHandle,
-  observer: ObserverHandle,
+  observer: &ObserverHandle,
   _platform_role: &str,
   notifications: &[Notification],
 ) -> AxioResult<*mut ObserverContextHandle> {
@@ -90,7 +92,7 @@ pub fn subscribe_notifications(
       let result = observer.inner().add_notification(
         handle.inner(),
         &notif_cfstring,
-        context_handle as *mut c_void,
+        context_handle.cast::<c_void>(),
       );
       if result == AXError::Success {
         registered += 1;
@@ -109,9 +111,9 @@ pub fn subscribe_notifications(
 }
 
 /// Unsubscribe from notifications (using new Notification type).
-pub fn unsubscribe_notifications(
+pub(crate) fn unsubscribe_notifications(
   handle: &ElementHandle,
-  observer: ObserverHandle,
+  observer: &ObserverHandle,
   context_handle: *mut ObserverContextHandle,
   notifications: &[Notification],
 ) {
@@ -130,7 +132,7 @@ pub fn unsubscribe_notifications(
 
 /// Subscribe to app-level notifications (focus, selection) on the application element.
 /// Returns a context handle for the subscription.
-pub fn subscribe_app_notifications(
+pub(crate) fn subscribe_app_notifications(
   pid: u32,
   observer: &ObserverHandle,
 ) -> AxioResult<*mut ObserverContextHandle> {
@@ -145,10 +147,11 @@ pub fn subscribe_app_notifications(
     let notif_str = notification_to_macos(*notif);
     let notif_cfstring = CFString::from_str(notif_str);
     unsafe {
-      let result =
-        observer
-          .inner()
-          .add_notification(&app_el, &notif_cfstring, context_handle as *mut c_void);
+      let result = observer.inner().add_notification(
+        &app_el,
+        &notif_cfstring,
+        context_handle.cast::<c_void>(),
+      );
       if result == AXError::Success {
         registered += 1;
       }

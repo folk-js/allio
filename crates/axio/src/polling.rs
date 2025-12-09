@@ -1,13 +1,14 @@
 use crate::events::emit;
 use crate::platform;
 use crate::types::{AXWindow, Event, Point, ProcessId};
+use log::error;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-pub const DEFAULT_POLLING_INTERVAL_MS: u64 = 8;
+const DEFAULT_POLLING_INTERVAL_MS: u64 = 8;
 
 /// Mutable state for polling iteration.
 #[derive(Default)]
@@ -35,6 +36,12 @@ pub struct PollingHandle {
   inner: PollingImpl,
 }
 
+impl std::fmt::Debug for PollingHandle {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("PollingHandle").finish_non_exhaustive()
+  }
+}
+
 impl PollingHandle {
   /// Signal polling to stop.
   ///
@@ -54,9 +61,7 @@ impl PollingHandle {
   /// Check if polling is still running.
   pub fn is_running(&self) -> bool {
     match &self.inner {
-      PollingImpl::Thread { thread, .. } => {
-        thread.as_ref().map(|t| !t.is_finished()).unwrap_or(false)
-      }
+      PollingImpl::Thread { thread, .. } => thread.as_ref().is_some_and(|t| !t.is_finished()),
       #[cfg(target_os = "macos")]
       PollingImpl::DisplayLink(handle) => handle.is_running(),
     }
@@ -69,7 +74,7 @@ impl PollingHandle {
   pub fn join(mut self) {
     if let PollingImpl::Thread { thread, .. } = &mut self.inner {
       if let Some(t) = thread.take() {
-        let _ = t.join();
+        drop(t.join());
       }
     }
     // DisplayLink stops automatically on drop
@@ -81,13 +86,13 @@ impl Drop for PollingHandle {
     self.stop();
     if let PollingImpl::Thread { thread, .. } = &mut self.inner {
       if let Some(t) = thread.take() {
-        let _ = t.join();
+        drop(t.join());
       }
     }
   }
 }
 
-/// Poll for current windows. Returns None if exclude_pid window isn't found.
+/// Poll for current windows. Returns None if `exclude_pid` window isn't found.
 fn poll_windows(options: &PollingOptions) -> Option<Vec<AXWindow>> {
   let all_windows = platform::enumerate_windows();
 
@@ -120,14 +125,8 @@ fn poll_windows(options: &PollingOptions) -> Option<Vec<AXWindow>> {
       w
     })
     .filter(|w| {
-      if options.filter_fullscreen {
-        let is_fullscreen = w.bounds.x == 0.0
-          && w.bounds.y == 0.0
-          && w.bounds.w == screen_width
-          && w.bounds.h == screen_height;
-        if is_fullscreen {
-          return false;
-        }
+      if options.filter_fullscreen && w.bounds.matches_size_at_origin(screen_width, screen_height) {
+        return false;
       }
       if options.filter_offscreen && w.bounds.x > screen_width + 1.0 {
         return false;
@@ -140,7 +139,7 @@ fn poll_windows(options: &PollingOptions) -> Option<Vec<AXWindow>> {
 }
 
 /// Window polling configuration.
-#[derive(Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct PollingOptions {
   /// PID to exclude. Its window position is used as coordinate offset.
   pub exclude_pid: Option<ProcessId>,
@@ -150,7 +149,7 @@ pub struct PollingOptions {
   pub filter_offscreen: bool,
   /// Polling interval in milliseconds (ignored when `use_display_link` is true).
   pub interval_ms: u64,
-  /// Use CVDisplayLink for display-synchronized polling (macOS only).
+  /// Use `CVDisplayLink` for display-synchronized polling (macOS only).
   /// When true, polling fires exactly once per display refresh (60Hz/120Hz).
   /// When false, uses a fixed interval timer.
   /// Ignored on non-macOS platforms.
@@ -187,7 +186,7 @@ impl Default for PollingOptions {
 /// // Polling runs until handle is dropped or stop() is called
 /// handle.stop();
 /// ```
-pub fn start_polling(config: PollingOptions) -> PollingHandle {
+pub(crate) fn start_polling(config: PollingOptions) -> PollingHandle {
   #[cfg(target_os = "macos")]
   if config.use_display_link {
     return start_display_synced_polling(config);
@@ -230,11 +229,16 @@ fn start_thread_polling(config: PollingOptions) -> PollingHandle {
 fn start_display_synced_polling(config: PollingOptions) -> PollingHandle {
   let state = Arc::new(Mutex::new(PollingState::default()));
 
-  let handle = platform::start_display_link(move || {
+  let handle = match platform::start_display_link(move || {
     let mut state = state.lock();
     poll_iteration(&config, &mut state);
-  })
-  .expect("Failed to start display-synced polling");
+  }) {
+    Ok(h) => h,
+    Err(e) => {
+      error!("Failed to start display-synced polling: {e}");
+      std::process::exit(1);
+    }
+  };
 
   PollingHandle {
     inner: PollingImpl::DisplayLink(handle),

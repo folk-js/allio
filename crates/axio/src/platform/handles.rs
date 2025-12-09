@@ -4,32 +4,41 @@ All platform-specific unsafe code is encapsulated here.
 The rest of the crate can interact with elements using safe methods.
 */
 
+#![allow(unsafe_code)]
+#![allow(
+  clippy::expect_used, // NonNull::new on stack pointers - never null
+  clippy::cast_possible_truncation,
+  clippy::cast_sign_loss,
+  clippy::ref_as_ptr
+)]
+
 use crate::accessibility::{Action, Value};
 use crate::types::Bounds;
 
 /// All commonly-needed element attributes, fetched in a batch for performance.
 #[derive(Debug, Default)]
-pub struct ElementAttributes {
-  pub role: Option<String>,
-  pub subrole: Option<String>,
-  pub title: Option<String>,
-  pub value: Option<Value>,
-  pub description: Option<String>,
-  pub placeholder: Option<String>,
-  pub url: Option<String>,
-  pub bounds: Option<Bounds>,
-  pub focused: Option<bool>,
-  pub disabled: bool,
-  pub selected: Option<bool>,
-  pub expanded: Option<bool>,
-  pub row_index: Option<usize>,
-  pub column_index: Option<usize>,
-  pub row_count: Option<usize>,
-  pub column_count: Option<usize>,
-  pub actions: Vec<Action>,
+pub(crate) struct ElementAttributes {
+  pub(crate) role: Option<String>,
+  pub(crate) subrole: Option<String>,
+  pub(crate) title: Option<String>,
+  pub(crate) value: Option<Value>,
+  pub(crate) description: Option<String>,
+  pub(crate) placeholder: Option<String>,
+  pub(crate) url: Option<String>,
+  pub(crate) bounds: Option<Bounds>,
+  pub(crate) focused: Option<bool>,
+  pub(crate) disabled: bool,
+  pub(crate) selected: Option<bool>,
+  pub(crate) expanded: Option<bool>,
+  pub(crate) row_index: Option<usize>,
+  pub(crate) column_index: Option<usize>,
+  pub(crate) row_count: Option<usize>,
+  pub(crate) column_count: Option<usize>,
+  pub(crate) actions: Vec<Action>,
 }
 
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
 mod macos_impl {
   use super::ElementAttributes;
   use crate::accessibility::Value;
@@ -39,19 +48,21 @@ mod macos_impl {
     AXCopyMultipleAttributeOptions, AXError, AXObserver, AXUIElement, AXValue as AXValueRef,
     AXValueType,
   };
-  use objc2_core_foundation::{CFArray, CFBoolean, CFNumber, CFRetained, CFString, CFType};
+  use objc2_core_foundation::{
+    kCFNull, CFArray, CFBoolean, CFNumber, CFRetained, CFString, CFType, CGPoint, CGSize,
+  };
   use std::ffi::c_void;
   use std::ptr::NonNull;
 
   /// Opaque handle to a UI element.
   ///
-  /// On macOS this wraps an AXUIElement reference.
-  /// Clone is cheap (reference counted via CFRetained).
+  /// On macOS this wraps an `AXUIElement` reference.
+  /// Clone is cheap (reference counted via `CFRetained`).
   #[derive(Clone)]
-  pub struct ElementHandle(pub(in crate::platform) CFRetained<AXUIElement>);
+  pub(crate) struct ElementHandle(pub(in crate::platform) CFRetained<AXUIElement>);
 
   impl ElementHandle {
-    pub(in crate::platform) fn new(element: CFRetained<AXUIElement>) -> Self {
+    pub(in crate::platform) const fn new(element: CFRetained<AXUIElement>) -> Self {
       Self(element)
     }
 
@@ -60,7 +71,7 @@ mod macos_impl {
     }
 
     /// Get string attribute by name.
-    pub fn get_string(&self, attr: &str) -> Option<String> {
+    pub(crate) fn get_string(&self, attr: &str) -> Option<String> {
       let value = self.get_raw_attr(&CFString::from_str(attr))?;
       let s = value.downcast_ref::<CFString>()?.to_string();
       if s.is_empty() {
@@ -71,14 +82,14 @@ mod macos_impl {
     }
 
     /// Get bounds (position + size).
-    pub fn get_bounds(&self) -> Option<Bounds> {
+    pub(crate) fn get_bounds(&self) -> Option<Bounds> {
       let pos = self.get_raw_attr(&CFString::from_static_str("AXPosition"))?;
       let sz = self.get_raw_attr(&CFString::from_static_str("AXSize"))?;
       Self::parse_bounds(Some(&*pos), Some(&*sz))
     }
 
     /// Get child elements.
-    pub fn get_children(&self) -> Vec<ElementHandle> {
+    pub(crate) fn get_children(&self) -> Vec<ElementHandle> {
       let Some(value) = self.get_raw_attr(&CFString::from_static_str("AXChildren")) else {
         return Vec::new();
       };
@@ -99,26 +110,25 @@ mod macos_impl {
       children
     }
 
-    /// Get element attribute (returns another ElementHandle).
-    pub fn get_element(&self, attr: &str) -> Option<ElementHandle> {
+    /// Get element attribute (returns another `ElementHandle`).
+    pub(crate) fn get_element(&self, attr: &str) -> Option<ElementHandle> {
       let value = self.get_raw_attr(&CFString::from_str(attr))?;
       let element = value.downcast::<AXUIElement>().ok()?;
       Some(ElementHandle::new(element))
     }
 
     /// Get action names supported by this element.
-    pub fn get_actions(&self) -> Vec<String> {
+    pub(crate) fn get_actions(&self) -> Vec<String> {
       unsafe {
         let mut actions_ref: *const CFArray<CFString> = std::ptr::null();
         let result = self.0.copy_action_names(
-          NonNull::new(&mut actions_ref as *mut *const CFArray<CFString> as *mut *const CFArray)
-            .expect("actions ptr"),
+          NonNull::new((&raw mut actions_ref).cast::<*const CFArray>()).expect("actions ptr"),
         );
         if result != AXError::Success || actions_ref.is_null() {
           return Vec::new();
         }
         let actions =
-          CFRetained::<CFArray<CFString>>::from_raw(NonNull::new_unchecked(actions_ref as *mut _));
+          CFRetained::<CFArray<CFString>>::from_raw(NonNull::new_unchecked(actions_ref.cast_mut()));
         let len = actions.len();
         let mut result = Vec::with_capacity(len);
         for i in 0..len {
@@ -131,7 +141,7 @@ mod macos_impl {
     }
 
     /// Perform an action on this element.
-    pub fn perform_action(&self, action: &str) -> Result<(), AXError> {
+    pub(crate) fn perform_action(&self, action: &str) -> Result<(), AXError> {
       let action_name = CFString::from_str(action);
       unsafe {
         let result = self.0.perform_action(&action_name);
@@ -144,7 +154,7 @@ mod macos_impl {
     }
 
     /// Set typed value (string, boolean, or number).
-    pub fn set_typed_value(&self, value: &Value) -> Result<(), AXError> {
+    pub(crate) fn set_typed_value(&self, value: &Value) -> Result<(), AXError> {
       let attr = CFString::from_static_str("AXValue");
       unsafe {
         let result = match value {
@@ -154,7 +164,7 @@ mod macos_impl {
           }
           Value::Boolean(b) => {
             // macOS checkboxes use CFNumber 0/1, not CFBoolean
-            let cf_value = CFNumber::new_i32(if *b { 1 } else { 0 });
+            let cf_value = CFNumber::new_i32(i32::from(*b));
             self.0.set_attribute_value(&attr, &cf_value)
           }
           Value::Number(n) => {
@@ -171,24 +181,25 @@ mod macos_impl {
     }
 
     /// Get element at position (for app-level elements only).
-    pub fn element_at_position(&self, x: f64, y: f64) -> Option<ElementHandle> {
+    pub(crate) fn element_at_position(&self, x: f64, y: f64) -> Option<ElementHandle> {
       unsafe {
         let mut element_ptr: *const AXUIElement = std::ptr::null();
         let result =
           self
             .0
-            .copy_element_at_position(x as f32, y as f32, NonNull::new(&mut element_ptr)?);
+            .copy_element_at_position(x as f32, y as f32, NonNull::new(&raw mut element_ptr)?);
         if result != AXError::Success || element_ptr.is_null() {
           return None;
         }
-        let element = CFRetained::from_raw(NonNull::new_unchecked(element_ptr as *mut _));
+        let element = CFRetained::from_raw(NonNull::new_unchecked(element_ptr.cast_mut()));
         Some(ElementHandle::new(element))
       }
     }
 
     /// Fetch all common attributes in a single batch call (10x faster).
-    /// This is the recommended way to build an AXElement.
-    pub fn get_attributes(&self, role_hint: Option<&str>) -> ElementAttributes {
+    /// This is the recommended way to build an `AXElement`.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn get_attributes(&self, role_hint: Option<&str>) -> ElementAttributes {
       // Fetch attributes in batch
       let role = CFString::from_static_str("AXRole");
       let subrole = CFString::from_static_str("AXSubrole");
@@ -235,13 +246,12 @@ mod macos_impl {
           // Cast to untyped CFArray for the API
           &*(CFRetained::as_ptr(&attrs).as_ptr() as *const CFArray),
           AXCopyMultipleAttributeOptions::empty(),
-          NonNull::new(&mut values_ptr as *mut *const CFArray<CFType> as *mut *const CFArray)
-            .expect("values ptr"),
+          NonNull::new((&raw mut values_ptr).cast::<*const CFArray>()).expect("values ptr"),
         );
         if result != AXError::Success || values_ptr.is_null() {
           return ElementAttributes::default();
         }
-        CFRetained::<CFArray<CFType>>::from_raw(NonNull::new_unchecked(values_ptr as *mut _))
+        CFRetained::<CFArray<CFType>>::from_raw(NonNull::new_unchecked(values_ptr.cast_mut()))
       };
 
       let len = values.len();
@@ -252,12 +262,12 @@ mod macos_impl {
           return None;
         }
         let retained = values.get(idx)?;
-        // Check for kCFNull
-        extern "C" {
-          static kCFNull: *const CFType;
-        }
-        if unsafe { std::ptr::eq(CFRetained::as_ptr(&retained).as_ptr(), kCFNull) } {
-          return None;
+        // Check for kCFNull (accessing extern static requires unsafe)
+        if let Some(null_ref) = unsafe { kCFNull } {
+          let null_ptr: *const CFType = (null_ref as *const objc2_core_foundation::CFNull).cast();
+          if std::ptr::eq(CFRetained::as_ptr(&retained).as_ptr(), null_ptr) {
+            return None;
+          }
         }
         Some(retained)
       };
@@ -273,8 +283,10 @@ mod macos_impl {
       };
 
       // Helper to parse boolean
-      let parse_bool =
-        |v: &CFType| -> Option<bool> { v.downcast_ref::<CFBoolean>().map(|b| b.as_bool()) };
+      let parse_bool = |v: &CFType| -> Option<bool> {
+        v.downcast_ref::<CFBoolean>()
+          .map(objc2_core_foundation::CFBoolean::as_bool)
+      };
 
       // Helper to parse usize from CFNumber
       let parse_usize = |v: &CFType| -> Option<usize> {
@@ -306,7 +318,7 @@ mod macos_impl {
         .collect();
 
       // Convert enabled to disabled (inverted)
-      let disabled = enabled_bool.map(|e| !e).unwrap_or(false);
+      let disabled = enabled_bool.is_some_and(|e| !e);
 
       ElementAttributes {
         role: role_str,
@@ -329,19 +341,21 @@ mod macos_impl {
       }
     }
 
-    /// Fetch raw CFType attribute (for internal platform code).
+    /// Fetch raw `CFType` attribute (for internal platform code).
     pub(in crate::platform) fn get_raw_attr_internal(
       &self,
       attr: &CFString,
     ) -> Option<CFRetained<CFType>> {
       unsafe {
         let mut value: *const CFType = std::ptr::null();
-        let result = self.0.copy_attribute_value(attr, NonNull::new(&mut value)?);
+        let result = self
+          .0
+          .copy_attribute_value(attr, NonNull::new(&raw mut value)?);
         if result != AXError::Success || value.is_null() {
           return None;
         }
         Some(CFRetained::from_raw(NonNull::new_unchecked(
-          value as *mut _,
+          value.cast_mut(),
         )))
       }
     }
@@ -387,17 +401,6 @@ mod macos_impl {
       let pos = position?.downcast_ref::<AXValueRef>()?;
       let sz = size?.downcast_ref::<AXValueRef>()?;
 
-      #[repr(C)]
-      struct CGPoint {
-        x: f64,
-        y: f64,
-      }
-      #[repr(C)]
-      struct CGSize {
-        width: f64,
-        height: f64,
-      }
-
       unsafe {
         if pos.r#type() != AXValueType::CGPoint || sz.r#type() != AXValueType::CGSize {
           return None;
@@ -410,13 +413,13 @@ mod macos_impl {
 
         if !pos.value(
           AXValueType::CGPoint,
-          NonNull::new(&mut point as *mut _ as *mut c_void)?,
+          NonNull::new((&raw mut point).cast::<c_void>())?,
         ) {
           return None;
         }
         if !sz.value(
           AXValueType::CGSize,
-          NonNull::new(&mut size_val as *mut _ as *mut c_void)?,
+          NonNull::new((&raw mut size_val).cast::<c_void>())?,
         ) {
           return None;
         }
@@ -436,12 +439,12 @@ mod macos_impl {
 
   /// Opaque handle to an observer (for watching element changes).
   ///
-  /// On macOS this wraps an AXObserver.
+  /// On macOS this wraps an `AXObserver`.
   #[derive(Clone)]
-  pub struct ObserverHandle(pub(in crate::platform) CFRetained<AXObserver>);
+  pub(crate) struct ObserverHandle(pub(in crate::platform) CFRetained<AXObserver>);
 
   impl ObserverHandle {
-    pub(in crate::platform) fn new(observer: CFRetained<AXObserver>) -> Self {
+    pub(in crate::platform) const fn new(observer: CFRetained<AXObserver>) -> Self {
       Self(observer)
     }
 
@@ -455,7 +458,7 @@ mod macos_impl {
 }
 
 #[cfg(target_os = "macos")]
-pub use macos_impl::*;
+pub(crate) use macos_impl::*;
 
 #[cfg(target_os = "windows")]
 compile_error!("Windows support is not yet implemented");

@@ -13,7 +13,7 @@ pub fn all() -> Vec<AXWindow> {
 }
 
 /// Get a specific window by ID.
-pub fn get(window_id: &WindowId) -> Option<AXWindow> {
+pub fn get(window_id: WindowId) -> Option<AXWindow> {
   registry::get_window(window_id)
 }
 
@@ -28,6 +28,6 @@ pub fn depth_order() -> Vec<WindowId> {
 }
 
 /// Get the root element for a window.
-pub fn root(window_id: &WindowId) -> AxioResult<AXElement> {
+pub fn root(window_id: WindowId) -> AxioResult<AXElement> {
   platform::get_window_root(window_id)
 }

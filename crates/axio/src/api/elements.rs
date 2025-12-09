@@ -13,7 +13,7 @@ pub fn at(x: f64, y: f64) -> AxioResult<AXElement> {
 }
 
 /// Get cached element by ID.
-pub fn get(element_id: &ElementId) -> AxioResult<AXElement> {
+pub fn get(element_id: ElementId) -> AxioResult<AXElement> {
   registry::get_element(element_id)
 }
 
@@ -23,38 +23,38 @@ pub fn get_many(element_ids: &[ElementId]) -> Vec<AXElement> {
 }
 
 /// Fetch and register children of element.
-pub fn children(element_id: &ElementId, max_children: usize) -> AxioResult<Vec<AXElement>> {
+pub fn children(element_id: ElementId, max_children: usize) -> AxioResult<Vec<AXElement>> {
   platform::children(element_id, max_children)
 }
 
 /// Fetch and register parent of element (None if element is root).
-pub fn parent(element_id: &ElementId) -> AxioResult<Option<AXElement>> {
+pub fn parent(element_id: ElementId) -> AxioResult<Option<AXElement>> {
   platform::parent(element_id)
 }
 
 /// Refresh element from platform (re-fetch attributes).
-pub fn refresh(element_id: &ElementId) -> AxioResult<AXElement> {
+pub fn refresh(element_id: ElementId) -> AxioResult<AXElement> {
   platform::refresh_element(element_id)
 }
 
 /// Write a typed value to an element.
-pub fn write(element_id: &ElementId, value: &crate::accessibility::Value) -> AxioResult<()> {
+pub fn write(element_id: ElementId, value: &crate::accessibility::Value) -> AxioResult<()> {
   registry::write_element_value(element_id, value)
 }
 
 /// Click an element.
-pub fn click(element_id: &ElementId) -> AxioResult<()> {
+pub fn click(element_id: ElementId) -> AxioResult<()> {
   registry::click_element(element_id)
 }
 
 /// Watch element for changes.
-pub fn watch(element_id: &ElementId) -> AxioResult<()> {
+pub fn watch(element_id: ElementId) -> AxioResult<()> {
   registry::watch_element(element_id)
 }
 
 /// Stop watching element.
-pub fn unwatch(element_id: &ElementId) {
-  registry::unwatch_element(element_id)
+pub fn unwatch(element_id: ElementId) {
+  registry::unwatch_element(element_id);
 }
 
 /// Get currently focused element and selection for a given PID.

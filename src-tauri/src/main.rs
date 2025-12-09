@@ -23,10 +23,6 @@ use tauri_nspanel::{tauri_panel, ManagerExt as _, PanelLevel, StyleMask, Webview
 use axio::ws::WebSocketState;
 use axio::{PollingHandle, PollingOptions};
 
-// ============================================================================
-// macOS Panel Configuration
-// ============================================================================
-
 #[cfg(target_os = "macos")]
 tauri_panel! {
     panel!(AxioPanel {
@@ -36,10 +32,6 @@ tauri_panel! {
         }
     })
 }
-
-// ============================================================================
-// App State
-// ============================================================================
 
 struct AppState {
   clickthrough_enabled: AtomicBool,
@@ -62,10 +54,6 @@ impl Default for AppState {
   }
 }
 
-// ============================================================================
-// Utility Functions
-// ============================================================================
-
 fn is_dev_mode() -> bool {
   let exe_path = std::env::current_exe().unwrap_or_default();
   let exe_dir = exe_path.parent().unwrap_or(std::path::Path::new(""));
@@ -86,10 +74,6 @@ fn get_overlay_url(filename: &str) -> String {
   }
 }
 
-// ============================================================================
-// Overlay Discovery
-// ============================================================================
-
 const DEFAULT_OVERLAYS: &[&str] = &[
   "axtrees.html",
   "graph.html",
@@ -101,7 +85,7 @@ const DEFAULT_OVERLAYS: &[&str] = &[
 
 fn get_overlay_files() -> Vec<String> {
   if is_dev_mode() {
-    return DEFAULT_OVERLAYS.iter().map(|s| s.to_string()).collect();
+    return DEFAULT_OVERLAYS.iter().map(|s| (*s).to_string()).collect();
   }
 
   let mut overlays: Vec<String> = get_dist_directory()
@@ -116,7 +100,7 @@ fn get_overlay_files() -> Vec<String> {
     .unwrap_or_default();
 
   if overlays.is_empty() {
-    overlays = DEFAULT_OVERLAYS.iter().map(|s| s.to_string()).collect();
+    overlays = DEFAULT_OVERLAYS.iter().map(|s| (*s).to_string()).collect();
   }
   overlays.sort();
   overlays
@@ -132,10 +116,6 @@ fn get_dist_directory() -> Option<PathBuf> {
   #[cfg(not(target_os = "macos"))]
   return Some(exe_dir.to_path_buf());
 }
-
-// ============================================================================
-// Tray Icon Management
-// ============================================================================
 
 fn get_icon_path(passthrough: bool) -> PathBuf {
   let icon_name = if passthrough {
@@ -168,10 +148,6 @@ fn get_icon_path(passthrough: bool) -> PathBuf {
 fn get_tray_icon(passthrough: bool) -> Option<Image<'static>> {
   Image::from_path(get_icon_path(passthrough)).ok()
 }
-
-// ============================================================================
-// Tray Menu
-// ============================================================================
 
 fn build_tray_menu(
   app: &AppHandle,
@@ -324,10 +300,6 @@ fn handle_tray_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
   });
 }
 
-// ============================================================================
-// Core Actions
-// ============================================================================
-
 fn toggle_passthrough(app: &AppHandle) -> Result<bool, Box<dyn std::error::Error>> {
   let state = app.state::<AppState>();
   let window = get_main_window(app)?;
@@ -386,7 +358,7 @@ fn show_file_dialog(app: &AppHandle) {
     .add_filter("HTML Files", &["html", "htm"])
     .add_filter("All Files", &["*"])
     .pick_file(move |result| {
-      if let Some(path) = result.and_then(|p| p.as_path().map(|p| p.to_path_buf())) {
+      if let Some(path) = result.and_then(|p| p.as_path().map(std::path::Path::to_path_buf)) {
         let _ = load_file(&app_clone, &path);
       }
     });
@@ -400,10 +372,6 @@ fn load_file(app: &AppHandle, path: &Path) -> Result<(), Box<dyn std::error::Err
   get_main_window(app)?.navigate(url.parse()?)?;
   Ok(())
 }
-
-// ============================================================================
-// WebSocket RPC Handler
-// ============================================================================
 
 fn create_rpc_handler(app_handle: AppHandle) -> axio::ws::CustomRpcHandler {
   let last_state = std::sync::Arc::new(AtomicBool::new(true));
@@ -467,10 +435,6 @@ fn create_rpc_handler(app_handle: AppHandle) -> axio::ws::CustomRpcHandler {
     }
   })
 }
-
-// ============================================================================
-// Window Setup
-// ============================================================================
 
 fn setup_main_window(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
   let (width, height) = axio::screen::dimensions();
@@ -537,10 +501,6 @@ fn setup_shortcuts(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
   Ok(())
 }
-
-// ============================================================================
-// Main Entry Point
-// ============================================================================
 
 fn main() {
   // Initialize logging: RUST_LOG=debug cargo tauri dev

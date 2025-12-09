@@ -2,7 +2,7 @@
 Unified registry for accessibility state.
 
 Single source of truth for all accessibility entities:
-- Processes: One AXObserver per running application
+- Processes: One `AXObserver` per running application
 - Windows: Tracked windows belonging to processes
 - Elements: UI elements with handles and subscriptions
 
@@ -34,6 +34,8 @@ Element (ElementId)
 - Process removal cascades to all windows → all elements
 */
 
+#![allow(unsafe_code)]
+
 use crate::accessibility::Notification;
 use crate::events;
 use crate::platform::{self, ElementHandle, ObserverHandle};
@@ -45,7 +47,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::sync::LazyLock;
 
-/// Per-process state: owns the AXObserver for this application.
+/// Per-process state: owns the `AXObserver` for this application.
 struct ProcessState {
   /// The observer for this process (one per PID).
   /// All elements in all windows of this process share this observer.
@@ -70,9 +72,9 @@ struct ElementState {
   element: AXElement,
   /// Platform handle for operations.
   handle: ElementHandle,
-  /// CFHash of the element (for duplicate detection).
+  /// `CFHash` of the element (for duplicate detection).
   hash: u64,
-  /// CFHash of this element's OS parent (for lazy linking).
+  /// `CFHash` of this element's OS parent (for lazy linking).
   /// None means this is a root element (no parent in OS tree).
   parent_hash: Option<u64>,
   /// Process ID (needed for observer operations).
@@ -98,18 +100,18 @@ unsafe impl Sync for ElementState {}
 /// - **Dependency injection**: Pass `Arc<AxioInstance>` everywhere. Cleaner but doesn't work well with C callbacks.
 /// - **Thread-local storage**: Doesn't work across threads (observer callbacks).
 /// - **Context parameter**: Similar issues with C callbacks needing raw pointers.
-pub struct Registry {
-  /// Process state keyed by ProcessId.
+struct Registry {
+  /// Process state keyed by `ProcessId`.
   processes: HashMap<ProcessId, ProcessState>,
-  /// Window state keyed by WindowId.
+  /// Window state keyed by `WindowId`.
   windows: HashMap<WindowId, WindowState>,
-  /// Element state keyed by ElementId.
+  /// Element state keyed by `ElementId`.
   elements: HashMap<ElementId, ElementState>,
 
   // === Reverse Indexes ===
-  /// ElementId → WindowId (for cascade lookups).
+  /// `ElementId` → `WindowId` (for cascade lookups).
   element_to_window: HashMap<ElementId, WindowId>,
-  /// CFHash → ElementId (for O(1) duplicate detection).
+  /// `CFHash` → `ElementId` (for O(1) duplicate detection).
   hash_to_element: HashMap<u64, ElementId>,
   /// Parent hash → children waiting for that parent (lazy linking).
   waiting_for_parent: HashMap<u64, Vec<ElementId>>,
@@ -117,7 +119,7 @@ pub struct Registry {
   // === Focus ===
   /// Currently focused window (can be None when desktop is focused).
   focused_window: Option<WindowId>,
-  /// Window depth order (front to back, by z_index).
+  /// Window depth order (front to back, by `z_index`).
   depth_order: Vec<WindowId>,
 }
 
@@ -156,7 +158,7 @@ impl Registry {
   }
 
   /// Get or create process state for a PID.
-  /// Creates the AXObserver if this is a new process.
+  /// Creates the `AXObserver` if this is a new process.
   fn get_or_create_process(&mut self, pid: u32) -> AxioResult<ProcessId> {
     let process_id = ProcessId(pid);
 
@@ -189,9 +191,9 @@ impl Registry {
     new_windows: Vec<AXWindow>,
   ) -> (Vec<Event>, Vec<ProcessId>) {
     let mut events = Vec::new();
-    let mut added_ids = Vec::new();
-    let mut added_pids = Vec::new();
-    let mut changed_ids = Vec::new();
+    let mut added_window_ids = Vec::new();
+    let mut new_process_ids = Vec::new();
+    let mut changed_window_ids = Vec::new();
 
     let new_ids: HashSet<WindowId> = new_windows.iter().map(|w| w.id).collect();
 
@@ -203,7 +205,7 @@ impl Registry {
       .collect();
 
     for window_id in removed {
-      events.extend(self.remove_window_internal(&window_id));
+      events.extend(self.remove_window_internal(window_id));
     }
 
     // Process new/existing windows
@@ -214,7 +216,7 @@ impl Registry {
 
       if let Some(existing) = self.windows.get_mut(&window_id) {
         if existing.info != window_info {
-          changed_ids.push(window_id);
+          changed_window_ids.push(window_id);
         }
         existing.info = window_info;
 
@@ -238,8 +240,8 @@ impl Registry {
             handle,
           },
         );
-        added_ids.push(window_id);
-        added_pids.push(process_id);
+        added_window_ids.push(window_id);
+        new_process_ids.push(process_id);
       }
     }
 
@@ -247,48 +249,46 @@ impl Registry {
     windows.sort_by_key(|w| w.z_index);
     self.depth_order = windows.into_iter().map(|w| w.id).collect();
 
-    for added_id in added_ids {
-      if let Some(window) = self.windows.get(&added_id) {
+    for window_id in added_window_ids {
+      if let Some(window) = self.windows.get(&window_id) {
         events.push(Event::WindowAdded {
           window: window.info.clone(),
         });
       }
     }
 
-    for changed_id in changed_ids {
-      if let Some(window) = self.windows.get(&changed_id) {
+    for window_id in changed_window_ids {
+      if let Some(window) = self.windows.get(&window_id) {
         events.push(Event::WindowChanged {
           window: window.info.clone(),
         });
       }
     }
 
-    (events, added_pids)
+    (events, new_process_ids)
   }
 
   /// Remove a window and cascade to all its elements.
-  fn remove_window_internal(&mut self, window_id: &WindowId) -> Vec<Event> {
+  fn remove_window_internal(&mut self, window_id: WindowId) -> Vec<Event> {
     let mut events = Vec::new();
 
     let element_ids: Vec<ElementId> = self
       .elements
       .iter()
-      .filter(|(_, e)| e.element.window_id == *window_id)
+      .filter(|(_, e)| e.element.window_id == window_id)
       .map(|(id, _)| *id)
       .collect();
 
-    for element_id in &element_ids {
+    for element_id in element_ids {
       events.extend(self.remove_element_internal(element_id));
     }
 
-    if let Some(window_state) = self.windows.remove(window_id) {
+    if let Some(window_state) = self.windows.remove(&window_id) {
       let mut windows: Vec<_> = self.windows.values().map(|w| &w.info).collect();
       windows.sort_by_key(|w| w.z_index);
       self.depth_order = windows.into_iter().map(|w| w.id).collect();
 
-      events.push(Event::WindowRemoved {
-        window_id: *window_id,
-      });
+      events.push(Event::WindowRemoved { window_id });
 
       let process_id = window_state.process_id;
       let has_windows = self.windows.values().any(|w| w.process_id == process_id);
@@ -301,7 +301,7 @@ impl Registry {
   }
 
   /// Register a new element. Returns existing if hash matches.
-  /// Emits ElementAdded for newly registered elements.
+  /// Emits `ElementAdded` for newly registered elements.
   fn register_internal(
     &mut self,
     mut element: AXElement,
@@ -356,7 +356,7 @@ impl Registry {
     };
 
     if let Some(process) = self.processes.get(&process_id) {
-      self.subscribe_destruction(&mut state, &process.observer);
+      Self::subscribe_destruction(&mut state, &process.observer);
     }
 
     self.elements.insert(element_id, state);
@@ -414,18 +414,14 @@ impl Registry {
   }
 
   /// Subscribe to destruction notification for an element.
-  fn subscribe_destruction(&self, state: &mut ElementState, observer: &ObserverHandle) {
+  fn subscribe_destruction(state: &mut ElementState, observer: &ObserverHandle) {
     if state.destruction_context.is_some() {
       return;
     }
 
-    match platform::subscribe_destruction_notification(
-      &state.element.id,
-      &state.handle,
-      observer.clone(),
-    ) {
+    match platform::subscribe_destruction_notification(&state.element.id, &state.handle, observer) {
       Ok(context) => {
-        state.destruction_context = Some(context as *mut c_void);
+        state.destruction_context = Some(context.cast::<c_void>());
         state.subscriptions.insert(Notification::Destroyed);
       }
       Err(e) => {
@@ -440,24 +436,24 @@ impl Registry {
   }
 
   /// Remove an element.
-  fn remove_element_internal(&mut self, element_id: &ElementId) -> Vec<Event> {
+  fn remove_element_internal(&mut self, element_id: ElementId) -> Vec<Event> {
     let mut events = Vec::new();
 
-    let Some(_window_id) = self.element_to_window.remove(element_id) else {
+    let Some(_window_id) = self.element_to_window.remove(&element_id) else {
       return events;
     };
 
-    let Some(mut state) = self.elements.remove(element_id) else {
+    let Some(mut state) = self.elements.remove(&element_id) else {
       return events;
     };
 
     if let Some(parent_id) = state.element.parent_id {
-      self.remove_child_from_parent(parent_id, *element_id, &mut events);
+      self.remove_child_from_parent(parent_id, element_id, &mut events);
     }
 
     if let Some(ref ph) = state.parent_hash {
       if let Some(waiting) = self.waiting_for_parent.get_mut(ph) {
-        waiting.retain(|&id| id != *element_id);
+        waiting.retain(|&id| id != element_id);
         if waiting.is_empty() {
           self.waiting_for_parent.remove(ph);
         }
@@ -468,7 +464,7 @@ impl Registry {
 
     if let Some(children) = &state.element.children {
       for child_id in children.clone() {
-        events.extend(self.remove_element_internal(&child_id));
+        events.extend(self.remove_element_internal(child_id));
       }
     }
 
@@ -476,12 +472,10 @@ impl Registry {
 
     let process_id = ProcessId(state.pid);
     if let Some(process) = self.processes.get(&process_id) {
-      self.unsubscribe_all(&mut state, &process.observer);
+      Self::unsubscribe_all(&mut state, &process.observer);
     }
 
-    events.push(Event::ElementRemoved {
-      element_id: *element_id,
-    });
+    events.push(Event::ElementRemoved { element_id });
 
     events
   }
@@ -507,13 +501,13 @@ impl Registry {
   }
 
   /// Unsubscribe from all notifications for an element.
-  fn unsubscribe_all(&self, state: &mut ElementState, observer: &ObserverHandle) {
+  fn unsubscribe_all(state: &mut ElementState, observer: &ObserverHandle) {
     // Unsubscribe destruction tracking
     if let Some(context) = state.destruction_context.take() {
       platform::unsubscribe_destruction_notification(
         &state.handle,
-        observer.clone(),
-        context as *mut platform::ObserverContextHandle,
+        observer,
+        context.cast::<platform::ObserverContextHandle>(),
       );
     }
 
@@ -528,8 +522,8 @@ impl Registry {
 
       platform::unsubscribe_notifications(
         &state.handle,
-        observer.clone(),
-        context as *mut platform::ObserverContextHandle,
+        observer,
+        context.cast::<platform::ObserverContextHandle>(),
         &notifs,
       );
     }
@@ -552,7 +546,7 @@ impl Registry {
     let observer = self
       .processes
       .get(&process_id)
-      .map(|p| p.observer.clone())
+      .map(|p| &p.observer)
       .ok_or(AxioError::NotSupported("Process not found".into()))?;
 
     let notifs = Notification::for_watching(state.element.role);
@@ -569,7 +563,7 @@ impl Registry {
       &notifs,
     )?;
 
-    state.watch_context = Some(context as *mut c_void);
+    state.watch_context = Some(context.cast::<c_void>());
     for n in notifs {
       state.subscriptions.insert(n);
     }
@@ -601,8 +595,8 @@ impl Registry {
 
     platform::unsubscribe_notifications(
       &state.handle,
-      process.observer.clone(),
-      context as *mut platform::ObserverContextHandle,
+      &process.observer,
+      context.cast::<platform::ObserverContextHandle>(),
       &notifs,
     );
 
@@ -614,7 +608,7 @@ impl Registry {
 }
 
 /// Update windows from polling. Returns PIDs of newly added windows for accessibility setup.
-pub fn update_windows(new_windows: Vec<AXWindow>) -> Vec<ProcessId> {
+pub(crate) fn update_windows(new_windows: Vec<AXWindow>) -> Vec<ProcessId> {
   let (events, added_pids) = Registry::write(|r| r.update_windows_internal(new_windows));
   for event in events {
     events::emit(event);
@@ -623,28 +617,28 @@ pub fn update_windows(new_windows: Vec<AXWindow>) -> Vec<ProcessId> {
 }
 
 /// Get all windows.
-pub fn get_windows() -> Vec<AXWindow> {
+pub(crate) fn get_windows() -> Vec<AXWindow> {
   Registry::read(|r| r.windows.values().map(|w| w.info.clone()).collect())
 }
 
 /// Get a specific window.
-pub fn get_window(window_id: &WindowId) -> Option<AXWindow> {
-  Registry::read(|r| r.windows.get(window_id).map(|w| w.info.clone()))
+pub(crate) fn get_window(window_id: WindowId) -> Option<AXWindow> {
+  Registry::read(|r| r.windows.get(&window_id).map(|w| w.info.clone()))
 }
 
 /// Get the focused window ID.
-pub fn get_focused_window() -> Option<WindowId> {
+pub(crate) fn get_focused_window() -> Option<WindowId> {
   Registry::read(|r| r.focused_window)
 }
 
-/// Set currently focused window. Emits FocusWindow if value changed.
-pub fn set_focused_window(window_id: Option<WindowId>) {
+/// Set currently focused window. Emits `FocusWindow` if value changed.
+pub(crate) fn set_focused_window(window_id: Option<WindowId>) {
   let changed = Registry::write(|r| {
-    if r.focused_window != window_id {
+    if r.focused_window == window_id {
+      false
+    } else {
       r.focused_window = window_id;
       true
-    } else {
-      false
     }
   });
   if changed {
@@ -654,7 +648,7 @@ pub fn set_focused_window(window_id: Option<WindowId>) {
 
 /// Get the focused window for a specific PID.
 /// Returns the focused window ID if it belongs to the given process.
-pub fn get_focused_window_for_pid(pid: u32) -> Option<WindowId> {
+pub(crate) fn get_focused_window_for_pid(pid: u32) -> Option<WindowId> {
   Registry::read(|r| {
     let window_id = r.focused_window?;
     let window_state = r.windows.get(&window_id)?;
@@ -667,13 +661,13 @@ pub fn get_focused_window_for_pid(pid: u32) -> Option<WindowId> {
 }
 
 /// Get window depth order (front to back).
-pub fn get_depth_order() -> Vec<WindowId> {
+pub(crate) fn get_depth_order() -> Vec<WindowId> {
   Registry::read(|r| r.depth_order.clone())
 }
 
 /// Get a snapshot of the current registry state for sync.
 /// Note: `accessibility_enabled` must be set by caller (platform-specific check).
-pub fn snapshot() -> crate::types::Snapshot {
+pub(crate) fn snapshot() -> crate::types::Snapshot {
   Registry::read(|r| {
     let (focused_element, selection) = r
       .focused_window
@@ -702,7 +696,7 @@ pub fn snapshot() -> crate::types::Snapshot {
 }
 
 /// Find window at a point.
-pub fn find_window_at_point(x: f64, y: f64) -> Option<AXWindow> {
+pub(crate) fn find_window_at_point(x: f64, y: f64) -> Option<AXWindow> {
   Registry::read(|r| {
     let point = crate::Point::new(x, y);
     let mut candidates: Vec<_> = r
@@ -716,18 +710,20 @@ pub fn find_window_at_point(x: f64, y: f64) -> Option<AXWindow> {
 }
 
 /// Get window info with handle.
-pub fn get_window_with_handle(window_id: &WindowId) -> Option<(AXWindow, Option<ElementHandle>)> {
+pub(crate) fn get_window_with_handle(
+  window_id: WindowId,
+) -> Option<(AXWindow, Option<ElementHandle>)> {
   Registry::read(|r| {
     r.windows
-      .get(window_id)
+      .get(&window_id)
       .map(|w| (w.info.clone(), w.handle.clone()))
   })
 }
 
-/// Update focused element for a process and emit FocusElement event.
+/// Update focused element for a process and emit `FocusElement` event.
 /// Handles auto-watch/unwatch based on element roles.
 /// Returns the previous focused element ID if focus actually changed.
-pub fn update_focus(pid: u32, element: AXElement) -> Option<ElementId> {
+pub(crate) fn update_focus(pid: u32, element: AXElement) -> Option<ElementId> {
   let (previous_id, should_emit) = Registry::write(|r| {
     let process_id = ProcessId(pid);
     let process = r.processes.get_mut(&process_id)?;
@@ -749,16 +745,16 @@ pub fn update_focus(pid: u32, element: AXElement) -> Option<ElementId> {
 
   // Auto-unwatch previous element
   if let Some(prev_id) = previous_id {
-    if let Ok(prev_elem) = get_element(&prev_id) {
+    if let Ok(prev_elem) = get_element(prev_id) {
       if prev_elem.role.auto_watch_on_focus() || prev_elem.role.is_writable() {
-        unwatch_element(&prev_id);
+        unwatch_element(prev_id);
       }
     }
   }
 
   // Auto-watch new element
   if element.role.auto_watch_on_focus() || element.role.is_writable() {
-    let _ = watch_element(&element.id);
+    drop(watch_element(element.id));
   }
 
   // Emit focus event
@@ -770,8 +766,8 @@ pub fn update_focus(pid: u32, element: AXElement) -> Option<ElementId> {
   previous_id
 }
 
-/// Update selection for a process and emit SelectionChanged event if changed.
-pub fn update_selection(
+/// Update selection for a process and emit `SelectionChanged` event if changed.
+pub(crate) fn update_selection(
   pid: u32,
   window_id: WindowId,
   element_id: ElementId,
@@ -805,8 +801,8 @@ pub fn update_selection(
 }
 
 /// Register an element. Returns existing if hash matches.
-/// Emits ElementAdded for newly registered elements.
-pub fn register_element(
+/// Emits `ElementAdded` for newly registered elements.
+pub(crate) fn register_element(
   element: AXElement,
   handle: ElementHandle,
   pid: u32,
@@ -816,17 +812,17 @@ pub fn register_element(
 }
 
 /// Get element by ID.
-pub fn get_element(element_id: &ElementId) -> AxioResult<AXElement> {
+pub(crate) fn get_element(element_id: ElementId) -> AxioResult<AXElement> {
   Registry::read(|r| {
     r.elements
-      .get(element_id)
+      .get(&element_id)
       .map(|e| e.element.clone())
-      .ok_or(AxioError::ElementNotFound(*element_id))
+      .ok_or(AxioError::ElementNotFound(element_id))
   })
 }
 
 /// Get element by hash (for checking if element is already registered).
-pub fn get_element_by_hash(hash: u64) -> Option<AXElement> {
+pub(crate) fn get_element_by_hash(hash: u64) -> Option<AXElement> {
   Registry::read(|r| {
     r.hash_to_element
       .get(&hash)
@@ -836,7 +832,7 @@ pub fn get_element_by_hash(hash: u64) -> Option<AXElement> {
 }
 
 /// Get multiple elements by ID.
-pub fn get_elements(element_ids: &[ElementId]) -> Vec<AXElement> {
+pub(crate) fn get_elements(element_ids: &[ElementId]) -> Vec<AXElement> {
   Registry::read(|r| {
     element_ids
       .iter()
@@ -846,24 +842,24 @@ pub fn get_elements(element_ids: &[ElementId]) -> Vec<AXElement> {
 }
 
 /// Get all elements.
-pub fn get_all_elements() -> Vec<AXElement> {
+pub(crate) fn get_all_elements() -> Vec<AXElement> {
   Registry::read(|r| r.elements.values().map(|e| e.element.clone()).collect())
 }
 
-/// Update element data. Emits ElementChanged if the element actually changed.
-pub fn update_element(element_id: &ElementId, updated: AXElement) -> AxioResult<()> {
+/// Update element data. Emits `ElementChanged` if the element actually changed.
+pub(crate) fn update_element(element_id: ElementId, updated: AXElement) -> AxioResult<()> {
   let maybe_event = Registry::write(|r| {
     let state = r
       .elements
-      .get_mut(element_id)
-      .ok_or(AxioError::ElementNotFound(*element_id))?;
+      .get_mut(&element_id)
+      .ok_or(AxioError::ElementNotFound(element_id))?;
 
     // Only emit if something changed
-    if state.element != updated {
+    if state.element == updated {
+      Ok(None)
+    } else {
       state.element = updated.clone();
       Ok(Some(Event::ElementChanged { element: updated }))
-    } else {
-      Ok(None)
     }
   })?;
 
@@ -873,23 +869,26 @@ pub fn update_element(element_id: &ElementId, updated: AXElement) -> AxioResult<
   Ok(())
 }
 
-/// Set children for an element. Emits ElementChanged if children changed.
-pub fn set_element_children(element_id: &ElementId, children: Vec<ElementId>) -> AxioResult<()> {
+/// Set children for an element. Emits `ElementChanged` if children changed.
+pub(crate) fn set_element_children(
+  element_id: ElementId,
+  children: Vec<ElementId>,
+) -> AxioResult<()> {
   let maybe_event = Registry::write(|r| {
     let state = r
       .elements
-      .get_mut(element_id)
-      .ok_or(AxioError::ElementNotFound(*element_id))?;
+      .get_mut(&element_id)
+      .ok_or(AxioError::ElementNotFound(element_id))?;
 
     let new_children = Some(children);
     // Only emit if children changed
-    if state.element.children != new_children {
+    if state.element.children == new_children {
+      Ok(None)
+    } else {
       state.element.children = new_children;
       Ok(Some(Event::ElementChanged {
         element: state.element.clone(),
       }))
-    } else {
-      Ok(None)
     }
   })?;
 
@@ -900,7 +899,7 @@ pub fn set_element_children(element_id: &ElementId, children: Vec<ElementId>) ->
 }
 
 /// Remove an element (cascades to children).
-pub fn remove_element(element_id: &ElementId) {
+pub(crate) fn remove_element(element_id: ElementId) {
   let events = Registry::write(|r| r.remove_element_internal(element_id));
   for event in events {
     events::emit(event);
@@ -908,47 +907,47 @@ pub fn remove_element(element_id: &ElementId) {
 }
 
 /// Watch an element for notifications.
-pub fn watch_element(element_id: &ElementId) -> AxioResult<()> {
-  Registry::write(|r| r.watch_internal(element_id))
+pub(crate) fn watch_element(element_id: ElementId) -> AxioResult<()> {
+  Registry::write(|r| r.watch_internal(&element_id))
 }
 
 /// Stop watching an element.
-pub fn unwatch_element(element_id: &ElementId) {
-  Registry::write(|r| r.unwatch_internal(element_id))
+pub(crate) fn unwatch_element(element_id: ElementId) {
+  Registry::write(|r| r.unwatch_internal(&element_id));
 }
 
 /// Access stored element for operations (click, write).
-pub fn with_element_handle<F, R>(element_id: &ElementId, f: F) -> AxioResult<R>
+pub(crate) fn with_element_handle<F, R>(element_id: ElementId, f: F) -> AxioResult<R>
 where
   F: FnOnce(&ElementHandle, &str) -> R,
 {
   Registry::read(|r| {
     let state = r
       .elements
-      .get(element_id)
-      .ok_or(AxioError::ElementNotFound(*element_id))?;
+      .get(&element_id)
+      .ok_or(AxioError::ElementNotFound(element_id))?;
     Ok(f(&state.handle, &state.platform_role))
   })
 }
 
 /// Info about a stored element needed for child discovery and refresh.
-pub struct StoredElementInfo {
-  pub handle: ElementHandle,
-  pub window_id: WindowId,
-  pub pid: u32,
-  pub platform_role: String,
-  pub is_root: bool,
-  pub parent_id: Option<ElementId>,
-  pub children: Option<Vec<ElementId>>,
+pub(crate) struct StoredElementInfo {
+  pub(crate) handle: ElementHandle,
+  pub(crate) window_id: WindowId,
+  pub(crate) pid: u32,
+  pub(crate) platform_role: String,
+  pub(crate) is_root: bool,
+  pub(crate) parent_id: Option<ElementId>,
+  pub(crate) children: Option<Vec<ElementId>>,
 }
 
 /// Get full stored element info for operations that need it.
-pub fn get_stored_element_info(element_id: &ElementId) -> AxioResult<StoredElementInfo> {
+pub(crate) fn get_stored_element_info(element_id: ElementId) -> AxioResult<StoredElementInfo> {
   Registry::read(|r| {
     let state = r
       .elements
-      .get(element_id)
-      .ok_or(AxioError::ElementNotFound(*element_id))?;
+      .get(&element_id)
+      .ok_or(AxioError::ElementNotFound(element_id))?;
     Ok(StoredElementInfo {
       handle: state.handle.clone(),
       window_id: state.element.window_id,
@@ -962,8 +961,8 @@ pub fn get_stored_element_info(element_id: &ElementId) -> AxioResult<StoredEleme
 }
 
 /// Write typed value to element.
-pub fn write_element_value(
-  element_id: &ElementId,
+pub(crate) fn write_element_value(
+  element_id: ElementId,
   value: &crate::accessibility::Value,
 ) -> AxioResult<()> {
   with_element_handle(element_id, |handle, platform_role| {
@@ -972,6 +971,6 @@ pub fn write_element_value(
 }
 
 /// Click element.
-pub fn click_element(element_id: &ElementId) -> AxioResult<()> {
+pub(crate) fn click_element(element_id: ElementId) -> AxioResult<()> {
   with_element_handle(element_id, |handle, _| platform::click_element(handle))?
 }

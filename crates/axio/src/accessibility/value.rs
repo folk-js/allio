@@ -5,15 +5,18 @@ Values represent the current state of interactive elements:
 text content, numeric positions, boolean states, etc.
 */
 
+#![allow(missing_docs)]
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 /// Typed value for an accessibility element.
 ///
 /// Role provides semantic context for how to interpret values:
-/// - TextField, TextArea → String
+/// - `TextField`, `TextArea` → String
 /// - Checkbox, Switch → Boolean
-/// - Slider, ProgressBar → Number (float)
+/// - Slider, `ProgressBar` → Number (float)
 /// - Stepper → Number (integer, as whole f64)
 ///
 /// Number is unified f64 for JSON/TypeScript compatibility.
@@ -38,7 +41,7 @@ impl Value {
   pub fn as_str(&self) -> Option<&str> {
     match self {
       Self::String(s) => Some(s),
-      _ => None,
+      Self::Number(_) | Self::Boolean(_) => None,
     }
   }
 
@@ -59,38 +62,38 @@ impl Value {
   }
 
   /// Get as f64 if this is a Number value.
-  pub fn as_f64(&self) -> Option<f64> {
+  pub const fn as_f64(&self) -> Option<f64> {
     match self {
       Self::Number(n) => Some(*n),
-      _ => None,
+      Self::String(_) | Self::Boolean(_) => None,
     }
   }
 
   /// Get as i64 (truncated) if this is a Number value.
-  pub fn as_i64(&self) -> Option<i64> {
+  pub const fn as_i64(&self) -> Option<i64> {
     match self {
       Self::Number(n) => Some(*n as i64),
-      _ => None,
+      Self::String(_) | Self::Boolean(_) => None,
     }
   }
 
   /// Get as bool if this is a Boolean value.
-  pub fn as_bool(&self) -> Option<bool> {
+  pub const fn as_bool(&self) -> Option<bool> {
     match self {
       Self::Boolean(b) => Some(*b),
-      _ => None,
+      Self::String(_) | Self::Number(_) => None,
     }
   }
 
-  pub fn is_string(&self) -> bool {
+  pub const fn is_string(&self) -> bool {
     matches!(self, Self::String(_))
   }
 
-  pub fn is_number(&self) -> bool {
+  pub const fn is_number(&self) -> bool {
     matches!(self, Self::Number(_))
   }
 
-  pub fn is_boolean(&self) -> bool {
+  pub const fn is_boolean(&self) -> bool {
     matches!(self, Self::Boolean(_))
   }
 }
@@ -115,7 +118,7 @@ impl From<f64> for Value {
 
 impl From<f32> for Value {
   fn from(n: f32) -> Self {
-    Self::Number(n as f64)
+    Self::Number(f64::from(n))
   }
 }
 
@@ -127,7 +130,7 @@ impl From<i64> for Value {
 
 impl From<i32> for Value {
   fn from(n: i32) -> Self {
-    Self::Number(n as f64)
+    Self::Number(f64::from(n))
   }
 }
 

@@ -11,25 +11,25 @@ Contains macOS-specific accessibility code:
 - `util`: Shared utilities
 */
 
-pub mod element;
-pub mod focus;
-pub mod mapping;
-pub mod notifications;
-pub mod observer;
-pub mod util;
-pub mod window;
+mod element;
+mod focus;
+pub(crate) mod mapping;
+mod notifications;
+mod observer;
+mod util;
+mod window;
 
-// Re-export public API items
-pub use element::{
+// Re-export crate-internal API items
+pub(crate) use element::{
   children, click_element, element_hash, parent, refresh_element, write_element_value,
 };
-pub use focus::get_current_focus;
-pub use notifications::{
+pub(crate) use focus::get_current_focus;
+pub(crate) use notifications::{
   subscribe_app_notifications, subscribe_destruction_notification, subscribe_notifications,
   unsubscribe_destruction_notification, unsubscribe_notifications,
 };
-pub use observer::{create_observer_for_pid, ObserverContextHandle};
-pub use util::check_accessibility_permissions;
-pub use window::{
+pub(crate) use observer::{create_observer_for_pid, ObserverContextHandle};
+pub(crate) use util::check_accessibility_permissions;
+pub(crate) use window::{
   enable_accessibility_for_pid, fetch_window_handle, get_element_at_position, get_window_root,
 };

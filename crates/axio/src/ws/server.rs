@@ -12,6 +12,7 @@ use axum::{
   routing::get,
   Router,
 };
+use log::error;
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -29,14 +30,22 @@ pub struct WebSocketState {
   port: u16,
 }
 
+impl std::fmt::Debug for WebSocketState {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("WebSocketState")
+      .field("port", &self.port)
+      .finish_non_exhaustive()
+  }
+}
+
 impl WebSocketState {
   /// Create WebSocket state with default config.
   pub fn new() -> Self {
-    Self::with_config(Config::default())
+    Self::with_config(&Config::default())
   }
 
   /// Create WebSocket state with custom config.
-  pub fn with_config(config: Config) -> Self {
+  pub fn with_config(config: &Config) -> Self {
     let (json_tx, _) = broadcast::channel::<String>(config.event_channel_capacity);
     Self {
       json_sender: Arc::new(json_tx),
@@ -45,6 +54,8 @@ impl WebSocketState {
     }
   }
 
+  /// Add a custom RPC handler for app-specific methods.
+  #[must_use]
   pub fn with_custom_handler(mut self, handler: CustomRpcHandler) -> Self {
     self.custom_handler = Some(handler);
     self
@@ -68,7 +79,7 @@ pub async fn start_server(ws_state: WebSocketState) {
   tokio::spawn(async move {
     while let Ok(event) = rx.recv().await {
       if let Ok(json) = serde_json::to_string(&event) {
-        let _ = sender.send(json);
+        drop(sender.send(json));
       }
     }
   });
@@ -84,15 +95,20 @@ pub async fn start_server(ws_state: WebSocketState) {
     .with_state(ws_state);
 
   let addr = format!("127.0.0.1:{port}");
-  let listener = tokio::net::TcpListener::bind(&addr)
-    .await
-    .expect("Failed to bind WebSocket server");
+  let listener = match tokio::net::TcpListener::bind(&addr).await {
+    Ok(l) => l,
+    Err(e) => {
+      error!("Failed to bind WebSocket server to {addr}: {e}");
+      std::process::exit(1);
+    }
+  };
 
   println!("WebSocket server: ws://{addr}/ws");
 
-  axum::serve(listener, app)
-    .await
-    .expect("WebSocket server failed");
+  if let Err(e) = axum::serve(listener, app).await {
+    error!("WebSocket server failed: {e}");
+    std::process::exit(1);
+  }
 }
 
 async fn websocket_handler(
@@ -115,9 +131,8 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
   })
   .await;
 
-  let init = match init_result {
-    Ok(init) => init,
-    Err(_) => return,
+  let Ok(init) = init_result else {
+    return;
   };
 
   let event = Event::SyncInit(init);
@@ -136,9 +151,9 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
                     // Drain any pending events before sending RPC response
                     // This ensures events triggered by RPC are sent first
                     while let Ok(event_json) = rx.try_recv() {
-                        let _ = socket.send(Message::Text(event_json)).await;
+                        drop(socket.send(Message::Text(event_json)).await);
                     }
-                    let _ = socket.send(Message::Text(response)).await;
+                    drop(socket.send(Message::Text(response)).await);
                 }
                 Some(Ok(Message::Close(_))) => {
                     println!("[client] closed connection");
@@ -182,14 +197,19 @@ async fn handle_request_async(request: &str, ws_state: &WebSocketState) -> Strin
   };
 
   let id = req.get("id").cloned().unwrap_or(Value::Null);
-  let method = req["method"].as_str().unwrap_or("").to_string();
+  let method = req
+    .get("method")
+    .and_then(Value::as_str)
+    .unwrap_or("")
+    .to_string();
   let args = req.get("args").cloned().unwrap_or(Value::Null);
 
   // Try custom handler first (runs on current thread - fast, may need main thread access)
   if let Some(ref handler) = ws_state.custom_handler {
-    if let Some(result) = handler(&method, &args) {
-      let mut response = result;
-      response["id"] = id;
+    if let Some(mut response) = handler(&method, &args) {
+      if let Some(obj) = response.as_object_mut() {
+        obj.insert("id".to_string(), id);
+      }
       return response.to_string();
     }
   }
@@ -202,6 +222,8 @@ async fn handle_request_async(request: &str, ws_state: &WebSocketState) -> Strin
     Ok(r) => r,
     Err(_) => json!({ "error": "RPC task panicked" }),
   };
-  response["id"] = id;
+  if let Some(obj) = response.as_object_mut() {
+    obj.insert("id".to_string(), id);
+  }
   response.to_string()
 }

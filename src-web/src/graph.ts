@@ -19,10 +19,6 @@ import {
   SimulationLinkDatum,
 } from "d3-force";
 
-// ============================================================================
-// Types
-// ============================================================================
-
 interface GraphNode extends SimulationNodeDatum {
   id: ElementId;
   element: AXElement;
@@ -33,10 +29,6 @@ interface GraphLink extends SimulationLinkDatum<GraphNode> {
   target: GraphNode;
   type: "parent-child" | "pending";
 }
-
-// ============================================================================
-// Graph State
-// ============================================================================
 
 class AXGraph {
   private axio: AXIO;
@@ -182,10 +174,6 @@ class AXGraph {
     this.updateStats();
   }
 
-  // ============================================================================
-  // Event Handlers
-  // ============================================================================
-
   /** Add a node to the graph. Returns { node, isNew } */
   private addNode(element: AXElement): { node: GraphNode; isNew: boolean } {
     // Update existing node
@@ -272,10 +260,6 @@ class AXGraph {
     this.toast(`− ${role}`);
   }
 
-  // ============================================================================
-  // Link Management
-  // ============================================================================
-
   private updateLinks() {
     const newLinks: GraphLink[] = [];
 
@@ -327,10 +311,6 @@ class AXGraph {
     this.simulation.alpha(0.5).restart();
   }
 
-  // ============================================================================
-  // Node Interaction
-  // ============================================================================
-
   /** Fetch children + parent for node */
   private async expandNode(node: GraphNode) {
     try {
@@ -367,10 +347,6 @@ class AXGraph {
     this.updateLinks();
     this.restartSimulation();
   }
-
-  // ============================================================================
-  // Rendering
-  // ============================================================================
 
   // SVG element references for efficient updates
   private linkGroup: SVGGElement | null = null;
@@ -592,10 +568,6 @@ class AXGraph {
     document.addEventListener("mouseup", onMouseUp);
   }
 
-  // ============================================================================
-  // Hover Overlay - Shows element bounds on screen
-  // ============================================================================
-
   private async onNodeHoverEnter(node: GraphNode) {
     this.hoveredNode = node;
 
@@ -673,10 +645,6 @@ class AXGraph {
     this.wiringLine.setAttribute("y2", String(node.y ?? 0));
   }
 
-  // ============================================================================
-  // Element Info Panel
-  // ============================================================================
-
   private updateElementInfo(node: GraphNode) {
     if (!this.elementInfoPanel || !this.elementDetailsEl) return;
 
@@ -744,10 +712,6 @@ class AXGraph {
       .replace(/>/g, "&gt;");
   }
 
-  // ============================================================================
-  // Stats & UI
-  // ============================================================================
-
   private updateStats() {
     const nodes = this.nodes.size;
     const roots = Array.from(this.nodes.values()).filter(
@@ -779,9 +743,5 @@ class AXGraph {
     }, 2000);
   }
 }
-
-// ============================================================================
-// Initialize
-// ============================================================================
 
 new AXGraph();

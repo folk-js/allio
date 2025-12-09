@@ -34,5 +34,5 @@ pub fn subscribe() -> broadcast::Receiver<Event> {
 /// Emit an event to all subscribers.
 pub(crate) fn emit(event: Event) {
   // Ignore send errors - just means no receivers
-  let _ = EVENT_CHANNEL.send(event);
+  drop(EVENT_CHANNEL.send(event));
 }

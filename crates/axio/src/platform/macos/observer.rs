@@ -6,13 +6,13 @@ Handles:
 - Observer creation and run loop integration
 - Unified callback dispatching
 
-# Singleton Design (OBSERVER_CONTEXTS)
+# Singleton Design (`OBSERVER_CONTEXTS`)
 
 Observer contexts are stored in a global `LazyLock<Mutex<HashMap>>`. This design is
 necessary because:
 
 1. **C callback constraint**: macOS `AXObserver` callbacks receive a raw pointer (`refcon`)
-   that we need to map back to our typed context (ElementId or ProcessId). We can't pass
+   that we need to map back to our typed context (`ElementId` or `ProcessId`). We can't pass
    Rust closures or trait objects to C code.
 
 2. **Lifetime management**: Context handles are passed to macOS which may hold them
@@ -30,9 +30,12 @@ necessary because:
 - **Registry-owned contexts**: Move context map into Registry. Would work but adds coupling
   between core registry and platform-specific observer code.
 
-- **Box::into_raw for context**: Store actual data in the pointer instead of an ID.
+- **`Box::into_raw` for context**: Store actual data in the pointer instead of an ID.
   Risk of use-after-free if handle outlives the Box. ID-based lookup is safer.
 */
+
+#![allow(unsafe_code)]
+#![allow(clippy::expect_used)] // NonNull::new on stack pointers - never null
 
 use objc2_application_services::{AXError, AXObserver, AXObserverCallback, AXUIElement};
 use objc2_core_foundation::{kCFRunLoopDefaultMode, CFRetained, CFRunLoop, CFString};
@@ -56,7 +59,7 @@ static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
 /// - Element contexts are used for per-element notifications (destruction, value change).
 /// - Process contexts are used for app-level notifications (focus, selection).
 #[derive(Clone)]
-pub enum ObserverContext {
+enum ObserverContext {
   /// Element-level notification (context identifies which element)
   Element(ElementId),
   /// Process-level notification (context identifies which app)
@@ -64,13 +67,11 @@ pub enum ObserverContext {
 }
 
 /// Opaque handle passed to macOS callbacks.
-/// Contains only an ID that maps to the actual context in OBSERVER_CONTEXTS.
+/// Contains only an ID that maps to the actual context in `OBSERVER_CONTEXTS`.
 #[repr(C)]
-pub struct ContextHandle {
+pub(crate) struct ObserverContextHandle {
   context_id: u64,
 }
-
-pub type ObserverContextHandle = ContextHandle;
 
 /// Global registry mapping context IDs to observer contexts.
 /// See module documentation for design rationale.
@@ -78,23 +79,23 @@ static OBSERVER_CONTEXTS: LazyLock<Mutex<HashMap<u64, ObserverContext>>> =
   LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Register an element context and get a raw pointer handle.
-pub fn register_observer_context(element_id: ElementId) -> *mut ObserverContextHandle {
+pub(super) fn register_observer_context(element_id: ElementId) -> *mut ObserverContextHandle {
   register_context(ObserverContext::Element(element_id))
 }
 
 /// Register a process context and get a raw pointer handle.
-pub fn register_process_context(pid: u32) -> *mut ObserverContextHandle {
+pub(super) fn register_process_context(pid: u32) -> *mut ObserverContextHandle {
   register_context(ObserverContext::Process(pid))
 }
 
 fn register_context(ctx: ObserverContext) -> *mut ObserverContextHandle {
   let context_id = NEXT_CONTEXT_ID.fetch_add(1, AtomicOrdering::Relaxed);
   OBSERVER_CONTEXTS.lock().insert(context_id, ctx);
-  Box::into_raw(Box::new(ContextHandle { context_id }))
+  Box::into_raw(Box::new(ObserverContextHandle { context_id }))
 }
 
 /// Unregister and free a context handle.
-pub fn unregister_observer_context(handle_ptr: *mut ObserverContextHandle) {
+pub(super) fn unregister_observer_context(handle_ptr: *mut ObserverContextHandle) {
   if handle_ptr.is_null() {
     return;
   }
@@ -115,17 +116,18 @@ fn lookup_context(handle_ptr: *const ObserverContextHandle) -> Option<ObserverCo
   }
 }
 
-/// Create an AXObserver and add it to the main run loop.
+/// Create an `AXObserver` and add it to the main run loop.
 fn create_observer_raw(
   pid: u32,
   callback: AXObserverCallback,
 ) -> AxioResult<CFRetained<AXObserver>> {
   let observer = unsafe {
     let mut observer_ptr: *mut AXObserver = std::ptr::null_mut();
+    #[allow(clippy::cast_possible_wrap)] // PIDs are always positive and < i32::MAX
     let result = AXObserver::create(
       pid as i32,
       callback,
-      NonNull::new_unchecked(&mut observer_ptr),
+      NonNull::new(&raw mut observer_ptr).expect("stack pointer is never null"),
     );
 
     if result != AXError::Success {
@@ -152,7 +154,7 @@ fn create_observer_raw(
 }
 
 /// Create an observer for a process and add it to the main run loop.
-pub fn create_observer_for_pid(pid: u32) -> AxioResult<ObserverHandle> {
+pub(crate) fn create_observer_for_pid(pid: u32) -> AxioResult<ObserverHandle> {
   let observer = create_observer_raw(pid, Some(unified_observer_callback))?;
   Ok(ObserverHandle::new(observer))
 }
@@ -190,7 +192,7 @@ unsafe extern "C-unwind" fn unified_observer_callback(
 
     match ctx {
       ObserverContext::Element(element_id) => {
-        handle_element_notification(&element_id, notif, element_ref);
+        handle_element_notification(element_id, notif, element_ref);
       }
       ObserverContext::Process(pid) => {
         handle_process_notification(pid, notif, element_ref);
@@ -203,9 +205,9 @@ unsafe extern "C-unwind" fn unified_observer_callback(
   }
 }
 
-/// Handle element-level notifications
+/// Handle element-level notifications.
 fn handle_element_notification(
-  element_id: &ElementId,
+  element_id: ElementId,
   notif: Notification,
   ax_element: CFRetained<AXUIElement>,
 ) {
@@ -215,7 +217,9 @@ fn handle_element_notification(
       let attrs = handle.get_attributes(None);
       if let Ok(mut element) = crate::registry::get_element(element_id) {
         element.value = attrs.value;
-        let _ = crate::registry::update_element(element_id, element);
+        if let Err(e) = crate::registry::update_element(element_id, element) {
+          log::debug!("Failed to update element value: {e}");
+        }
       }
     }
 
@@ -223,7 +227,9 @@ fn handle_element_notification(
       let handle = ElementHandle::new(ax_element);
       if let Ok(mut element) = crate::registry::get_element(element_id) {
         element.label = handle.get_string("AXTitle");
-        let _ = crate::registry::update_element(element_id, element);
+        if let Err(e) = crate::registry::update_element(element_id, element) {
+          log::debug!("Failed to update element title: {e}");
+        }
       }
     }
 
@@ -234,10 +240,13 @@ fn handle_element_notification(
     Notification::ChildrenChanged => {
       // Re-fetch children - this registers new ones and updates the children list
       // The linking logic in register_element handles parent-child relationships
-      let _ = super::element::children(element_id, 1000);
+      if let Err(e) = super::element::children(element_id, 1000) {
+        log::debug!("Failed to refresh children: {e}");
+      }
     }
 
-    _ => {}
+    // Element-level handler doesn't process these app-level notifications
+    Notification::FocusChanged | Notification::SelectionChanged | Notification::BoundsChanged => {}
   }
 }
 
@@ -250,6 +259,11 @@ fn handle_process_notification(pid: u32, notif: Notification, ax_element: CFReta
     Notification::SelectionChanged => {
       super::focus::handle_app_selection_changed(pid, ax_element);
     }
-    _ => {}
+    // Process-level handler doesn't process these element-level notifications
+    Notification::Destroyed
+    | Notification::ValueChanged
+    | Notification::TitleChanged
+    | Notification::BoundsChanged
+    | Notification::ChildrenChanged => {}
   }
 }
