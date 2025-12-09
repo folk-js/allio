@@ -36,6 +36,7 @@ Core code should only import from this module - never from platform-specific sub
 */
 
 mod traits;
+pub(crate) mod element_ops;
 
 pub(crate) use traits::{
   DisplayLinkHandle, ElementAttributes, Platform, PlatformHandle, PlatformObserver, WatchHandle,
@@ -70,6 +71,7 @@ pub(crate) type Observer = <CurrentPlatform as Platform>::Observer;
 
 // === Convenience Functions ===
 // These delegate to CurrentPlatform methods for ergonomic use.
+// Naming convention: get_ = registry, fetch_ = OS call, set_ = value, perform_ = action
 
 use crate::core::Axio;
 use crate::types::{AXWindow, AxioResult, Point};
@@ -84,8 +86,8 @@ pub(crate) fn create_observer(pid: u32, axio: Axio) -> AxioResult<Observer> {
   CurrentPlatform::create_observer(pid, axio)
 }
 
-/// Get the root element handle for a window.
-pub(crate) fn window_handle(window: &AXWindow) -> Option<Handle> {
+/// Get the root element handle for a window (from window info, not OS call).
+pub(crate) fn get_window_handle(window: &AXWindow) -> Option<Handle> {
   CurrentPlatform::window_handle(window)
 }
 
@@ -96,19 +98,19 @@ pub(crate) fn start_display_link<F: Fn() + Send + Sync + 'static>(
   CurrentPlatform::start_display_link(callback)
 }
 
-/// Enumerate all visible windows.
-pub(crate) fn enumerate_windows() -> Vec<AXWindow> {
+/// Fetch all visible windows from OS.
+pub(crate) fn fetch_windows() -> Vec<AXWindow> {
   CurrentPlatform::fetch_windows(None)
 }
 
-/// Get main screen dimensions (width, height).
-pub(crate) fn get_main_screen_dimensions() -> (f64, f64) {
-  CurrentPlatform::screen_size()
+/// Fetch main screen dimensions (width, height) from OS.
+pub(crate) fn fetch_screen_size() -> (f64, f64) {
+  CurrentPlatform::fetch_screen_size()
 }
 
-/// Get current mouse position.
-pub(crate) fn get_mouse_position() -> Option<Point> {
-  Some(CurrentPlatform::mouse_position())
+/// Fetch current mouse position from OS.
+pub(crate) fn fetch_mouse_position() -> Option<Point> {
+  Some(CurrentPlatform::fetch_mouse_position())
 }
 
 /// Enable accessibility for a process (mostly for Chromium/Electron apps).
@@ -121,4 +123,3 @@ pub(crate) fn enable_accessibility_for_pid(pid: u32) {
 pub(crate) fn role_from_raw(raw: &str) -> crate::accessibility::Role {
   macos::mapping::role_from_macos(raw)
 }
-

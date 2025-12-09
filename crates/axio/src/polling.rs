@@ -67,7 +67,7 @@ impl Drop for PollingHandle {
 
 /// Poll for current windows. Returns None if `exclude_pid` window isn't found.
 fn poll_windows(options: &AxioOptions) -> Option<Vec<AXWindow>> {
-  let all_windows = platform::enumerate_windows();
+  let all_windows = platform::fetch_windows();
 
   let (offset_x, offset_y) = if let Some(exclude_pid) = options.exclude_pid {
     match all_windows.iter().find(|w| w.process_id.0 == exclude_pid.0) {
@@ -78,7 +78,7 @@ fn poll_windows(options: &AxioOptions) -> Option<Vec<AXWindow>> {
     (0.0, 0.0)
   };
 
-  let (screen_width, screen_height) = platform::get_main_screen_dimensions();
+  let (screen_width, screen_height) = platform::fetch_screen_size();
 
   let windows: Vec<AXWindow> = all_windows
     .into_iter()
@@ -200,7 +200,7 @@ fn start_display_synced_polling(axio: Axio, config: AxioOptions) -> PollingHandl
 /// Shared polling logic for both thread and display-link implementations.
 fn poll_iteration(axio: &Axio, config: &AxioOptions) {
   // Mouse position polling - axio handles dedup and event emission
-  if let Some(pos) = platform::get_mouse_position() {
+  if let Some(pos) = platform::fetch_mouse_position() {
     axio.update_mouse_position(pos);
   }
 

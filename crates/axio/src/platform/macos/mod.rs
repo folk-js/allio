@@ -48,11 +48,11 @@ impl Platform for MacOS {
     window_list::enumerate_windows()
   }
 
-  fn screen_size() -> (f64, f64) {
+  fn fetch_screen_size() -> (f64, f64) {
     display::get_main_screen_dimensions()
   }
 
-  fn mouse_position() -> Point {
+  fn fetch_mouse_position() -> Point {
     mouse::get_mouse_position().unwrap_or_else(|| Point::new(0.0, 0.0))
   }
 
@@ -74,7 +74,7 @@ impl Platform for MacOS {
     window::enable_accessibility_for_pid(crate::ProcessId(pid));
   }
 
-  fn focused_element(app_handle: &Self::Handle) -> Option<Self::Handle> {
+  fn fetch_focused_element(app_handle: &Self::Handle) -> Option<Self::Handle> {
     app_handle.get_element("AXFocusedUIElement")
   }
 
@@ -84,11 +84,11 @@ impl Platform for MacOS {
 }
 
 impl PlatformHandle for ElementHandle {
-  fn children(&self) -> Vec<Self> {
+  fn fetch_children(&self) -> Vec<Self> {
     self.get_children()
   }
 
-  fn parent(&self) -> Option<Self> {
+  fn fetch_parent(&self) -> Option<Self> {
     self.get_element("AXParent")
   }
 
@@ -108,15 +108,15 @@ impl PlatformHandle for ElementHandle {
       .map_err(|e| AxioError::AccessibilityError(format!("Action '{action}' failed: {e:?}")))
   }
 
-  fn get_attributes(&self) -> ElementAttributes {
-    self.fetch_attributes(None)
+  fn fetch_attributes(&self) -> ElementAttributes {
+    self.fetch_attributes_internal(None)
   }
 
-  fn element_at_position(&self, x: f64, y: f64) -> Option<Self> {
+  fn fetch_element_at_position(&self, x: f64, y: f64) -> Option<Self> {
     handles::ElementHandle::element_at_position(self, x, y)
   }
 
-  fn get_selection(&self) -> Option<(String, Option<(u32, u32)>)> {
+  fn fetch_selection(&self) -> Option<(String, Option<(u32, u32)>)> {
     focus::get_selection_from_handle(self)
   }
 }
@@ -135,8 +135,7 @@ impl PlatformObserver for ObserverHandle {
     initial_notifications: &[Notification],
     axio: Axio,
   ) -> AxioResult<WatchHandle> {
-    let inner =
-      notifications::create_watch(self, handle, element_id, initial_notifications, axio)?;
+    let inner = notifications::create_watch(self, handle, element_id, initial_notifications, axio)?;
     Ok(WatchHandle { inner })
   }
 }

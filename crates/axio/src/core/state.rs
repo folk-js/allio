@@ -36,10 +36,10 @@ pub(crate) struct ElementState {
   pub(crate) hash: u64,
   /// `CFHash` of this element's OS parent (for lazy linking).
   pub(crate) parent_hash: Option<u64>,
-  /// Raw platform role string, e.g. "AXButton" (for role mapping).
+  /// Raw platform role string, e.g. `AXButton` (for role mapping).
   pub(crate) raw_role: String,
   /// Watch handle managing all notification subscriptions.
-  /// Created at registration (with Destroyed), additional notifications added via watch_element.
+  /// Created at registration (with Destroyed), additional notifications added via `watch`.
   pub(crate) watch: Option<WatchHandle>,
 }
 

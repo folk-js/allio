@@ -3,17 +3,15 @@ Element operations that coordinate between platform and core state.
 
 These functions:
 - Take an Axio reference (need state access)
-- Use PlatformHandle trait methods internally
+- Use `PlatformHandle` trait methods internally
 - Build and register elements
-
-This is NOT platform code - it's core code that uses the platform abstraction.
 */
 
-use super::state::ElementState;
-use super::Axio;
 use crate::accessibility::Role;
-use crate::platform::{Handle, PlatformHandle};
+use crate::core::{Axio, ElementState};
 use crate::types::{AXElement, AxioError, AxioResult, ElementId, ProcessId, WindowId};
+
+use super::{Handle, PlatformHandle};
 
 // === Element Building ===
 
@@ -23,8 +21,8 @@ pub(crate) fn build_element_state(
   window_id: WindowId,
   pid: u32,
   parent_id: Option<ElementId>,
-) -> Option<ElementState> {
-  let attrs = handle.get_attributes();
+) -> ElementState {
+  let attrs = handle.fetch_attributes();
 
   let raw_role = attrs.role.clone().unwrap_or_else(|| {
     log::debug!("Element missing AXRole attribute, using AXUnknown fallback");
@@ -47,8 +45,8 @@ pub(crate) fn build_element_state(
 
   // Determine if this is a root element
   let is_root = handle
-    .parent()
-    .and_then(|p| p.get_attributes().role)
+    .fetch_parent()
+    .and_then(|p| p.fetch_attributes().role)
     .as_deref()
     == Some("AXApplication");
 
@@ -58,7 +56,7 @@ pub(crate) fn build_element_state(
   let parent_hash = if is_root {
     None
   } else {
-    handle.parent().map(|p| p.element_hash())
+    handle.fetch_parent().map(|p| p.element_hash())
   };
 
   let element = AXElement {
@@ -87,13 +85,7 @@ pub(crate) fn build_element_state(
     actions: attrs.actions,
   };
 
-  Some(ElementState::new(
-    element,
-    handle,
-    hash,
-    parent_hash,
-    raw_role,
-  ))
+  ElementState::new(element, handle, hash, parent_hash, raw_role)
 }
 
 /// Build and register an element (convenience wrapper).
@@ -104,7 +96,7 @@ pub(crate) fn build_and_register_element(
   pid: u32,
   parent_id: Option<ElementId>,
 ) -> Option<AXElement> {
-  let elem_state = build_element_state(handle, window_id, pid, parent_id)?;
+  let elem_state = build_element_state(handle, window_id, pid, parent_id);
   axio.register_element(elem_state)
 }
 
@@ -117,7 +109,7 @@ pub(crate) fn fetch_children(
   max_children: usize,
 ) -> AxioResult<Vec<AXElement>> {
   let (child_handles, window_id, pid) = axio.with_element(parent_id, |e| {
-    (e.handle.children(), e.element.window_id, e.pid())
+    (e.handle.fetch_children(), e.element.window_id, e.pid())
   })?;
 
   if child_handles.is_empty() {
@@ -144,7 +136,7 @@ pub(crate) fn fetch_children(
 /// Fetch and register parent of an element from platform.
 pub(crate) fn fetch_parent(axio: &Axio, element_id: ElementId) -> AxioResult<Option<AXElement>> {
   let (parent_handle, window_id, pid) = axio.with_element(element_id, |e| {
-    (e.handle.parent(), e.element.window_id, e.pid())
+    (e.handle.fetch_parent(), e.element.window_id, e.pid())
   })?;
 
   let Some(parent_handle) = parent_handle else {
@@ -165,7 +157,7 @@ pub(crate) fn fetch_element(axio: &Axio, element_id: ElementId) -> AxioResult<AX
   let (attrs, raw_role, window_id, pid, is_root, parent_id, existing_children) = axio
     .with_element(element_id, |e| {
       (
-        e.handle.get_attributes(),
+        e.handle.fetch_attributes(),
         e.raw_role.clone(),
         e.element.window_id,
         e.pid(),
@@ -221,7 +213,7 @@ pub(crate) fn fetch_element(axio: &Axio, element_id: ElementId) -> AxioResult<AX
 // === Window/Hit Testing ===
 
 /// Get the root element for a window.
-pub(crate) fn get_window_root(axio: &Axio, window_id: WindowId) -> AxioResult<AXElement> {
+pub(crate) fn fetch_window_root(axio: &Axio, window_id: WindowId) -> AxioResult<AXElement> {
   let (window, handle) = axio
     .get_window_with_handle(window_id)
     .ok_or(AxioError::WindowNotFound(window_id))?;
@@ -243,10 +235,10 @@ const HIT_TEST_MAX_DEPTH: u8 = 10;
 
 /// Get the accessibility element at a specific screen position.
 /// Uses retry logic to handle Chromium/Electron lazy initialization.
-pub(crate) fn get_element_at_position(axio: &Axio, x: f64, y: f64) -> AxioResult<AXElement> {
+pub(crate) fn fetch_element_at_position(axio: &Axio, x: f64, y: f64) -> AxioResult<AXElement> {
   // First, find which TRACKED window is at this point.
   // This ensures we only hit-test within apps we're monitoring (excludes axio overlay).
-  let window = axio.find_window_at_point(x, y).ok_or_else(|| {
+  let window = axio.get_window_at_point(x, y).ok_or_else(|| {
     AxioError::AccessibilityError(format!("No tracked window found at position ({x}, {y})"))
   })?;
   let window_id = window.id;
@@ -267,11 +259,11 @@ pub(crate) fn get_element_at_position(axio: &Axio, x: f64, y: f64) -> AxioResult
       std::thread::sleep(std::time::Duration::from_millis(delay_ms));
     }
 
-    let Some(hit) = app_handle.element_at_position(x, y) else {
+    let Some(hit) = app_handle.fetch_element_at_position(x, y) else {
       continue;
     };
 
-    let attrs = hit.get_attributes();
+    let attrs = hit.fetch_attributes();
     let is_fallback_container = attrs.role.as_deref() == Some("AXGroup")
       && attrs
         .bounds
@@ -293,13 +285,13 @@ pub(crate) fn get_element_at_position(axio: &Axio, x: f64, y: f64) -> AxioResult
   })?;
 
   // Try recursive hit testing - drill down through nested containers
-  let raw_attrs = element_handle.get_attributes();
+  let raw_attrs = element_handle.fetch_attributes();
   for _ in 1..=HIT_TEST_MAX_DEPTH {
-    let Some(deeper) = element_handle.element_at_position(x, y) else {
+    let Some(deeper) = element_handle.fetch_element_at_position(x, y) else {
       break;
     };
 
-    let deeper_attrs = deeper.get_attributes();
+    let deeper_attrs = deeper.fetch_attributes();
     let same_element = deeper_attrs.bounds == raw_attrs.bounds
       && deeper_attrs.role == raw_attrs.role
       && deeper_attrs.title == raw_attrs.title;
@@ -328,7 +320,7 @@ pub(crate) fn fetch_focus(
     return (None, None);
   };
 
-  let Some(focused_handle) = CurrentPlatform::focused_element(&app_handle) else {
+  let Some(focused_handle) = CurrentPlatform::fetch_focused_element(&app_handle) else {
     return (None, None);
   };
 
@@ -351,13 +343,14 @@ pub(crate) fn fetch_focus(
     return (None, None);
   };
 
-  let selection = focused_handle
-    .get_selection()
-    .map(|(text, range)| crate::types::TextSelection {
-      element_id: element.id,
-      text,
-      range,
-    });
+  let selection =
+    focused_handle
+      .fetch_selection()
+      .map(|(text, range)| crate::types::TextSelection {
+        element_id: element.id,
+        text,
+        range,
+      });
 
   (Some(element), selection)
 }

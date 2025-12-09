@@ -171,7 +171,7 @@ impl ElementHandle {
   /// Fetch all common attributes in a single batch call (10x faster).
   /// This is the recommended way to build an `AXElement`.
   #[allow(clippy::too_many_lines)]
-  pub(in crate::platform) fn fetch_attributes(
+  pub(in crate::platform) fn fetch_attributes_internal(
     &self,
     role_hint: Option<&str>,
   ) -> crate::platform::ElementAttributes {
@@ -264,9 +264,8 @@ impl ElementHandle {
     };
 
     // Helper to parse usize from CFNumber
-    let parse_usize = |v: &CFType| -> Option<usize> {
-      v.downcast_ref::<CFNumber>()?.as_i64().map(|n| n as usize)
-    };
+    let parse_usize =
+      |v: &CFType| -> Option<usize> { v.downcast_ref::<CFNumber>()?.as_i64().map(|n| n as usize) };
 
     let role_str = get_val(0).and_then(|v| parse_str(&v));
     let subrole_str = get_val(1).and_then(|v| parse_str(&v));
@@ -430,4 +429,3 @@ impl ObserverHandle {
 
 unsafe impl Send for ObserverHandle {}
 unsafe impl Sync for ObserverHandle {}
-

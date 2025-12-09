@@ -169,7 +169,8 @@ pub(super) fn subscribe_app_notifications(
     )));
   }
 
-  // Note: context is intentionally leaked for app-level notifications
-  // since they live for the lifetime of the process observer
+  // TODO: This context is leaked when the process is removed.
+  // To fix: store the context handle in ProcessState and clean up on drop.
+  // Impact: minor memory leak (one entry per tracked process).
   Ok(())
 }

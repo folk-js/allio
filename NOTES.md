@@ -9,6 +9,25 @@ important TODOs:
 - We do a bit of stuff like `let app_handle = ElementHandle::new(app_element(pid));` which feels off. app element = process lifetime right? should this be part of ProcessState or something?
 - wanna know more about "Used through concrete type (trait bound satisfied)"
 - add mock platform + fuzz for testing
+- suspicious indirection, shouldnt these just call platform code?:
+  fn set_value(&self, value: &Value) -> AxioResult<()> {
+  self
+  .set_typed_value(value)
+  .map_err(|e| AxioError::AccessibilityError(format!("Failed to set value: {e:?}")))
+  }
+
+  fn perform_action(&self, action: &str) -> AxioResult<()> {
+  self
+  .perform_action_internal(action)
+  .map_err(|e| AxioError::AccessibilityError(format!("Action '{action}' failed: {e:?}")))
+  }
+
+  fn fetch_attributes(&self) -> ElementAttributes {
+  self.fetch_attributes_internal(None)
+  }
+
+  - should be consistent with names at different layers of the stack. e.g. verify_permissions calls platform::check_accessibility_permissions() should maybe be the same... could rename both to check_permissions or even `has_permissions()` or something better.
+  - `get_window_handle` is LYING! i wonder what other lies there are...
 
 TODOs:
 

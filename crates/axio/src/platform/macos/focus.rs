@@ -14,7 +14,8 @@ use objc2_application_services::AXUIElement;
 use objc2_core_foundation::CFRetained;
 
 use super::handles::ElementHandle;
-use crate::core::{element_ops, Axio};
+use crate::core::Axio;
+use crate::platform::element_ops;
 use crate::types::WindowId;
 
 use super::element::element_hash;

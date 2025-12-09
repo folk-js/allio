@@ -53,11 +53,11 @@ pub(crate) trait Platform {
   /// Returns windows from all apps (filtering is done in core).
   fn fetch_windows(exclude_pid: Option<u32>) -> Vec<AXWindow>;
 
-  /// Get main screen dimensions (width, height) in points.
-  fn screen_size() -> (f64, f64);
+  /// Fetch main screen dimensions (width, height) in points.
+  fn fetch_screen_size() -> (f64, f64);
 
-  /// Get current mouse position in screen coordinates.
-  fn mouse_position() -> crate::types::Point;
+  /// Fetch current mouse position in screen coordinates.
+  fn fetch_mouse_position() -> crate::types::Point;
 
   /// Get the accessibility element handle for a window.
   /// Returns None if the window has no accessibility element.
@@ -75,9 +75,9 @@ pub(crate) trait Platform {
   /// On macOS: sets `AXManualAccessibility` for Chromium/Electron apps.
   fn enable_accessibility_for_pid(pid: u32);
 
-  /// Get the currently focused element within an app.
+  /// Fetch the currently focused element within an app.
   /// On macOS: queries `AXFocusedUIElement` on the app element.
-  fn focused_element(app_handle: &Self::Handle) -> Option<Self::Handle>;
+  fn fetch_focused_element(app_handle: &Self::Handle) -> Option<Self::Handle>;
 
   /// Get the root application element for a process.
   /// Called once when process is registered, stored in ProcessState.
@@ -89,14 +89,15 @@ pub(crate) trait Platform {
 ///
 /// This is the opaque handle that core code holds onto.
 /// Clone is cheap (reference-counted on macOS).
+/// All methods hit the OS (no caching) - that's why they use `fetch_` prefix.
 pub(crate) trait PlatformHandle: Clone + Send + Sync + 'static {
-  /// Get child element handles. Returns empty vec if no children.
-  fn children(&self) -> Vec<Self>;
+  /// Fetch child element handles from OS. Returns empty vec if no children.
+  fn fetch_children(&self) -> Vec<Self>;
 
-  /// Get parent element handle. Returns None for root elements.
-  fn parent(&self) -> Option<Self>;
+  /// Fetch parent element handle from OS. Returns None for root elements.
+  fn fetch_parent(&self) -> Option<Self>;
 
-  /// Get a unique hash for this element (for deduplication).
+  /// Compute a unique hash for this element (for deduplication).
   /// On macOS: uses `CFHash()` on the underlying `AXUIElement`.
   fn element_hash(&self) -> u64;
 
@@ -109,16 +110,15 @@ pub(crate) trait PlatformHandle: Clone + Send + Sync + 'static {
   fn perform_action(&self, action: &str) -> AxioResult<()>;
 
   /// Fetch current attributes from the platform (not cached).
-  fn get_attributes(&self) -> ElementAttributes;
+  fn fetch_attributes(&self) -> ElementAttributes;
 
-  /// Hit test within this element's coordinate space.
+  /// Fetch element at position within this element's coordinate space.
   /// Used for drilling down through nested containers.
-  #[allow(dead_code)] // Used through concrete type (trait bound satisfied)
-  fn element_at_position(&self, x: f64, y: f64) -> Option<Self>;
+  fn fetch_element_at_position(&self, x: f64, y: f64) -> Option<Self>;
 
-  /// Get selected text and optional range (start, end) for text elements.
+  /// Fetch selected text and optional range (start, end) for text elements.
   /// Returns None if element has no selection or isn't a text element.
-  fn get_selection(&self) -> Option<(String, Option<(u32, u32)>)>;
+  fn fetch_selection(&self) -> Option<(String, Option<(u32, u32)>)>;
 }
 
 /// Observer for element notifications.

@@ -1,8 +1,5 @@
 /*!
-Watch/unwatch subscription management.
-
-Elements start with a watch containing only the Destroyed notification.
-watch_element adds more notifications, unwatch_element removes them.
+Watch/unwatch subscription methods for Axio.
 */
 
 use super::Axio;
@@ -11,8 +8,7 @@ use crate::types::{AxioError, AxioResult, ElementId};
 
 impl Axio {
   /// Watch an element for change notifications (value, title, children, etc).
-  /// Adds notifications to the existing watch handle.
-  pub(crate) fn watch_element(&self, element_id: ElementId) -> AxioResult<()> {
+  pub fn watch(&self, element_id: ElementId) -> AxioResult<()> {
     let mut state = self.state.write();
 
     let elem_state = state
@@ -28,15 +24,15 @@ impl Axio {
     // Add notifications to existing watch
     if let Some(watch) = &mut elem_state.watch {
       watch.add(&notifs);
+    } else {
+      log::warn!("Element {element_id} has no watch handle");
     }
-    // If no watch exists (shouldn't happen - created at registration), silently skip
 
     Ok(())
   }
 
   /// Stop watching an element for change notifications.
-  /// Removes watch notifications but keeps Destroyed.
-  pub(crate) fn unwatch_element(&self, element_id: ElementId) -> AxioResult<()> {
+  pub fn unwatch(&self, element_id: ElementId) -> AxioResult<()> {
     let mut state = self.state.write();
 
     let elem_state = state
@@ -54,3 +50,4 @@ impl Axio {
     Ok(())
   }
 }
+

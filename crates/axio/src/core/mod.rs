@@ -1,16 +1,34 @@
 /*!
 Core Axio instance - owns all accessibility state and event broadcasting.
 
-This is the main entry point for the axio library. Create an `Axio` instance
-and use its methods to interact with the accessibility tree.
+# Module Structure
+
+- `mod.rs` - Axio struct, construction, event methods
+- `queries.rs` - get_* (registry lookups) and fetch_* (platform calls)
+- `mutations.rs` - set_*, perform_*, internal state updates
+- `subscriptions.rs` - watch/unwatch
+- `internal.rs` - private state management (registry invariants)
+- `state.rs` - State, ProcessState, ElementState structs
+
+# Naming Convention
+
+- `get_*` = registry/state lookup (fast, no OS calls)
+- `fetch_*` = hits OS/platform (may be slow)
+- `set_*` = value setting
+- `perform_*` = actions
 
 # Example
 
 ```ignore
 let axio = Axio::new()?;
 
-let element = axio.element_at(100.0, 200.0)?;
-let children = axio.children(element.id, 100)?;
+// Registry lookup
+let windows = axio.get_windows();
+let element = axio.get_element(element_id);
+
+// Platform fetch
+let element = axio.fetch_element_at(100.0, 200.0)?;
+let children = axio.fetch_children(element.id, 100)?;
 
 let mut events = axio.subscribe();
 while let Ok(event) = events.recv().await {
@@ -19,22 +37,29 @@ while let Ok(event) = events.recv().await {
 ```
 */
 
-pub(crate) mod element_ops;
+mod internal;
 mod mutations;
 mod queries;
 mod state;
 mod subscriptions;
 
-pub(crate) use state::State;
+pub(crate) use state::{ElementState, State};
 
 use crate::platform;
-use crate::polling::{self, AxioOptions, PollingHandle};
+use crate::polling::{self, PollingHandle};
 use crate::types::{AxioError, AxioResult, Event};
 use async_broadcast::{InactiveReceiver, Sender};
 use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
 
+// Re-export AxioOptions for use via `axio::core::AxioOptions` (also re-exported in lib.rs)
+pub(crate) use crate::polling::AxioOptions;
+
 const EVENT_CHANNEL_CAPACITY: usize = 5000;
+
+// ============================================================================
+// Axio Struct Definition
+// ============================================================================
 
 /// Main axio instance - owns state, event broadcasting, and polling.
 ///
@@ -63,6 +88,10 @@ impl std::fmt::Debug for Axio {
     f.debug_struct("Axio").finish_non_exhaustive()
   }
 }
+
+// ============================================================================
+// Construction & Events
+// ============================================================================
 
 impl Axio {
   /// Create a new Axio instance with default options.

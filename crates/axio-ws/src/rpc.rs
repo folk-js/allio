@@ -88,7 +88,7 @@ pub fn dispatch(axio: &Axio, request: RpcRequest) -> Result<RpcResponse, String>
     }
 
     RpcRequest::ElementAt { x, y } => {
-      let element = axio.element_at(x, y).map_err(|e| e.to_string())?;
+      let element = axio.fetch_element_at(x, y).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Element(Box::new(element)))
     }
 
@@ -100,7 +100,9 @@ pub fn dispatch(axio: &Axio, request: RpcRequest) -> Result<RpcResponse, String>
     }
 
     RpcRequest::WindowRoot { window_id } => {
-      let element = axio.window_root(window_id).map_err(|e| e.to_string())?;
+      let element = axio
+        .fetch_window_root(window_id)
+        .map_err(|e| e.to_string())?;
       Ok(RpcResponse::Element(Box::new(element)))
     }
 
@@ -125,12 +127,14 @@ pub fn dispatch(axio: &Axio, request: RpcRequest) -> Result<RpcResponse, String>
     }
 
     RpcRequest::Write { element_id, value } => {
-      axio.write(element_id, &value).map_err(|e| e.to_string())?;
+      axio
+        .set_value(element_id, &value)
+        .map_err(|e| e.to_string())?;
       Ok(RpcResponse::Null)
     }
 
     RpcRequest::Click { element_id } => {
-      axio.click(element_id).map_err(|e| e.to_string())?;
+      axio.perform_click(element_id).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Null)
     }
 
