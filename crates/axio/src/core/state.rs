@@ -41,7 +41,6 @@ pub(crate) struct ElementState {
   pub(crate) handle: Handle,
   pub(crate) hash: u64,
   pub(crate) parent_hash: Option<u64>,
-  pub(crate) raw_role: String,
   pub(crate) watch: Option<WatchHandle>,
 }
 
@@ -51,14 +50,12 @@ impl ElementState {
     handle: Handle,
     hash: u64,
     parent_hash: Option<u64>,
-    raw_role: String,
   ) -> Self {
     Self {
       element,
       handle,
       hash,
       parent_hash,
-      raw_role,
       watch: None,
     }
   }
@@ -382,13 +379,6 @@ impl State {
     window.info = info.clone();
     self.emit(Event::WindowChanged { window: info });
     true
-  }
-
-  /// Set window handle (may be obtained lazily).
-  pub(crate) fn set_window_handle(&mut self, id: WindowId, handle: Handle) {
-    if let Some(window) = self.windows.get_mut(&id) {
-      window.handle = Some(handle);
-    }
   }
 
   /// Remove a window and cascade to all its elements.

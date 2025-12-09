@@ -14,10 +14,15 @@ use crate::types::{AXWindow, AxioResult, ElementId};
 
 /// Attributes fetched from a platform element.
 /// This is the cross-platform interface for element data.
+///
+/// All platform-specific details (like raw role strings) are converted
+/// by the platform layer before being returned here.
 #[derive(Debug, Default)]
 pub(crate) struct ElementAttributes {
-  pub role: Option<String>,
-  pub subrole: Option<String>,
+  /// Semantic role (mapped from platform-specific role).
+  pub role: crate::accessibility::Role,
+  /// Platform-specific role string for debugging (e.g., "AXButton/AXMenuItem").
+  pub platform_role: String,
   pub title: Option<String>,
   pub value: Option<Value>,
   pub description: Option<String>,
@@ -47,7 +52,7 @@ pub(crate) trait Platform {
 
   /// Check if accessibility permissions are granted.
   /// On macOS: calls `AXIsProcessTrusted()`.
-  fn check_permissions() -> bool;
+  fn has_permissions() -> bool;
 
   /// Fetch all visible windows from the window server.
   /// Returns windows from all apps (filtering is done in core).
@@ -59,9 +64,10 @@ pub(crate) trait Platform {
   /// Fetch current mouse position in screen coordinates.
   fn fetch_mouse_position() -> crate::types::Point;
 
-  /// Get the accessibility element handle for a window.
+  /// Fetch the accessibility element handle for a window from OS.
+  /// This makes platform calls to enumerate window elements and match by bounds.
   /// Returns None if the window has no accessibility element.
-  fn window_handle(window: &AXWindow) -> Option<Self::Handle>;
+  fn fetch_window_handle(window: &AXWindow) -> Option<Self::Handle>;
 
   /// Create a notification observer for a process.
   /// On macOS: creates an `AXObserver` and adds it to the run loop.

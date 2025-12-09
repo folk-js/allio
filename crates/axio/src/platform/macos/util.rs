@@ -14,6 +14,6 @@ pub(super) fn app_element(pid: u32) -> CFRetained<AXUIElement> {
 
 /// Check if accessibility permissions are granted.
 /// Returns true if trusted, false otherwise.
-pub(crate) fn check_accessibility_permissions() -> bool {
+pub(crate) fn has_permissions() -> bool {
   unsafe { AXIsProcessTrusted() }
 }

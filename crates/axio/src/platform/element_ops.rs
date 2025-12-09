@@ -24,31 +24,11 @@ pub(crate) fn build_element_state(
 ) -> ElementState {
   let attrs = handle.fetch_attributes();
 
-  let raw_role = attrs.role.clone().unwrap_or_else(|| {
-    log::debug!("Element missing AXRole attribute, using AXUnknown fallback");
-    "AXUnknown".to_string()
-  });
-
-  let base_role = crate::platform::role_from_raw(&raw_role);
-  let role = refine_role(
-    base_role,
-    &raw_role,
-    attrs.title.as_ref(),
-    attrs.value.as_ref(),
-  );
-
-  // Combine role + subrole for debugging display
-  let platform_role = match &attrs.subrole {
-    Some(sr) => format!("{raw_role}/{sr}"),
-    None => raw_role.clone(),
-  };
-
-  // Determine if this is a root element
+  // Determine if this is a root element (parent is Application)
   let is_root = handle
     .fetch_parent()
-    .and_then(|p| p.fetch_attributes().role)
-    .as_deref()
-    == Some("AXApplication");
+    .map(|p| p.fetch_attributes().role == Role::Application)
+    .unwrap_or(false);
 
   let parent_id_value = if is_root { None } else { parent_id };
 
@@ -66,8 +46,8 @@ pub(crate) fn build_element_state(
     is_root,
     parent_id: parent_id_value,
     children: None,
-    role,
-    platform_role: platform_role.clone(),
+    role: attrs.role,
+    platform_role: attrs.platform_role,
     label: attrs.title,
     description: attrs.description,
     placeholder: attrs.placeholder,
@@ -85,7 +65,7 @@ pub(crate) fn build_element_state(
     actions: attrs.actions,
   };
 
-  ElementState::new(element, handle, hash, parent_hash, raw_role)
+  ElementState::new(element, handle, hash, parent_hash)
 }
 
 /// Build and register an element (convenience wrapper).
@@ -159,24 +139,11 @@ pub(crate) fn fetch_parent(axio: &Axio, element_id: ElementId) -> AxioResult<Opt
 /// Fetch fresh attributes for an element from platform.
 pub(crate) fn fetch_element(axio: &Axio, element_id: ElementId) -> AxioResult<AXElement> {
   // Step 1: Extract handle and metadata (quick read, lock released)
-  let (handle, raw_role, window_id, pid, is_root, parent_id, existing_children) =
+  let (handle, window_id, pid, is_root, parent_id, existing_children) =
     axio.get_element_for_refresh(element_id)?;
 
   // Step 2: Platform call (NO LOCK)
   let attrs = handle.fetch_attributes();
-
-  let base_role = crate::platform::role_from_raw(&raw_role);
-  let role = refine_role(
-    base_role,
-    &raw_role,
-    attrs.title.as_ref(),
-    attrs.value.as_ref(),
-  );
-
-  let platform_role = match &attrs.subrole {
-    Some(sr) => format!("{raw_role}/{sr}"),
-    None => raw_role,
-  };
 
   let updated = AXElement {
     id: element_id,
@@ -185,8 +152,8 @@ pub(crate) fn fetch_element(axio: &Axio, element_id: ElementId) -> AxioResult<AX
     is_root,
     parent_id,
     children: existing_children,
-    role,
-    platform_role,
+    role: attrs.role,
+    platform_role: attrs.platform_role,
     label: attrs.title,
     description: attrs.description,
     placeholder: attrs.placeholder,
@@ -262,7 +229,8 @@ pub(crate) fn fetch_element_at_position(axio: &Axio, x: f64, y: f64) -> AxioResu
     };
 
     let attrs = hit.fetch_attributes();
-    let is_fallback_container = attrs.role.as_deref() == Some("AXGroup")
+    // Chromium/Electron returns a window-sized Group as a placeholder during lazy init
+    let is_fallback_container = matches!(attrs.role, Role::Group | Role::GenericGroup)
       && attrs
         .bounds
         .as_ref()
@@ -351,20 +319,4 @@ pub(crate) fn fetch_focus(
       });
 
   (Some(element), selection)
-}
-
-// === Internal Helpers ===
-
-/// Refine role based on element attributes.
-fn refine_role(
-  role: Role,
-  raw_role: &str,
-  label: Option<&String>,
-  value: Option<&crate::accessibility::Value>,
-) -> Role {
-  if role == Role::Group && raw_role == "AXGroup" && label.is_none() && value.is_none() {
-    Role::GenericGroup
-  } else {
-    role
-  }
 }

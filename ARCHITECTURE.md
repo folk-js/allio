@@ -192,7 +192,7 @@ pub fn fetch_children(&self, parent_id: ElementId, max: usize) -> AxioResult<Vec
 ```rust
 pub fn new() -> AxioResult<Self>;
 pub fn with_options(opts: AxioOptions) -> AxioResult<Self>;
-pub fn verify_permissions() -> bool;
+pub fn has_permissions() -> bool;
 pub fn subscribe(&self) -> Receiver<Event>;
 ```
 

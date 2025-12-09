@@ -6,7 +6,7 @@ Query methods for Axio.
 */
 
 use super::Axio;
-use crate::platform::{self, Handle};
+use crate::platform::{CurrentPlatform, Handle, Platform};
 use crate::types::{
   AXElement, AXWindow, AxioError, AxioResult, ElementId, ProcessId, TextSelection, WindowId,
 };
@@ -115,7 +115,6 @@ impl Axio {
     element_id: ElementId,
   ) -> AxioResult<(
     Handle,
-    String,
     WindowId,
     u32,
     bool,
@@ -128,7 +127,6 @@ impl Axio {
         .ok_or(AxioError::ElementNotFound(element_id))?;
       Ok((
         e.handle.clone(),
-        e.raw_role.clone(),
         e.element.window_id,
         e.pid(),
         e.element.is_root,
@@ -145,13 +143,13 @@ impl Axio {
 
 impl Axio {
   /// Check if accessibility permissions are granted.
-  pub fn verify_permissions() -> bool {
-    platform::check_accessibility_permissions()
+  pub fn has_permissions() -> bool {
+    CurrentPlatform::has_permissions()
   }
 
   /// Fetch screen dimensions (width, height) from OS.
   pub fn fetch_screen_size(&self) -> (f64, f64) {
-    platform::fetch_screen_size()
+    CurrentPlatform::fetch_screen_size()
   }
 
   /// Fetch element at screen coordinates from OS.

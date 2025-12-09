@@ -45,7 +45,7 @@ mod subscriptions;
 
 pub(crate) use state::{ElementState, State};
 
-use crate::platform;
+use crate::platform::{CurrentPlatform, Platform};
 use crate::polling::{self, PollingHandle};
 use crate::types::{AxioError, AxioResult, Event};
 use async_broadcast::{InactiveReceiver, Sender};
@@ -111,7 +111,7 @@ impl Axio {
   /// })?;
   /// ```
   pub fn with_options(options: AxioOptions) -> AxioResult<Self> {
-    if !platform::check_accessibility_permissions() {
+    if !CurrentPlatform::has_permissions() {
       return Err(AxioError::PermissionDenied);
     }
 

@@ -6,7 +6,7 @@ Consumers don't interact with this directly - polling is owned by `Axio`.
 */
 
 use crate::core::Axio;
-use crate::platform;
+use crate::platform::{CurrentPlatform, DisplayLinkHandle, Platform};
 use crate::types::{AXWindow, ProcessId};
 use log::error;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,7 +25,7 @@ enum PollingImpl {
   },
   /// Display-synchronized polling (macOS only)
   #[cfg(target_os = "macos")]
-  DisplayLink(platform::DisplayLinkHandle),
+  DisplayLink(DisplayLinkHandle),
 }
 
 /// Internal handle to control polling lifetime.
@@ -67,7 +67,7 @@ impl Drop for PollingHandle {
 
 /// Poll for current windows. Returns None if `exclude_pid` window isn't found.
 fn poll_windows(options: &AxioOptions) -> Option<Vec<AXWindow>> {
-  let all_windows = platform::fetch_windows();
+  let all_windows = CurrentPlatform::fetch_windows(None);
 
   let (offset_x, offset_y) = if let Some(exclude_pid) = options.exclude_pid {
     match all_windows.iter().find(|w| w.process_id.0 == exclude_pid.0) {
@@ -78,7 +78,7 @@ fn poll_windows(options: &AxioOptions) -> Option<Vec<AXWindow>> {
     (0.0, 0.0)
   };
 
-  let (screen_width, screen_height) = platform::fetch_screen_size();
+  let (screen_width, screen_height) = CurrentPlatform::fetch_screen_size();
 
   let windows: Vec<AXWindow> = all_windows
     .into_iter()
@@ -182,7 +182,7 @@ fn start_thread_polling(axio: Axio, config: AxioOptions) -> PollingHandle {
 /// Display-synchronized polling implementation (macOS only).
 #[cfg(target_os = "macos")]
 fn start_display_synced_polling(axio: Axio, config: AxioOptions) -> PollingHandle {
-  let handle = match platform::start_display_link(move || {
+  let handle = match CurrentPlatform::start_display_link(move || {
     poll_iteration(&axio, &config);
   }) {
     Some(h) => h,
@@ -200,22 +200,15 @@ fn start_display_synced_polling(axio: Axio, config: AxioOptions) -> PollingHandl
 /// Shared polling logic for both thread and display-link implementations.
 fn poll_iteration(axio: &Axio, config: &AxioOptions) {
   // Mouse position polling
-  if let Some(pos) = platform::fetch_mouse_position() {
-    axio.sync_mouse(pos);
-  }
+  let pos = CurrentPlatform::fetch_mouse_position();
+  axio.sync_mouse(pos);
 
-  if let Some(raw_windows) = poll_windows(config) {
-    // Sync windows (handles add/update/remove + events)
-    axio.sync_windows(raw_windows.clone());
-
-    // Enable accessibility for any new processes
-    // Note: sync_windows handles process creation, we just need to enable AX
-    for window in &raw_windows {
-      platform::enable_accessibility_for_pid(window.process_id.0);
-    }
+  if let Some(windows) = poll_windows(config) {
+    // Sync windows (handles add/update/remove + events + process creation)
+    axio.sync_windows(windows.clone());
 
     // Focus tracking
-    let focused_window_id = raw_windows.iter().find(|w| w.focused).map(|w| w.id);
+    let focused_window_id = windows.iter().find(|w| w.focused).map(|w| w.id);
     axio.sync_focused_window(focused_window_id);
   }
 }

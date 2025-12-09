@@ -15,7 +15,7 @@ use ts_rs::TS;
 /// These roles are inspired by WAI-ARIA but simplified for our use case.
 /// Platform mappings (macOS `AXRole` strings, Windows UIA `ControlTypes`) are
 /// handled by the platform layer. See `platform::map_role_from_platform`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, Default)]
 #[serde(rename_all = "lowercase")]
 #[ts(export)]
 pub enum Role {
@@ -76,6 +76,7 @@ pub enum Role {
 
   /// Unknown role - platform role didn't map to anything known.
   /// This indicates a gap in our mappings that should be addressed.
+  #[default]
   Unknown,
 }
 

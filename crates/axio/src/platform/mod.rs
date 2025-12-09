@@ -6,27 +6,14 @@ Core code should only import from this module - never from platform-specific sub
 
 # Architecture
 
-```text
-┌─────────────────────────────────────────────────────────────┐
-│                    Core (uses traits)                        │
-│  - Only sees: Handle, Observer, Platform functions           │
-│  - Never sees: CFType, AXUIElement, etc.                     │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-┌──────────────────────────▼──────────────────────────────────┐
-│              platform/mod.rs (THE BOUNDARY)                  │
-│  - Trait definitions                                         │
-│  - Type aliases for current platform                         │
-│  - Re-exported platform functions                            │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-┌──────────────────────────▼──────────────────────────────────┐
-│              platform/macos/ (implementation)                │
-│  - impl Platform for MacOS                                   │
-│  - impl PlatformHandle for ElementHandle                     │
-│  - All macOS-specific code                                   │
-└─────────────────────────────────────────────────────────────┘
-```
+- `Platform` trait: static methods for OS-level operations
+- `PlatformHandle` trait: per-element operations
+- `PlatformObserver` trait: notification subscriptions
+- `CurrentPlatform` type alias: the platform for the current OS
+- `Handle`/`Observer` type aliases: opaque handles for core code
+
+Core code uses `CurrentPlatform::method()` for platform operations.
+All platform-specific details (CFType, AXUIElement, etc.) stay hidden.
 
 # Adding a New Platform
 
@@ -35,8 +22,8 @@ Core code should only import from this module - never from platform-specific sub
 3. Add conditional compilation in this file
 */
 
-mod traits;
 pub(crate) mod element_ops;
+mod traits;
 
 pub(crate) use traits::{
   DisplayLinkHandle, ElementAttributes, Platform, PlatformHandle, PlatformObserver, WatchHandle,
@@ -68,58 +55,3 @@ pub(crate) type Handle = <CurrentPlatform as Platform>::Handle;
 
 /// Opaque handle to a notification observer.
 pub(crate) type Observer = <CurrentPlatform as Platform>::Observer;
-
-// === Convenience Functions ===
-// These delegate to CurrentPlatform methods for ergonomic use.
-// Naming convention: get_ = registry, fetch_ = OS call, set_ = value, perform_ = action
-
-use crate::core::Axio;
-use crate::types::{AXWindow, AxioResult, Point};
-
-/// Check if accessibility permissions are granted.
-pub(crate) fn check_accessibility_permissions() -> bool {
-  CurrentPlatform::check_permissions()
-}
-
-/// Create an observer for a process.
-pub(crate) fn create_observer(pid: u32, axio: Axio) -> AxioResult<Observer> {
-  CurrentPlatform::create_observer(pid, axio)
-}
-
-/// Get the root element handle for a window (from window info, not OS call).
-pub(crate) fn get_window_handle(window: &AXWindow) -> Option<Handle> {
-  CurrentPlatform::window_handle(window)
-}
-
-/// Start a display-linked callback.
-pub(crate) fn start_display_link<F: Fn() + Send + Sync + 'static>(
-  callback: F,
-) -> Option<DisplayLinkHandle> {
-  CurrentPlatform::start_display_link(callback)
-}
-
-/// Fetch all visible windows from OS.
-pub(crate) fn fetch_windows() -> Vec<AXWindow> {
-  CurrentPlatform::fetch_windows(None)
-}
-
-/// Fetch main screen dimensions (width, height) from OS.
-pub(crate) fn fetch_screen_size() -> (f64, f64) {
-  CurrentPlatform::fetch_screen_size()
-}
-
-/// Fetch current mouse position from OS.
-pub(crate) fn fetch_mouse_position() -> Option<Point> {
-  Some(CurrentPlatform::fetch_mouse_position())
-}
-
-/// Enable accessibility for a process (mostly for Chromium/Electron apps).
-pub(crate) fn enable_accessibility_for_pid(pid: u32) {
-  CurrentPlatform::enable_accessibility_for_pid(pid);
-}
-
-/// Convert raw platform role string to our Role enum.
-#[cfg(target_os = "macos")]
-pub(crate) fn role_from_raw(raw: &str) -> crate::accessibility::Role {
-  macos::mapping::role_from_macos(raw)
-}

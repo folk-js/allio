@@ -12,8 +12,8 @@ The rest of the crate can interact with elements using safe methods.
   clippy::ref_as_ptr
 )]
 
-use super::mapping::action_from_macos;
-use crate::accessibility::Value;
+use super::mapping::{action_from_macos, role_from_macos};
+use crate::accessibility::{Role, Value};
 use crate::platform::ElementAttributes;
 use crate::types::Bounds;
 use objc2_application_services::{
@@ -294,9 +294,26 @@ impl ElementHandle {
     // Convert enabled to disabled (inverted)
     let disabled = enabled_bool.is_some_and(|e| !e);
 
+    // Map raw role string to semantic Role enum
+    let raw_role = role_str.as_deref().unwrap_or("AXUnknown");
+    let mut role = role_from_macos(raw_role);
+
+    // Refine role: plain AXGroup with no label/value → GenericGroup (for pruning)
+    // Note: AXSplitGroup and AXRadioGroup stay as Group (they're semantic)
+    if role == Role::Group && raw_role == "AXGroup" && title_str.is_none() && value_parsed.is_none()
+    {
+      role = Role::GenericGroup;
+    }
+
+    // Build platform_role string for debugging (e.g., "AXButton/AXMenuItem")
+    let platform_role = match &subrole_str {
+      Some(sr) => format!("{raw_role}/{sr}"),
+      None => raw_role.to_string(),
+    };
+
     ElementAttributes {
-      role: role_str,
-      subrole: subrole_str,
+      role,
+      platform_role,
       title: title_str,
       value: value_parsed,
       description: desc_str,

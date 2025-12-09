@@ -24,7 +24,7 @@ important TODOs:
   }
 
   - should be consistent with names at different layers of the stack. e.g. verify_permissions calls platform::check_accessibility_permissions() should maybe be the same... could rename both to check_permissions or even `has_permissions()` or something better.
-  - `get_window_handle` is LYING! i wonder what other lies there are...
+  - `get_window_handle` in platform/mod.rs is LYING! i wonder what other lies there are... I also wonder if platform/mod should have all of its methods removed? Aside from role_from_raw (which leaks macOS!) they are all just wrappers and can/should be removed. window_handle in our platform trait should be renamed to fetch_window_handle so we dont make the mistake.
   - is `for window in &raw_windows {
   platform::enable_accessibility_for_pid(window.process_id.0);
 }` re-firing that on every poll?

@@ -10,7 +10,7 @@ Mutation methods for Axio.
 use super::state::ProcessState;
 use super::Axio;
 use crate::accessibility::Notification;
-use crate::platform::{self, CurrentPlatform, Platform, PlatformHandle, PlatformObserver};
+use crate::platform::{CurrentPlatform, Platform, PlatformHandle, PlatformObserver};
 use crate::types::{AXElement, AXWindow, AxioError, AxioResult, ElementId, ProcessId, WindowId};
 use std::collections::HashSet;
 
@@ -20,16 +20,24 @@ use std::collections::HashSet;
 
 impl Axio {
   /// Set a typed value on an element.
-  pub fn set_value(&self, element_id: ElementId, value: &crate::accessibility::Value) -> AxioResult<()> {
+  pub fn set_value(
+    &self,
+    element_id: ElementId,
+    value: &crate::accessibility::Value,
+  ) -> AxioResult<()> {
     // Step 1: Extract what we need (quick read)
     let (handle, role) = self.read(|s| {
-      let e = s.get_element_state(element_id).ok_or(AxioError::ElementNotFound(element_id))?;
+      let e = s
+        .get_element_state(element_id)
+        .ok_or(AxioError::ElementNotFound(element_id))?;
       Ok((e.handle.clone(), e.element.role))
     })?;
 
     // Step 2: Validate (no lock)
     if !role.is_writable() {
-      return Err(AxioError::NotSupported(format!("Element with role '{role:?}' is not writable")));
+      return Err(AxioError::NotSupported(format!(
+        "Element with role '{role:?}' is not writable"
+      )));
     }
 
     // Step 3: Platform call (NO LOCK)
@@ -40,7 +48,9 @@ impl Axio {
   pub fn perform_click(&self, element_id: ElementId) -> AxioResult<()> {
     // Step 1: Extract handle (quick read)
     let handle = self.read(|s| {
-      let e = s.get_element_state(element_id).ok_or(AxioError::ElementNotFound(element_id))?;
+      let e = s
+        .get_element_state(element_id)
+        .ok_or(AxioError::ElementNotFound(element_id))?;
       Ok(e.handle.clone())
     })?;
 
@@ -58,19 +68,29 @@ impl Axio {
   pub(crate) fn sync_windows(&self, new_windows: Vec<AXWindow>) {
     let new_ids: HashSet<WindowId> = new_windows.iter().map(|w| w.id).collect();
 
-    // Step 1: Platform calls OUTSIDE lock
+    // Step 1: Get existing window IDs to determine which are new (quick read)
+    let existing_ids: HashSet<WindowId> = self.read(|s| s.get_all_window_ids().collect());
+
+    // Step 2: Platform calls OUTSIDE lock - only fetch handles for NEW windows
     let windows_with_handles: Vec<_> = new_windows
       .into_iter()
       .map(|w| {
-        let handle = platform::get_window_handle(&w);
+        let handle = if existing_ids.contains(&w.id) {
+          None // Skip fetch for existing windows (handle already cached)
+        } else {
+          CurrentPlatform::fetch_window_handle(&w)
+        };
         (w, handle)
       })
       .collect();
 
-    // Step 2: Single write for all state mutations
+    // Step 3: Single write for all state mutations
     let new_process_pids = self.write(|s| {
       // Remove windows no longer present
-      let to_remove: Vec<WindowId> = s.get_all_window_ids().filter(|id| !new_ids.contains(id)).collect();
+      let to_remove: Vec<WindowId> = s
+        .get_all_window_ids()
+        .filter(|id| !new_ids.contains(id))
+        .collect();
       for window_id in to_remove {
         s.remove_window(window_id);
       }
@@ -81,20 +101,19 @@ impl Axio {
         let window_id = window_info.id;
         let process_id = window_info.process_id;
 
-        let inserted = s.get_or_insert_window(window_id, process_id, window_info.clone(), handle.clone());
+        let inserted =
+          s.get_or_insert_window(window_id, process_id, window_info.clone(), handle.clone());
         if inserted {
           new_pids.push(process_id);
         } else {
           s.update_window(window_id, window_info);
-          if let Some(h) = handle {
-            s.set_window_handle(window_id, h);
-          }
+          // Don't overwrite existing handle - it was fetched on insertion
         }
       }
       new_pids
     });
 
-    // Step 3: Process creation OUTSIDE lock (has platform calls)
+    // Step 4: Process creation OUTSIDE lock (has platform calls)
     for process_id in new_process_pids {
       if let Err(e) = self.get_or_create_process(process_id.0) {
         log::warn!("Failed to create process for window: {e:?}");
@@ -126,7 +145,8 @@ impl Axio {
   /// Handle focus changed notification.
   pub(crate) fn on_focus_changed(&self, pid: u32, element: AXElement) {
     // Step 1: Update focus (quick write)
-    let (changed, previous_id) = self.write(|s| s.set_focused_element(ProcessId(pid), element.clone()));
+    let (changed, previous_id) =
+      self.write(|s| s.set_focused_element(ProcessId(pid), element.clone()));
 
     if !changed {
       return;
@@ -187,7 +207,12 @@ impl Axio {
     }
 
     // Slow path: platform calls OUTSIDE lock
-    let observer = platform::create_observer(pid, self.clone())?;
+
+    // Enable accessibility for this process (needed for Chromium/Electron apps).
+    // This is idempotent and only called once per process (on first registration).
+    CurrentPlatform::enable_accessibility_for_pid(pid);
+
+    let observer = CurrentPlatform::create_observer(pid, self.clone())?;
     let app_handle = CurrentPlatform::app_element(pid);
 
     if let Err(e) = observer.subscribe_app_notifications(pid, self.clone()) {
@@ -226,7 +251,11 @@ impl Axio {
     let element_id = self.write(|s| s.get_or_insert_element(elem_state));
 
     // Step 2: Check if watch needed (quick read)
-    let needs_watch = self.read(|s| s.get_element_state(element_id).map(|e| e.watch.is_none()).unwrap_or(false));
+    let needs_watch = self.read(|s| {
+      s.get_element_state(element_id)
+        .map(|e| e.watch.is_none())
+        .unwrap_or(false)
+    });
 
     // Step 3: Setup watch (has platform calls)
     if needs_watch {
@@ -238,7 +267,12 @@ impl Axio {
   }
 
   /// Set up destruction watch for an element.
-  fn setup_destruction_watch(&self, element_id: ElementId, pid: ProcessId, handle: &crate::platform::Handle) {
+  fn setup_destruction_watch(
+    &self,
+    element_id: ElementId,
+    pid: ProcessId,
+    handle: &crate::platform::Handle,
+  ) {
     // Step 1: Get observer (quick read)
     let observer = self.read(|s| s.get_process(pid).map(|p| p.observer.clone()));
 
@@ -268,7 +302,11 @@ impl Axio {
   }
 
   /// Set children for an element (used by fetch_children).
-  pub(crate) fn set_element_children(&self, element_id: ElementId, children: Vec<ElementId>) -> AxioResult<()> {
+  pub(crate) fn set_element_children(
+    &self,
+    element_id: ElementId,
+    children: Vec<ElementId>,
+  ) -> AxioResult<()> {
     self.write(|s| s.set_element_children(element_id, children));
     Ok(())
   }

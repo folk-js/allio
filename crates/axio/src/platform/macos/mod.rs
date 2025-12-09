@@ -39,8 +39,8 @@ impl Platform for MacOS {
   type Handle = ElementHandle;
   type Observer = ObserverHandle;
 
-  fn check_permissions() -> bool {
-    util::check_accessibility_permissions()
+  fn has_permissions() -> bool {
+    util::has_permissions()
   }
 
   fn fetch_windows(_exclude_pid: Option<u32>) -> Vec<crate::types::AXWindow> {
@@ -56,7 +56,7 @@ impl Platform for MacOS {
     mouse::get_mouse_position().unwrap_or_else(|| Point::new(0.0, 0.0))
   }
 
-  fn window_handle(window: &crate::types::AXWindow) -> Option<Self::Handle> {
+  fn fetch_window_handle(window: &crate::types::AXWindow) -> Option<Self::Handle> {
     window::fetch_window_handle(window)
   }
 
