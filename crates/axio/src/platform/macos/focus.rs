@@ -42,7 +42,7 @@ pub(super) fn handle_app_focus_changed(axio: &Axio, pid: u32, element: CFRetaine
     return;
   }
 
-  axio.update_focus(pid, ax_element);
+  axio.on_focus_changed(pid, ax_element);
 }
 
 /// Handle selection change notification from the unified callback.
@@ -73,7 +73,7 @@ pub(super) fn handle_app_selection_changed(
     get_selected_text_range(&handle)
   };
 
-  axio.update_selection(pid, window_id, ax_element.id, selected_text, range);
+  axio.on_selection_changed(pid, window_id, ax_element.id, selected_text, range);
 }
 
 /// Get window ID for an `ElementHandle` using hash-based lookup.

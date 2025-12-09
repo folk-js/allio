@@ -28,6 +28,11 @@ important TODOs:
 
   - should be consistent with names at different layers of the stack. e.g. verify_permissions calls platform::check_accessibility_permissions() should maybe be the same... could rename both to check_permissions or even `has_permissions()` or something better.
   - `get_window_handle` is LYING! i wonder what other lies there are...
+  - is `for window in &raw_windows {
+  platform::enable_accessibility_for_pid(window.process_id.0);
+}` re-firing that on every poll?
+
+- is `self.state.write().set_focused_window(window_id);` sneaking past the state separation? if its just a naming thing, should this be `update` or is `set` correct?
 
 TODOs:
 

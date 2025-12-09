@@ -9,7 +9,7 @@ use super::state::ElementState;
 use super::Axio;
 use crate::platform::{self, Handle};
 use crate::types::{
-  AXElement, AXWindow, AxioError, AxioResult, ElementId, TextSelection, WindowId,
+  AXElement, AXWindow, AxioError, AxioResult, ElementId, ProcessId, TextSelection, WindowId,
 };
 
 // ============================================================================
@@ -19,53 +19,35 @@ use crate::types::{
 impl Axio {
   /// Get all windows from registry.
   pub fn get_windows(&self) -> Vec<AXWindow> {
-    self
-      .state
-      .read()
-      .windows
-      .values()
-      .map(|w| w.info.clone())
-      .collect()
+    self.state.read().get_all_windows().cloned().collect()
   }
 
   /// Get a specific window from registry.
   pub fn get_window(&self, window_id: WindowId) -> Option<AXWindow> {
-    self
-      .state
-      .read()
-      .windows
-      .get(&window_id)
-      .map(|w| w.info.clone())
+    self.state.read().get_window(window_id).cloned()
   }
 
   /// Get the focused window ID from registry.
   pub fn get_focused_window(&self) -> Option<WindowId> {
-    self.state.read().focused_window
+    self.state.read().get_focused_window()
   }
 
   /// Get window depth order (front to back) from registry.
   pub fn get_depth_order(&self) -> Vec<WindowId> {
-    self.state.read().depth_order.clone()
+    self.state.read().get_depth_order().to_vec()
   }
 
   /// Get element by ID from registry.
   pub fn get_element(&self, element_id: ElementId) -> Option<AXElement> {
-    self
-      .state
-      .read()
-      .elements
-      .get(&element_id)
-      .map(|e| e.element.clone())
+    self.state.read().get_element(element_id).cloned()
   }
 
   /// Get element by hash from registry (for checking if element is already registered).
   pub(crate) fn get_element_by_hash(&self, hash: u64) -> Option<AXElement> {
     let state = self.state.read();
     state
-      .hash_to_element
-      .get(&hash)
-      .and_then(|id| state.elements.get(id))
-      .map(|e| e.element.clone())
+      .find_element_by_hash(hash)
+      .and_then(|id| state.get_element(id).cloned())
   }
 
   /// Get multiple elements by ID from registry.
@@ -73,110 +55,51 @@ impl Axio {
     let state = self.state.read();
     element_ids
       .iter()
-      .filter_map(|id| state.elements.get(id).map(|e| e.element.clone()))
+      .filter_map(|id| state.get_element(*id).cloned())
       .collect()
   }
 
   /// Get all elements from registry.
   pub fn get_all_elements(&self) -> Vec<AXElement> {
-    self
-      .state
-      .read()
-      .elements
-      .values()
-      .map(|e| e.element.clone())
-      .collect()
+    self.state.read().get_all_elements().cloned().collect()
   }
 
   /// Get a snapshot of the current state for sync.
-  pub fn snapshot(&self) -> crate::types::Snapshot {
-    let state = self.state.read();
-    let (focused_element, selection) = state
-      .focused_window
-      .and_then(|window_id| {
-        let window = state.windows.get(&window_id)?;
-        let process = state.processes.get(&window.process_id)?;
-
-        let focused_elem = process
-          .focused_element
-          .and_then(|id| state.elements.get(&id).map(|s| s.element.clone()));
-
-        Some((focused_elem, process.last_selection.clone()))
-      })
-      .unwrap_or((None, None));
-
-    crate::types::Snapshot {
-      windows: state.windows.values().map(|w| w.info.clone()).collect(),
-      elements: state.elements.values().map(|s| s.element.clone()).collect(),
-      focused_window: state.focused_window,
-      focused_element,
-      selection,
-      depth_order: state.depth_order.clone(),
-      mouse_position: state.mouse_position,
-    }
+  pub fn get_snapshot(&self) -> crate::types::Snapshot {
+    self.state.read().snapshot()
   }
 
   /// Get window at a point from registry.
   pub(crate) fn get_window_at_point(&self, x: f64, y: f64) -> Option<AXWindow> {
-    let state = self.state.read();
-    let point = crate::Point::new(x, y);
-    let mut candidates: Vec<_> = state
-      .windows
-      .values()
-      .filter(|w| w.info.bounds.contains(point))
-      .collect();
-    candidates.sort_by_key(|w| w.info.z_index);
-    candidates.first().map(|w| w.info.clone())
+    self.state.read().get_window_at_point(x, y).cloned()
   }
 
   /// Get window info with handle from registry.
-  pub(crate) fn get_window_with_handle(
-    &self,
-    window_id: WindowId,
-  ) -> Option<(AXWindow, Option<Handle>)> {
-    self
-      .state
-      .read()
-      .windows
-      .get(&window_id)
-      .map(|w| (w.info.clone(), w.handle.clone()))
+  pub(crate) fn get_window_with_handle(&self, window_id: WindowId) -> Option<(AXWindow, Option<Handle>)> {
+    let state = self.state.read();
+    let window = state.get_window(window_id)?;
+    let handle = state.get_window_handle(window_id).cloned();
+    Some((window.clone(), handle))
   }
 
   /// Get the focused window for a specific PID from registry.
   pub(crate) fn get_focused_window_for_pid(&self, pid: u32) -> Option<WindowId> {
-    let state = self.state.read();
-    let window_id = state.focused_window?;
-    let window_state = state.windows.get(&window_id)?;
-    if window_state.process_id.0 == pid {
-      Some(window_id)
-    } else {
-      None
-    }
+    self.state.read().get_focused_window_for_pid(pid)
   }
 
   /// Get the app element handle for a process from registry.
-  /// Returns None if the process hasn't been registered yet.
   pub(crate) fn get_app_handle(&self, pid: u32) -> Option<Handle> {
-    self
-      .state
-      .read()
-      .processes
-      .get(&crate::types::ProcessId(pid))
-      .map(|p| p.app_handle.clone())
+    self.state.read().get_process(ProcessId(pid)).map(|p| p.app_handle.clone())
   }
 
   /// Access element state via closure.
-  ///
-  /// Use this to extract what you need from element state without
-  /// copying everything into a separate struct.
   pub(crate) fn with_element<F, R>(&self, element_id: ElementId, f: F) -> AxioResult<R>
   where
     F: FnOnce(&ElementState) -> R,
   {
     let state = self.state.read();
     let elem_state = state
-      .elements
-      .get(&element_id)
+      .get_element_state(element_id)
       .ok_or(AxioError::ElementNotFound(element_id))?;
     Ok(f(elem_state))
   }
@@ -203,11 +126,7 @@ impl Axio {
   }
 
   /// Fetch and register children of element from OS.
-  pub fn fetch_children(
-    &self,
-    element_id: ElementId,
-    max_children: usize,
-  ) -> AxioResult<Vec<AXElement>> {
+  pub fn fetch_children(&self, element_id: ElementId, max_children: usize) -> AxioResult<Vec<AXElement>> {
     crate::platform::element_ops::fetch_children(self, element_id, max_children)
   }
 
@@ -227,14 +146,10 @@ impl Axio {
   }
 
   /// Fetch currently focused element and text selection for a window from OS.
-  pub fn fetch_window_focus(
-    &self,
-    window_id: WindowId,
-  ) -> AxioResult<(Option<AXElement>, Option<TextSelection>)> {
+  pub fn fetch_window_focus(&self, window_id: WindowId) -> AxioResult<(Option<AXElement>, Option<TextSelection>)> {
     let window = self
       .get_window(window_id)
       .ok_or(AxioError::WindowNotFound(window_id))?;
     Ok(crate::platform::element_ops::fetch_focus(self, window.process_id.0))
   }
 }
-

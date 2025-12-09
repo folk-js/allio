@@ -199,21 +199,23 @@ fn start_display_synced_polling(axio: Axio, config: AxioOptions) -> PollingHandl
 
 /// Shared polling logic for both thread and display-link implementations.
 fn poll_iteration(axio: &Axio, config: &AxioOptions) {
-  // Mouse position polling - axio handles dedup and event emission
+  // Mouse position polling
   if let Some(pos) = platform::fetch_mouse_position() {
-    axio.update_mouse_position(pos);
+    axio.sync_mouse(pos);
   }
 
   if let Some(raw_windows) = poll_windows(config) {
-    let added_pids = axio.update_windows(raw_windows.clone());
+    // Sync windows (handles add/update/remove + events)
+    axio.sync_windows(raw_windows.clone());
 
-    // Enable accessibility for new windows
-    for pid in added_pids {
-      platform::enable_accessibility_for_pid(pid.0);
+    // Enable accessibility for any new processes
+    // Note: sync_windows handles process creation, we just need to enable AX
+    for window in &raw_windows {
+      platform::enable_accessibility_for_pid(window.process_id.0);
     }
 
-    // Focus tracking - axio emits FocusWindow if value changed
+    // Focus tracking
     let focused_window_id = raw_windows.iter().find(|w| w.focused).map(|w| w.id);
-    axio.set_focused_window(focused_window_id);
+    axio.sync_focused_window(focused_window_id);
   }
 }

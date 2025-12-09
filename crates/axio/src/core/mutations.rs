@@ -1,17 +1,17 @@
 /*!
 Mutation methods for Axio.
 
-- `set_*` = value setting
-- `perform_*` = actions
-- `pub(crate)` methods = internal state updates from polling/notifications
+- `set_*` = write value to OS
+- `perform_*` = execute action on OS
+- `sync_*` = bulk updates from polling
+- `on_*` = notification handlers
 */
 
-use super::state::{ElementState, ProcessState, WindowState};
+use super::state::ProcessState;
 use super::Axio;
+use crate::accessibility::Notification;
 use crate::platform::{self, CurrentPlatform, Platform, PlatformHandle, PlatformObserver};
-use crate::types::{
-  AXElement, AXWindow, AxioError, AxioResult, ElementId, Event, ProcessId, TextSelection, WindowId,
-};
+use crate::types::{AXElement, AXWindow, AxioError, AxioResult, ElementId, ProcessId, WindowId};
 use std::collections::HashSet;
 
 // ============================================================================
@@ -25,35 +25,191 @@ impl Axio {
     element_id: ElementId,
     value: &crate::accessibility::Value,
   ) -> AxioResult<()> {
-    // Validation happens HERE in core, not in platform code
-    let role = self.with_element(element_id, |e| e.element.role)?;
+    // Extract what we need, then release lock BEFORE platform call
+    let (handle, role) = {
+      let state = self.state.read();
+      let elem = state
+        .get_element_state(element_id)
+        .ok_or(AxioError::ElementNotFound(element_id))?;
+      (elem.handle.clone(), elem.element.role)
+    };
+
+    // Validation in core, not platform
     if !role.is_writable() {
       return Err(AxioError::NotSupported(format!(
         "Element with role '{role:?}' is not writable"
       )));
     }
 
-    self.with_element(element_id, |e| e.handle.set_value(value))?
+    // Platform call with NO lock held
+    handle.set_value(value)
   }
 
   /// Perform click action on an element.
   pub fn perform_click(&self, element_id: ElementId) -> AxioResult<()> {
-    self.with_element(element_id, |e| e.handle.perform_action("AXPress"))?
+    // Extract handle, then release lock BEFORE platform call
+    let handle = {
+      let state = self.state.read();
+      let elem = state
+        .get_element_state(element_id)
+        .ok_or(AxioError::ElementNotFound(element_id))?;
+      elem.handle.clone()
+    };
+
+    // Platform call with NO lock held
+    handle.perform_action("AXPress")
   }
 }
 
 // ============================================================================
-// Internal Mutations (pub(crate))
+// Sync Operations (from polling)
+// ============================================================================
+
+impl Axio {
+  /// Sync windows from polling. Handles add/update/remove.
+  pub(crate) fn sync_windows(&self, new_windows: Vec<AXWindow>) {
+    let new_ids: HashSet<WindowId> = new_windows.iter().map(|w| w.id).collect();
+
+    // Prepare window handles OUTSIDE the lock (platform calls)
+    let windows_with_handles: Vec<_> = new_windows
+      .into_iter()
+      .map(|w| {
+        let handle = platform::get_window_handle(&w);
+        (w, handle)
+      })
+      .collect();
+
+    // Single write lock for all state mutations
+    let new_process_pids = {
+      let mut state = self.state.write();
+
+      // Remove windows no longer present
+      let to_remove: Vec<WindowId> = state
+        .get_all_window_ids()
+        .filter(|id| !new_ids.contains(id))
+        .collect();
+
+      for window_id in to_remove {
+        state.remove_window(window_id);
+      }
+
+      // Process new/existing windows
+      let mut new_pids = Vec::new();
+
+      for (window_info, handle) in windows_with_handles {
+        let window_id = window_info.id;
+        let process_id = window_info.process_id;
+
+        let inserted =
+          state.get_or_insert_window(window_id, process_id, window_info.clone(), handle.clone());
+
+        if inserted {
+          new_pids.push(process_id);
+        } else {
+          // Update existing window
+          state.update_window(window_id, window_info);
+
+          // Set handle if we have one
+          if let Some(h) = handle {
+            state.set_window_handle(window_id, h);
+          }
+        }
+      }
+
+      new_pids
+    }; // Lock released here
+
+    // Process creation happens OUTSIDE the main lock
+    for process_id in new_process_pids {
+      if let Err(e) = self.get_or_create_process(process_id.0) {
+        log::warn!("Failed to create process for window: {e:?}");
+      }
+    }
+  }
+
+  /// Sync focused window from polling.
+  pub(crate) fn sync_focused_window(&self, window_id: Option<WindowId>) {
+    self.state.write().set_focused_window(window_id);
+  }
+
+  /// Sync mouse position from polling.
+  pub(crate) fn sync_mouse(&self, pos: crate::types::Point) {
+    self.state.write().set_mouse_position(pos);
+  }
+}
+
+// ============================================================================
+// Notification Handlers (on_*)
+// ============================================================================
+
+impl Axio {
+  /// Handle element destroyed notification.
+  pub(crate) fn on_element_destroyed(&self, element_id: ElementId) {
+    self.state.write().remove_element(element_id);
+  }
+
+  /// Handle focus changed notification.
+  pub(crate) fn on_focus_changed(&self, pid: u32, element: AXElement) {
+    let (changed, previous_id) = self
+      .state
+      .write()
+      .set_focused_element(ProcessId(pid), element.clone());
+
+    if !changed {
+      return;
+    }
+
+    // Auto-unwatch previous element
+    if let Some(prev_id) = previous_id {
+      if let Some(prev_elem) = self.state.read().get_element(prev_id).cloned() {
+        if prev_elem.role.auto_watch_on_focus() || prev_elem.role.is_writable() {
+          drop(self.unwatch(prev_id));
+        }
+      }
+    }
+
+    // Auto-watch new element
+    if element.role.auto_watch_on_focus() || element.role.is_writable() {
+      drop(self.watch(element.id));
+    }
+  }
+
+  /// Handle selection changed notification.
+  pub(crate) fn on_selection_changed(
+    &self,
+    pid: u32,
+    window_id: WindowId,
+    element_id: ElementId,
+    text: String,
+    range: Option<(u32, u32)>,
+  ) {
+    self
+      .state
+      .write()
+      .set_selection(ProcessId(pid), window_id, element_id, text, range);
+  }
+
+  /// Handle element changed notification (value, children, etc).
+  #[allow(dead_code)] // Called from observer, may be used by other notification handlers
+  pub(crate) fn on_element_changed(&self, element_id: ElementId, _notification: Notification) {
+    // Refresh the element from platform
+    if let Err(e) = crate::platform::element_ops::fetch_element(self, element_id) {
+      log::debug!("Failed to refresh element {element_id} on change: {e:?}");
+    }
+  }
+}
+
+// ============================================================================
+// Process Management
 // ============================================================================
 
 impl Axio {
   /// Get or create process state for a PID.
-  /// Creates the `AXObserver` and app handle if this is a new process.
   pub(crate) fn get_or_create_process(&self, pid: u32) -> AxioResult<ProcessId> {
     let process_id = ProcessId(pid);
 
-    // Fast path: check if already exists
-    if self.state.read().processes.contains_key(&process_id) {
+    // Fast path: already exists
+    if self.state.read().has_process(process_id) {
       return Ok(process_id);
     }
 
@@ -61,12 +217,12 @@ impl Axio {
     let observer = platform::create_observer(pid, self.clone())?;
     let app_handle = CurrentPlatform::app_element(pid);
 
-    // Subscribe to app-level notifications (focus, selection)
+    // Subscribe to app-level notifications
     if let Err(e) = observer.subscribe_app_notifications(pid, self.clone()) {
       log::warn!("Failed to subscribe app notifications for PID {pid}: {e:?}");
     }
 
-    self.state.write().processes.insert(
+    self.state.write().insert_process(
       process_id,
       ProcessState {
         observer,
@@ -78,284 +234,88 @@ impl Axio {
 
     Ok(process_id)
   }
+}
 
-  /// Update windows from polling. Returns PIDs of newly added windows.
-  pub(crate) fn update_windows(&self, new_windows: Vec<AXWindow>) -> Vec<ProcessId> {
-    let mut events = Vec::new();
-    let mut added_window_ids = Vec::new();
-    let mut new_process_ids = Vec::new();
-    let mut changed_window_ids = Vec::new();
+// ============================================================================
+// Element Registration (used by element_ops)
+// ============================================================================
 
-    let new_ids: HashSet<WindowId> = new_windows.iter().map(|w| w.id).collect();
+impl Axio {
+  /// Register an element (get or insert by hash).
+  ///
+  /// Returns the element (existing if hash matched, new if inserted).
+  /// Sets up destruction watch after insertion.
+  pub(crate) fn register_element(&self, elem_state: super::ElementState) -> Option<AXElement> {
+    let pid = elem_state.element.pid;
+    let handle = elem_state.handle.clone();
 
-    {
-      let mut state = self.state.write();
+    // Get or insert (handles deduplication by hash internally)
+    let element_id = self.state.write().get_or_insert_element(elem_state);
 
-      // Find removed windows
-      let removed: Vec<WindowId> = state
-        .windows
-        .keys()
-        .filter(|id| !new_ids.contains(id))
-        .copied()
-        .collect();
+    // If this was a new element (not existing), set up destruction watch
+    // Check if watch is already set
+    let needs_watch = self
+      .state
+      .read()
+      .get_element_state(element_id)
+      .map(|e| e.watch.is_none())
+      .unwrap_or(false);
 
-      for window_id in removed {
-        events.extend(Self::remove_window_internal(&mut state, window_id));
-      }
-
-      // Process new/existing windows
-      for window_info in new_windows {
-        let window_id = window_info.id;
-        let process_id = window_info.process_id;
-
-        if let Some(existing) = state.windows.get_mut(&window_id) {
-          if existing.info != window_info {
-            changed_window_ids.push(window_id);
-          }
-          existing.info = window_info;
-
-          if existing.handle.is_none() {
-            existing.handle = platform::get_window_handle(&existing.info);
-          }
-        } else {
-          // New window
-          let handle = platform::get_window_handle(&window_info);
-
-          state.windows.insert(
-            window_id,
-            WindowState {
-              process_id,
-              info: window_info.clone(),
-              handle,
-            },
-          );
-          added_window_ids.push(window_id);
-          new_process_ids.push(process_id);
-        }
-      }
-
-      // Update depth order
-      let mut windows: Vec<_> = state.windows.values().map(|w| &w.info).collect();
-      windows.sort_by_key(|w| w.z_index);
-      state.depth_order = windows.into_iter().map(|w| w.id).collect();
-
-      // Generate events for added windows
-      for window_id in &added_window_ids {
-        if let Some(window) = state.windows.get(window_id) {
-          events.push(Event::WindowAdded {
-            window: window.info.clone(),
-          });
-        }
-      }
-
-      // Generate events for changed windows
-      for window_id in changed_window_ids {
-        if let Some(window) = state.windows.get(&window_id) {
-          events.push(Event::WindowChanged {
-            window: window.info.clone(),
-          });
-        }
-      }
+    if needs_watch {
+      self.setup_destruction_watch(element_id, pid, &handle);
     }
 
-    // Ensure processes exist for new windows (outside the state lock)
-    for process_id in &new_process_ids {
-      if let Err(e) = self.get_or_create_process(process_id.0) {
-        log::warn!("Failed to create process for window: {e:?}");
-      }
-    }
-
-    // Emit events
-    self.emit_all(events);
-
-    new_process_ids
+    self.state.read().get_element(element_id).cloned()
   }
 
-  /// Set currently focused window. Emits `FocusWindow` if value changed.
-  pub(crate) fn set_focused_window(&self, window_id: Option<WindowId>) {
-    let changed = {
-      let mut state = self.state.write();
-      if state.focused_window == window_id {
-        false
-      } else {
-        state.focused_window = window_id;
-        true
-      }
+  /// Set up destruction watch for an element.
+  fn setup_destruction_watch(
+    &self,
+    element_id: ElementId,
+    pid: ProcessId,
+    handle: &crate::platform::Handle,
+  ) {
+    let observer = {
+      let state = self.state.read();
+      state.get_process(pid).map(|p| p.observer.clone())
     };
-    if changed {
-      self.emit(Event::FocusWindow { window_id });
+
+    let Some(observer) = observer else {
+      return;
+    };
+
+    match observer.create_watch(handle, element_id, &[Notification::Destroyed], self.clone()) {
+      Ok(watch) => {
+        self.state.write().set_element_watch(element_id, watch);
+      }
+      Err(e) => {
+        log::debug!("Failed to create destruction watch for element {element_id}: {e:?}");
+      }
     }
   }
 
-  /// Update mouse position and emit event if changed.
-  pub(crate) fn update_mouse_position(&self, pos: crate::types::Point) {
-    let changed = {
-      let mut state = self.state.write();
-      let changed = state
-        .mouse_position
-        .is_none_or(|last| pos.moved_from(last, 1.0));
-      if changed {
-        state.mouse_position = Some(pos);
+  /// Update element data (used by fetch_element).
+  pub(crate) fn update_element(&self, element_id: ElementId, data: AXElement) -> AxioResult<()> {
+    let updated = self.state.write().update_element(element_id, data);
+    if !updated {
+      // Element might not exist
+      if self.state.read().get_element(element_id).is_none() {
+        return Err(AxioError::ElementNotFound(element_id));
       }
-      changed
-    };
-    if changed {
-      self.emit(Event::MousePosition(pos));
-    }
-  }
-
-  /// Register an element. Returns existing if hash matches.
-  pub(crate) fn register_element(&self, elem_state: ElementState) -> Option<AXElement> {
-    let mut events = Vec::new();
-    let result = {
-      let mut state = self.state.write();
-      Self::register_internal(&mut state, elem_state, self, &mut events)
-    };
-    self.emit_all(events);
-    result
-  }
-
-  /// Update element data. Emits `ElementChanged` if actually changed.
-  pub(crate) fn update_element(&self, element_id: ElementId, updated: AXElement) -> AxioResult<()> {
-    let maybe_event = {
-      let mut state = self.state.write();
-      let elem_state = state
-        .elements
-        .get_mut(&element_id)
-        .ok_or(AxioError::ElementNotFound(element_id))?;
-
-      if elem_state.element == updated {
-        None
-      } else {
-        elem_state.element = updated.clone();
-        Some(Event::ElementChanged { element: updated })
-      }
-    };
-
-    if let Some(event) = maybe_event {
-      self.emit(event);
     }
     Ok(())
   }
 
-  /// Set children for an element. Emits `ElementChanged` if children changed.
+  /// Set children for an element (used by fetch_children).
   pub(crate) fn set_element_children(
     &self,
     element_id: ElementId,
     children: Vec<ElementId>,
   ) -> AxioResult<()> {
-    let maybe_event = {
-      let mut state = self.state.write();
-      let elem_state = state
-        .elements
-        .get_mut(&element_id)
-        .ok_or(AxioError::ElementNotFound(element_id))?;
-
-      let new_children = Some(children);
-      if elem_state.element.children == new_children {
-        None
-      } else {
-        elem_state.element.children = new_children;
-        Some(Event::ElementChanged {
-          element: elem_state.element.clone(),
-        })
-      }
-    };
-
-    if let Some(event) = maybe_event {
-      self.emit(event);
-    }
+    self
+      .state
+      .write()
+      .set_element_children(element_id, children);
     Ok(())
-  }
-
-  /// Remove an element (cascades to children).
-  pub(crate) fn remove_element(&self, element_id: ElementId) {
-    let events = {
-      let mut state = self.state.write();
-      Self::remove_element_internal(&mut state, element_id)
-    };
-    self.emit_all(events);
-  }
-
-  /// Update focused element for a process. Emits `FocusElement` event.
-  pub(crate) fn update_focus(&self, pid: u32, element: AXElement) -> Option<ElementId> {
-    let (previous_id, should_emit) = {
-      let mut state = self.state.write();
-      let process_id = ProcessId(pid);
-      let process = state.processes.get_mut(&process_id)?;
-
-      let previous = process.focused_element;
-      let same_element = previous == Some(element.id);
-
-      if same_element {
-        return previous;
-      }
-
-      process.focused_element = Some(element.id);
-      (previous, true)
-    };
-
-    if !should_emit {
-      return previous_id;
-    }
-
-    // Auto-unwatch previous element
-    if let Some(prev_id) = previous_id {
-      if let Some(prev_elem) = self.get_element(prev_id) {
-        if prev_elem.role.auto_watch_on_focus() || prev_elem.role.is_writable() {
-          drop(self.unwatch(prev_id));
-        }
-      }
-    }
-
-    // Auto-watch new element
-    if element.role.auto_watch_on_focus() || element.role.is_writable() {
-      drop(self.watch(element.id));
-    }
-
-    // Emit focus event
-    self.emit(Event::FocusElement {
-      element,
-      previous_element_id: previous_id,
-    });
-
-    previous_id
-  }
-
-  /// Update selection for a process. Emits `SelectionChanged` if changed.
-  pub(crate) fn update_selection(
-    &self,
-    pid: u32,
-    window_id: WindowId,
-    element_id: ElementId,
-    text: String,
-    range: Option<(u32, u32)>,
-  ) {
-    let new_selection = TextSelection {
-      element_id,
-      text,
-      range,
-    };
-
-    let should_emit = {
-      let mut state = self.state.write();
-      let process_id = ProcessId(pid);
-      let Some(process) = state.processes.get_mut(&process_id) else {
-        return;
-      };
-
-      let changed = process.last_selection.as_ref() != Some(&new_selection);
-      process.last_selection = Some(new_selection.clone());
-      changed
-    };
-
-    if should_emit {
-      self.emit(Event::SelectionChanged {
-        window_id,
-        element_id: new_selection.element_id,
-        text: new_selection.text,
-        range: new_selection.range,
-      });
-    }
   }
 }

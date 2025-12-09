@@ -231,7 +231,7 @@ fn handle_element_notification(
     }
 
     Notification::Destroyed => {
-      axio.remove_element(element_id);
+      axio.on_element_destroyed(element_id);
     }
 
     Notification::ChildrenChanged => {

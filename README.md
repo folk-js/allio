@@ -1,4 +1,7 @@
-# Accessibility (AX) In/Out
+# Accessibility Input/Output (AXIO)
+
+> I suppose you gotta squint at the "X" and see it as one "C" flipped around: ƆC
+> Better name ideas welcome!
 
 An experimental system to expose accessibility trees as read-write interfaces for all running applications.
 

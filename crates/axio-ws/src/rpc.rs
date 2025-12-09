@@ -83,7 +83,7 @@ pub fn dispatch_json(axio: &Axio, method: &str, args: &JsonValue) -> JsonValue {
 pub fn dispatch(axio: &Axio, request: RpcRequest) -> Result<RpcResponse, String> {
   match request {
     RpcRequest::Snapshot => {
-      let snapshot = axio.snapshot();
+      let snapshot = axio.get_snapshot();
       Ok(RpcResponse::Snapshot(Box::new(snapshot)))
     }
 

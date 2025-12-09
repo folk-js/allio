@@ -128,7 +128,7 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
 
   // Send initial state as sync:init (run on blocking thread pool)
   let axio_for_init = ws_state.axio.clone();
-  let init_result = tokio::task::spawn_blocking(move || axio_for_init.snapshot()).await;
+  let init_result = tokio::task::spawn_blocking(move || axio_for_init.get_snapshot()).await;
 
   let Ok(init) = init_result else {
     return;

@@ -11,18 +11,19 @@ impl Axio {
   pub fn watch(&self, element_id: ElementId) -> AxioResult<()> {
     let mut state = self.state.write();
 
-    let elem_state = state
-      .elements
-      .get_mut(&element_id)
+    // Get the element's role to determine what to watch
+    let role = state
+      .get_element(element_id)
+      .map(|e| e.role)
       .ok_or(AxioError::ElementNotFound(element_id))?;
 
-    let notifs = Notification::for_watching(elem_state.element.role);
+    let notifs = Notification::for_watching(role);
     if notifs.is_empty() {
       return Ok(()); // Nothing to watch for this role
     }
 
     // Add notifications to existing watch
-    if let Some(watch) = &mut elem_state.watch {
+    if let Some(watch) = state.get_element_watch_mut(element_id) {
       watch.add(&notifs);
     } else {
       log::warn!("Element {element_id} has no watch handle");
@@ -35,19 +36,19 @@ impl Axio {
   pub fn unwatch(&self, element_id: ElementId) -> AxioResult<()> {
     let mut state = self.state.write();
 
-    let elem_state = state
-      .elements
-      .get_mut(&element_id)
+    // Get the element's role to determine what to unwatch
+    let role = state
+      .get_element(element_id)
+      .map(|e| e.role)
       .ok_or(AxioError::ElementNotFound(element_id))?;
 
-    let notifs = Notification::for_watching(elem_state.element.role);
+    let notifs = Notification::for_watching(role);
 
     // Remove notifications from watch (keeps Destroyed)
-    if let Some(watch) = &mut elem_state.watch {
+    if let Some(watch) = state.get_element_watch_mut(element_id) {
       watch.remove(&notifs);
     }
 
     Ok(())
   }
 }
-

@@ -3,12 +3,11 @@ Core Axio instance - owns all accessibility state and event broadcasting.
 
 # Module Structure
 
-- `mod.rs` - Axio struct, construction, event methods
+- `mod.rs` - Axio struct, construction, events
+- `state.rs` - State with private fields + operations + event emission
 - `queries.rs` - get_* (registry lookups) and fetch_* (platform calls)
-- `mutations.rs` - set_*, perform_*, internal state updates
+- `mutations.rs` - set_*, perform_*, sync_*, on_* handlers
 - `subscriptions.rs` - watch/unwatch
-- `internal.rs` - private state management (registry invariants)
-- `state.rs` - State, ProcessState, ElementState structs
 
 # Naming Convention
 
@@ -16,6 +15,8 @@ Core Axio instance - owns all accessibility state and event broadcasting.
 - `fetch_*` = hits OS/platform (may be slow)
 - `set_*` = value setting
 - `perform_*` = actions
+- `sync_*` = bulk updates from polling
+- `on_*` = notification handlers
 
 # Example
 
@@ -37,7 +38,6 @@ while let Ok(event) = events.recv().await {
 ```
 */
 
-mod internal;
 mod mutations;
 mod queries;
 mod state;
@@ -52,7 +52,6 @@ use async_broadcast::{InactiveReceiver, Sender};
 use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
 
-// Re-export AxioOptions for use via `axio::core::AxioOptions` (also re-exported in lib.rs)
 pub(crate) use crate::polling::AxioOptions;
 
 const EVENT_CHANNEL_CAPACITY: usize = 5000;
@@ -119,8 +118,11 @@ impl Axio {
     let (mut tx, rx) = async_broadcast::broadcast(EVENT_CHANNEL_CAPACITY);
     tx.set_overflow(true); // Drop oldest messages when full
 
+    // State owns a clone of the sender for event emission
+    let state = State::new(tx.clone());
+
     let axio = Axio {
-      state: Arc::new(RwLock::new(State::new())),
+      state: Arc::new(RwLock::new(state)),
       events_tx: tx,
       events_keepalive: rx.deactivate(),
       polling: Arc::new(Mutex::new(None)),
@@ -136,17 +138,5 @@ impl Axio {
   /// Subscribe to events from this instance.
   pub fn subscribe(&self) -> async_broadcast::Receiver<Event> {
     self.events_keepalive.activate_cloned()
-  }
-
-  /// Emit an event to all subscribers.
-  pub(crate) fn emit(&self, event: Event) {
-    drop(self.events_tx.try_broadcast(event));
-  }
-
-  /// Emit multiple events.
-  pub(crate) fn emit_all(&self, events: impl IntoIterator<Item = Event>) {
-    for event in events {
-      self.emit(event);
-    }
   }
 }
