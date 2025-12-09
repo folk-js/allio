@@ -29,9 +29,7 @@ mod notifications;
 mod observer;
 mod window;
 
-pub(crate) use element::{
-  children, click_element, element_hash, parent, refresh_element, write_element_value,
-};
+pub(crate) use element::{children, click_element, parent, refresh_element, write_element_value};
 pub(crate) use focus::get_current_focus;
 pub(crate) use notifications::{
   subscribe_app_notifications, subscribe_destruction_notification, subscribe_notifications,

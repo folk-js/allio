@@ -1,6 +1,8 @@
 important TODOs:
 
 - currently we have a hardcoded websocket connection. We need to look at this wiring and see how we might do better discovery here. this isn't immediately obvious, partly because the websocket client is running in a web view...
+- we should drop the AX prefix from the crate. For typegen we should either rename to include the prefix or find a different strategy (like importing as namespaced to avoid collisions with browser types)
+- find oppertunities to use more compile-time pure functions. find places where indirection is unnecesary or hurting us (wrapper functions, etc)
 
 TODOs:
 

@@ -2,8 +2,8 @@
 Focus and selection handling for macOS accessibility.
 
 Handles:
-- Focus change notifications (builds element, delegates to registry)
-- Selection change notifications (builds element, delegates to registry)
+- Focus change notifications (builds element, delegates to Axio)
+- Selection change notifications (builds element, delegates to Axio)
 - Current focus/selection queries
 - Window ID lookup for elements
 */
@@ -17,23 +17,24 @@ use std::ffi::c_void;
 use std::ptr::NonNull;
 
 use super::handles::ElementHandle;
+use crate::core::Axio;
 use crate::types::WindowId;
 
-use super::element::build_element_from_handle;
+use super::element::{build_and_register_element, element_hash};
 use super::util::app_element;
 
 /// Handle focus change notification from callback.
-/// Builds the element and delegates to registry for state update and event emission.
-pub(super) fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement>) {
+/// Builds the element and delegates to Axio for state update and event emission.
+pub(super) fn handle_app_focus_changed(axio: &Axio, pid: u32, element: CFRetained<AXUIElement>) {
   let handle = ElementHandle::new(element);
 
-  let Some(window_id) = get_window_id_for_handle(&handle, pid) else {
+  let Some(window_id) = get_window_id_for_handle(axio, &handle, pid) else {
     // Expected when desktop is focused or window not yet tracked
     log::debug!("FocusChanged: no window_id found for PID {pid}, skipping");
     return;
   };
 
-  let Some(ax_element) = build_element_from_handle(handle, window_id, pid, None) else {
+  let Some(ax_element) = build_and_register_element(axio, handle, window_id, pid, None) else {
     log::warn!("FocusChanged: element build failed for PID {pid}");
     return;
   };
@@ -45,22 +46,23 @@ pub(super) fn handle_app_focus_changed(pid: u32, element: CFRetained<AXUIElement
     return;
   }
 
-  // Registry handles state update, auto-watch, and event emission
-  crate::registry::update_focus(pid, ax_element);
+  // Axio handles state update, auto-watch, and event emission
+  axio.update_focus(pid, ax_element);
 }
 
 /// Handle selection change notification from the unified callback.
-/// Builds the element and delegates to registry for state update and event emission.
-pub(super) fn handle_app_selection_changed(pid: u32, element: CFRetained<AXUIElement>) {
+/// Builds the element and delegates to Axio for state update and event emission.
+pub(super) fn handle_app_selection_changed(axio: &Axio, pid: u32, element: CFRetained<AXUIElement>) {
   let handle = ElementHandle::new(element);
 
-  let Some(window_id) = get_window_id_for_handle(&handle, pid) else {
+  let Some(window_id) = get_window_id_for_handle(axio, &handle, pid) else {
     // Expected when desktop is focused or window not yet tracked
     log::debug!("SelectionChanged: no window_id found for PID {pid}, skipping");
     return;
   };
 
-  let Some(ax_element) = build_element_from_handle(handle.clone(), window_id, pid, None) else {
+  let Some(ax_element) = build_and_register_element(axio, handle.clone(), window_id, pid, None)
+  else {
     log::warn!("SelectionChanged: element build failed for PID {pid}");
     return;
   };
@@ -72,12 +74,13 @@ pub(super) fn handle_app_selection_changed(pid: u32, element: CFRetained<AXUIEle
     get_selected_text_range(&handle)
   };
 
-  // Registry handles state update and event emission
-  crate::registry::update_selection(pid, window_id, ax_element.id, selected_text, range);
+  // Axio handles state update and event emission
+  axio.update_selection(pid, window_id, ax_element.id, selected_text, range);
 }
 
 /// Query the currently focused element and selection for an app.
 pub(crate) fn get_current_focus(
+  axio: &Axio,
   pid: u32,
 ) -> (
   Option<crate::types::AXElement>,
@@ -89,11 +92,11 @@ pub(crate) fn get_current_focus(
     return (None, None);
   };
 
-  let Some(window_id) = get_window_id_for_handle(&focused_handle, pid) else {
+  let Some(window_id) = get_window_id_for_handle(axio, &focused_handle, pid) else {
     return (None, None);
   };
 
-  let Some(element) = build_element_from_handle(focused_handle.clone(), window_id, pid, None)
+  let Some(element) = build_and_register_element(axio, focused_handle.clone(), window_id, pid, None)
   else {
     return (None, None);
   };
@@ -110,16 +113,16 @@ pub(crate) fn get_current_focus(
 
 /// Get window ID for an `ElementHandle` using hash-based lookup.
 /// First checks if element is already registered, then falls back to focused window.
-fn get_window_id_for_handle(handle: &ElementHandle, pid: u32) -> Option<WindowId> {
+fn get_window_id_for_handle(axio: &Axio, handle: &ElementHandle, pid: u32) -> Option<WindowId> {
   // First: check if element is already registered (by hash)
-  let element_hash = super::element::element_hash(handle);
-  if let Some(element) = crate::registry::get_element_by_hash(element_hash) {
+  let hash = element_hash(handle);
+  if let Some(element) = axio.get_element_by_hash(hash) {
     return Some(element.window_id);
   }
 
   // Fallback: use the currently focused window for this PID
   // This works because focus/selection events only come from the focused app
-  crate::registry::get_focused_window_for_pid(pid)
+  axio.get_focused_window_for_pid(pid)
 }
 
 /// Get the selected text range from an element handle.

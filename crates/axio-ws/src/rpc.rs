@@ -5,7 +5,7 @@ RPC request/response types and dispatch.
 #![allow(missing_docs)]
 
 use axio::accessibility::Value as AXValue;
-use axio::{elements, AXElement, ElementId, Snapshot, WindowId};
+use axio::{AXElement, Axio, ElementId, Snapshot, WindowId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use ts_rs::TS;
@@ -66,12 +66,12 @@ pub enum RpcResponse {
 }
 
 /// Dispatch a raw JSON request
-pub fn dispatch_json(method: &str, args: &JsonValue) -> JsonValue {
+pub fn dispatch_json(axio: &Axio, method: &str, args: &JsonValue) -> JsonValue {
   // Reconstruct tagged format for serde
   let request_value = json!({ "method": method, "args": args });
 
   match serde_json::from_value::<RpcRequest>(request_value) {
-    Ok(request) => match dispatch(request) {
+    Ok(request) => match dispatch(axio, request) {
       Ok(response) => json!({ "result": response }),
       Err(e) => json!({ "error": e }),
     },
@@ -80,26 +80,27 @@ pub fn dispatch_json(method: &str, args: &JsonValue) -> JsonValue {
 }
 
 /// Typed dispatch - compiler ensures all cases handled correctly
-pub fn dispatch(request: RpcRequest) -> Result<RpcResponse, String> {
+pub fn dispatch(axio: &Axio, request: RpcRequest) -> Result<RpcResponse, String> {
   match request {
     RpcRequest::Snapshot => {
-      let snapshot = axio::snapshot();
+      let snapshot = axio.snapshot();
       Ok(RpcResponse::Snapshot(Box::new(snapshot)))
     }
 
     RpcRequest::ElementAt { x, y } => {
-      let element = elements::at(x, y).map_err(|e| e.to_string())?;
+      let element = axio.element_at(x, y).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Element(Box::new(element)))
     }
 
     RpcRequest::Get { element_id } => {
-      let element =
-        elements::get(element_id).ok_or_else(|| format!("Element not found: {element_id}"))?;
+      let element = axio
+        .get_element(element_id)
+        .ok_or_else(|| format!("Element not found: {element_id}"))?;
       Ok(RpcResponse::Element(Box::new(element)))
     }
 
     RpcRequest::WindowRoot { window_id } => {
-      let element = elements::window(window_id).map_err(|e| e.to_string())?;
+      let element = axio.window_root(window_id).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Element(Box::new(element)))
     }
 
@@ -107,39 +108,38 @@ pub fn dispatch(request: RpcRequest) -> Result<RpcResponse, String> {
       element_id,
       max_children,
     } => {
-      let children = elements::children(element_id, max_children).map_err(|e| e.to_string())?;
+      let children = axio.children(element_id, max_children).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Elements(children))
     }
 
     RpcRequest::Parent { element_id } => {
-      let parent = elements::parent(element_id).map_err(|e| e.to_string())?;
+      let parent = axio.parent(element_id).map_err(|e| e.to_string())?;
       Ok(RpcResponse::OptionalElement(parent.map(Box::new)))
     }
 
     RpcRequest::Refresh { element_id } => {
-      let element = elements::refresh(element_id).map_err(|e| e.to_string())?;
+      let element = axio.refresh(element_id).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Element(Box::new(element)))
     }
 
     RpcRequest::Write { element_id, value } => {
-      elements::write(element_id, &value).map_err(|e| e.to_string())?;
+      axio.write(element_id, &value).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Null)
     }
 
     RpcRequest::Click { element_id } => {
-      elements::click(element_id).map_err(|e| e.to_string())?;
+      axio.click(element_id).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Null)
     }
 
     RpcRequest::Watch { element_id } => {
-      elements::watch(element_id).map_err(|e| e.to_string())?;
+      axio.watch(element_id).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Null)
     }
 
     RpcRequest::Unwatch { element_id } => {
-      elements::unwatch(element_id).map_err(|e| e.to_string())?;
+      axio.unwatch(element_id).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Null)
     }
   }
 }
-

@@ -13,24 +13,25 @@ use objc2_application_services::AXError;
 use objc2_core_foundation::CFString;
 use std::ffi::c_void;
 
-use crate::accessibility::Notification;
 use super::handles::{ElementHandle, ObserverHandle};
-use crate::types::{AxioError, AxioResult, ElementId};
-
 use super::mapping::notification_to_macos;
 use super::observer::{
   register_observer_context, register_process_context, unregister_observer_context,
   ObserverContextHandle,
 };
 use super::util::app_element;
+use crate::accessibility::Notification;
+use crate::core::Axio;
+use crate::types::{AxioError, AxioResult, ElementId};
 
 /// Subscribe to destruction notification only (lightweight tracking for all elements).
 pub(crate) fn subscribe_destruction_notification(
   element_id: &ElementId,
   handle: &ElementHandle,
   observer: &ObserverHandle,
+  axio: Axio,
 ) -> AxioResult<*mut ObserverContextHandle> {
-  let context_handle = register_observer_context(*element_id);
+  let context_handle = register_observer_context(*element_id, axio);
 
   let notif_str = notification_to_macos(Notification::Destroyed);
   let notif_cfstring = CFString::from_str(notif_str);
@@ -75,6 +76,7 @@ pub(crate) fn subscribe_notifications(
   observer: &ObserverHandle,
   _platform_role: &str,
   notifications: &[Notification],
+  axio: Axio,
 ) -> AxioResult<*mut ObserverContextHandle> {
   if notifications.is_empty() {
     return Err(AxioError::NotSupported(
@@ -82,7 +84,7 @@ pub(crate) fn subscribe_notifications(
     ));
   }
 
-  let context_handle = register_observer_context(*element_id);
+  let context_handle = register_observer_context(*element_id, axio);
 
   let mut registered = 0;
   for notification in notifications {
@@ -135,9 +137,10 @@ pub(crate) fn unsubscribe_notifications(
 pub(crate) fn subscribe_app_notifications(
   pid: u32,
   observer: &ObserverHandle,
+  axio: Axio,
 ) -> AxioResult<*mut ObserverContextHandle> {
   let app_el = app_element(pid);
-  let context_handle = register_process_context(pid);
+  let context_handle = register_process_context(pid, axio);
 
   // Subscribe to focus and selection changes on the app element
   let notifications = [Notification::FocusChanged, Notification::SelectionChanged];

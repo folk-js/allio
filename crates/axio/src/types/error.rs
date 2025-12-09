@@ -5,6 +5,9 @@ use super::{ElementId, WindowId};
 /// Errors that can occur during AXIO operations.
 #[derive(Debug, thiserror::Error)]
 pub enum AxioError {
+  #[error("Accessibility permissions not granted")]
+  PermissionDenied,
+
   #[error("Element not found: {0}")]
   ElementNotFound(ElementId),
 

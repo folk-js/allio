@@ -11,7 +11,7 @@
     "dev:debug": "RUST_LOG=axio=debug tauri dev",
     "build": "tsc && vite build",
     "check": "cargo check",
-    "docs": "cargo doc -p axio --open",
+    "docs": "cargo doc -p axio --no-deps --open",
     "typegen": "rm -rf packages/axio-client/src/types/generated && cargo test -p axio -p axio-ws export_bindings"
   },
   "dependencies": {

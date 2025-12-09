@@ -20,7 +20,7 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 #[cfg(target_os = "macos")]
 use tauri_nspanel::{tauri_panel, ManagerExt as _, PanelLevel, StyleMask, WebviewWindowExt as _};
 
-use axio::{PollingHandle, PollingOptions};
+use axio::{Axio, AxioOptions};
 use axio_ws::WebSocketState;
 
 #[cfg(target_os = "macos")]
@@ -36,8 +36,6 @@ tauri_panel! {
 struct AppState {
   clickthrough_enabled: AtomicBool,
   current_overlay: Mutex<String>,
-  /// Handle to control polling. Stops polling when dropped.
-  polling_handle: Mutex<Option<PollingHandle>>,
   /// Guards against menu updates during tray event handling.
   /// The muda crate can crash if the menu is replaced while it's accessing menu items.
   tray_event_active: AtomicBool,
@@ -48,7 +46,6 @@ impl Default for AppState {
     Self {
       clickthrough_enabled: AtomicBool::new(false),
       current_overlay: Mutex::new(String::new()),
-      polling_handle: Mutex::new(None),
       tray_event_active: AtomicBool::new(false),
     }
   }
@@ -436,8 +433,8 @@ fn create_rpc_handler(app_handle: AppHandle) -> axio_ws::CustomRpcHandler {
   })
 }
 
-fn setup_main_window(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-  let (width, height) = axio::windows::screen_size();
+fn setup_main_window(app: &tauri::App, axio: &Axio) -> Result<(), Box<dyn std::error::Error>> {
+  let (width, height) = axio.screen_size();
   let window = app
     .get_webview_window("main")
     .ok_or("Main window not found")?;
@@ -518,16 +515,25 @@ fn main() {
   builder
     .manage(AppState::default())
     .setup(|app| {
+      // Create Axio instance (polling starts automatically)
+      let axio = match Axio::with_options(AxioOptions {
+        exclude_pid: Some(axio::ProcessId::from(std::process::id())),
+        ..Default::default()
+      }) {
+        Ok(a) => a,
+        Err(_) => {
+          eprintln!("[axio] ⚠️  Accessibility permissions NOT granted!");
+          eprintln!("[axio]    Go to System Preferences > Privacy & Security > Accessibility");
+          std::process::exit(1);
+        }
+      };
+
       // WebSocket setup
-      let ws_state =
-        WebSocketState::new().with_custom_handler(create_rpc_handler(app.handle().clone()));
-      if !axio::verify_permissions() {
-        eprintln!("[axio] ⚠️  Accessibility permissions NOT granted!");
-        eprintln!("[axio]    Go to System Preferences > Privacy & Security > Accessibility");
-      }
+      let ws_state = WebSocketState::new(axio.clone())
+        .with_custom_handler(create_rpc_handler(app.handle().clone()));
 
       // Window setup
-      setup_main_window(app)?;
+      setup_main_window(app, &axio)?;
 
       // Shortcuts
       #[cfg(desktop)]
@@ -545,13 +551,7 @@ fn main() {
         }
       }
 
-      // Start polling (uses display-synced polling on macOS by default)
-      let polling_handle = axio::start_polling(PollingOptions {
-        exclude_pid: Some(axio::ProcessId::from(std::process::id())),
-        ..PollingOptions::default()
-      });
-      *app.state::<AppState>().polling_handle.lock().unwrap() = Some(polling_handle);
-
+      // Start WebSocket server (axio polling already running)
       let ws = ws_state.clone();
       thread::spawn(move || {
         tokio::runtime::Runtime::new()

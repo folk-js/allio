@@ -15,9 +15,10 @@ use objc2_application_services::AXError;
 use objc2_core_foundation::{CFBoolean, CFString};
 
 use super::handles::ElementHandle;
+use crate::core::Axio;
 use crate::types::{AXElement, AxioError, AxioResult, WindowId};
 
-use super::element::build_element_from_handle;
+use super::element::build_and_register_element;
 use super::mapping::ax_role;
 use super::util::app_element;
 
@@ -33,15 +34,15 @@ fn get_window_elements(pid: u32) -> Vec<ElementHandle> {
 }
 
 /// Get the root element for a window.
-pub(crate) fn get_window_root(window_id: WindowId) -> AxioResult<AXElement> {
-  let (window, handle) = crate::registry::get_window_with_handle(window_id)
+pub(crate) fn get_window_root(axio: &Axio, window_id: WindowId) -> AxioResult<AXElement> {
+  let (window, handle) = axio
+    .get_window_with_handle(window_id)
     .ok_or(AxioError::WindowNotFound(window_id))?;
 
   let window_handle =
     handle.ok_or_else(|| AxioError::Internal(format!("Window {window_id} has no AX element")))?;
 
-  // Clone handle for safe method use
-  build_element_from_handle(window_handle.clone(), window_id, window.process_id.0, None)
+  build_and_register_element(axio, window_handle, window_id, window.process_id.0, None)
     .ok_or_else(|| AxioError::Internal("Window root element was previously destroyed".to_string()))
 }
 
@@ -58,10 +59,10 @@ pub(crate) fn get_window_root(window_id: WindowId) -> AxioResult<AXElement> {
 const HIT_TEST_RETRY_DELAYS_MS: [u64; 3] = [0, 10, 25];
 
 /// Get the accessibility element at a specific screen position.
-pub(crate) fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
+pub(crate) fn get_element_at_position(axio: &Axio, x: f64, y: f64) -> AxioResult<AXElement> {
   const MAX_DEPTH: u8 = 10;
 
-  let window = crate::registry::find_window_at_point(x, y).ok_or_else(|| {
+  let window = axio.find_window_at_point(x, y).ok_or_else(|| {
     AxioError::AccessibilityError(format!("No tracked window found at position ({x}, {y})"))
   })?;
 
@@ -122,7 +123,7 @@ pub(crate) fn get_element_at_position(x: f64, y: f64) -> AxioResult<AXElement> {
     element_handle = deeper;
   }
 
-  build_element_from_handle(element_handle, window_id, pid, None).ok_or_else(|| {
+  build_and_register_element(axio, element_handle, window_id, pid, None).ok_or_else(|| {
     AxioError::AccessibilityError(format!("Element at ({x}, {y}) was previously destroyed"))
   })
 }

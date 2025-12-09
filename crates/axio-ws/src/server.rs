@@ -2,7 +2,7 @@
 WebSocket server implementation.
 */
 
-use axio::Event;
+use axio::{Axio, Event};
 use axum::{
   extract::{
     ws::{Message, WebSocket, WebSocketUpgrade},
@@ -30,6 +30,8 @@ pub type CustomRpcHandler = Arc<dyn Fn(&str, &Value) -> Option<Value> + Send + S
 /// WebSocket state: broadcasts serialized events to clients, handles RPC requests.
 #[derive(Clone)]
 pub struct WebSocketState {
+  /// The axio instance
+  axio: Axio,
   /// Sender for JSON-serialized events to WebSocket clients
   json_sender: Arc<broadcast::Sender<String>>,
   custom_handler: Option<CustomRpcHandler>,
@@ -46,14 +48,15 @@ impl std::fmt::Debug for WebSocketState {
 
 impl WebSocketState {
   /// Create WebSocket state with default port (3030).
-  pub fn new() -> Self {
-    Self::with_port(DEFAULT_WS_PORT)
+  pub fn new(axio: Axio) -> Self {
+    Self::with_port(axio, DEFAULT_WS_PORT)
   }
 
   /// Create WebSocket state with custom port.
-  pub fn with_port(port: u16) -> Self {
+  pub fn with_port(axio: Axio, port: u16) -> Self {
     let (json_tx, _) = broadcast::channel::<String>(DEFAULT_CHANNEL_CAPACITY);
     Self {
+      axio,
       json_sender: Arc::new(json_tx),
       custom_handler: None,
       port,
@@ -68,12 +71,6 @@ impl WebSocketState {
   }
 }
 
-impl Default for WebSocketState {
-  fn default() -> Self {
-    Self::new()
-  }
-}
-
 /// Start the WebSocket server.
 ///
 /// This also spawns a task to forward axio events to connected clients.
@@ -81,7 +78,7 @@ pub async fn start_server(ws_state: WebSocketState) {
   let port = ws_state.port;
   // Spawn event forwarding task
   let sender = ws_state.json_sender.clone();
-  let mut rx = axio::subscribe();
+  let mut rx = ws_state.axio.subscribe();
   tokio::spawn(async move {
     while let Ok(event) = rx.recv().await {
       if let Ok(json) = serde_json::to_string(&event) {
@@ -130,7 +127,8 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
   println!("[client] connected");
 
   // Send initial state as sync:init (run on blocking thread pool)
-  let init_result = tokio::task::spawn_blocking(axio::snapshot).await;
+  let axio_for_init = ws_state.axio.clone();
+  let init_result = tokio::task::spawn_blocking(move || axio_for_init.snapshot()).await;
 
   let Ok(init) = init_result else {
     return;
@@ -216,8 +214,9 @@ async fn handle_request_async(request: &str, ws_state: &WebSocketState) -> Strin
   }
 
   // Axio RPC - run on blocking thread pool (AX API calls are slow IPC)
+  let axio = ws_state.axio.clone();
   let dispatch_result =
-    tokio::task::spawn_blocking(move || crate::rpc::dispatch_json(&method, &args)).await;
+    tokio::task::spawn_blocking(move || crate::rpc::dispatch_json(&axio, &method, &args)).await;
 
   let mut response = match dispatch_result {
     Ok(r) => r,
@@ -228,4 +227,3 @@ async fn handle_request_async(request: &str, ws_state: &WebSocketState) -> Strin
   }
   response.to_string()
 }
-

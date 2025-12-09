@@ -41,7 +41,6 @@ pub(crate) use macos::{
   children,
   click_element,
   create_observer_for_pid,
-  element_hash,
   enable_accessibility_for_pid,
   // Window enumeration
   enumerate_windows,

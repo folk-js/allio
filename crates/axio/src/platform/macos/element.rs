@@ -2,7 +2,7 @@
 Element building and operations for macOS accessibility.
 
 Handles:
-- Building `AXElement` from platform handles
+- Building `AXElement` from platform handles (returns data, no side effects)
 - Child/parent discovery
 - Element refresh
 - Hash-based deduplication
@@ -12,6 +12,7 @@ Handles:
 use objc2_core_foundation::CFHash;
 
 use super::handles::ElementHandle;
+use crate::core::{Axio, ElementData};
 use crate::types::{AXElement, AxioError, AxioResult, ElementId, ProcessId, WindowId};
 
 use super::mapping::{ax_action, role_from_macos};
@@ -36,17 +37,15 @@ fn refine_role(
   }
 }
 
-/// Build an `AXElement` from an `ElementHandle` and register it.
-/// Uses batch attribute fetching for ~10x faster element creation.
-/// All unsafe code is encapsulated in `ElementHandle` methods.
-/// Returns None if the element's hash is in the dead set (was previously destroyed).
-pub(super) fn build_element_from_handle(
+/// Build element data from a handle (pure - no side effects).
+/// Returns `ElementData` for the caller to register.
+pub(super) fn build_element_data(
   handle: ElementHandle,
   window_id: WindowId,
   pid: u32,
   parent_id: Option<ElementId>,
-) -> Option<AXElement> {
-  // Fetch all attributes in ONE IPC call - safe method!
+) -> Option<ElementData> {
+  // Fetch all attributes in ONE IPC call
   let attrs = handle.get_attributes(None);
 
   let raw_role = if let Some(role) = &attrs.role {
@@ -81,6 +80,15 @@ pub(super) fn build_element_from_handle(
   // Parent ID is set if caller passed it (child discovery), otherwise None (orphan or root)
   let parent_id_value = if is_root { None } else { parent_id };
 
+  let hash = element_hash(&handle);
+  let parent_hash = if is_root {
+    None
+  } else {
+    handle
+      .get_element("AXParent")
+      .map(|parent_handle| element_hash(&parent_handle))
+  };
+
   let element = AXElement {
     id: ElementId::new(),
     window_id,
@@ -107,16 +115,38 @@ pub(super) fn build_element_from_handle(
     actions: attrs.actions,
   };
 
-  crate::registry::register_element(element, handle, pid, &raw_role)
+  Some(ElementData {
+    element,
+    handle,
+    hash,
+    parent_hash,
+    raw_role,
+  })
+}
+
+/// Build and register an element (convenience wrapper).
+pub(super) fn build_and_register_element(
+  axio: &Axio,
+  handle: ElementHandle,
+  window_id: WindowId,
+  pid: u32,
+  parent_id: Option<ElementId>,
+) -> Option<AXElement> {
+  let data = build_element_data(handle, window_id, pid, parent_id)?;
+  axio.register_element(data)
 }
 
 /// Fetch and register children of an element.
-pub(crate) fn children(parent_id: ElementId, max_children: usize) -> AxioResult<Vec<AXElement>> {
-  let info = crate::registry::get_stored_element_info(parent_id)?;
+pub(crate) fn children(
+  axio: &Axio,
+  parent_id: ElementId,
+  max_children: usize,
+) -> AxioResult<Vec<AXElement>> {
+  let info = axio.get_stored_element_info(parent_id)?;
 
   let child_handles = info.handle.get_children();
   if child_handles.is_empty() {
-    crate::registry::set_element_children(parent_id, vec![])?;
+    axio.set_element_children(parent_id, vec![])?;
     return Ok(vec![]);
   }
 
@@ -124,35 +154,38 @@ pub(crate) fn children(parent_id: ElementId, max_children: usize) -> AxioResult<
   let mut child_ids = Vec::new();
 
   for child_handle in child_handles.into_iter().take(max_children) {
-    if let Some(child) =
-      build_element_from_handle(child_handle, info.window_id, info.pid, Some(parent_id))
-    {
+    if let Some(child) = build_and_register_element(
+      axio,
+      child_handle,
+      info.window_id,
+      info.pid,
+      Some(parent_id),
+    ) {
       child_ids.push(child.id);
       children.push(child);
     }
   }
 
-  crate::registry::set_element_children(parent_id, child_ids)?;
+  axio.set_element_children(parent_id, child_ids)?;
 
   Ok(children)
 }
 
 /// Fetch and register parent of an element.
-/// The lazy linking in `register_element` will connect this element to the parent.
-pub(crate) fn parent(element_id: ElementId) -> AxioResult<Option<AXElement>> {
-  let info = crate::registry::get_stored_element_info(element_id)?;
+pub(crate) fn parent(axio: &Axio, element_id: ElementId) -> AxioResult<Option<AXElement>> {
+  let info = axio.get_stored_element_info(element_id)?;
 
   let Some(parent_handle) = info.handle.get_element("AXParent") else {
     return Ok(None);
   };
 
-  let parent = build_element_from_handle(parent_handle, info.window_id, info.pid, None);
+  let parent = build_and_register_element(axio, parent_handle, info.window_id, info.pid, None);
   Ok(parent)
 }
 
 /// Refresh an element's attributes from the platform.
-pub(crate) fn refresh_element(element_id: ElementId) -> AxioResult<AXElement> {
-  let info = crate::registry::get_stored_element_info(element_id)?;
+pub(crate) fn refresh_element(axio: &Axio, element_id: ElementId) -> AxioResult<AXElement> {
+  let info = axio.get_stored_element_info(element_id)?;
 
   let attrs = info.handle.get_attributes(Some(&info.platform_role));
 
@@ -196,7 +229,7 @@ pub(crate) fn refresh_element(element_id: ElementId) -> AxioResult<AXElement> {
     actions: attrs.actions,
   };
 
-  crate::registry::update_element(element_id, updated.clone())?;
+  axio.update_element(element_id, updated.clone())?;
   Ok(updated)
 }
 
