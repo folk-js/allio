@@ -81,7 +81,7 @@ pub async fn start_server(ws_state: WebSocketState) {
   let port = ws_state.port;
   // Spawn event forwarding task
   let sender = ws_state.json_sender.clone();
-  let mut rx = crate::events::subscribe();
+  let mut rx = crate::subscribe();
   tokio::spawn(async move {
     while let Ok(event) = rx.recv().await {
       if let Ok(json) = serde_json::to_string(&event) {
