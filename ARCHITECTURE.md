@@ -54,7 +54,7 @@ Removal cascades down the hierarchy:
                       │
 ┌─────────────────────▼───────────────────────────┐
 │              State (Cache)                      │
-│   insert, update, remove, get                   │
+│   get_or_insert, update, remove, get            │
 │   Owns: data, indexes, event emission           │
 └─────────────────────┬───────────────────────────┘
                       │
@@ -93,21 +93,43 @@ Removal cascades down the hierarchy:
 
 State is the single source of truth for cached data. All mutations emit corresponding events.
 
+### Why Not Upsert?
+
+Elements have two identities:
+
+- **Hash** (from OS): Identifies the same OS element across fetches
+- **ElementId** (ours): Stable ID we give to clients
+
+When we fetch an element from OS:
+
+- If hash already exists → return the **existing** ElementId (no update, no event)
+- If hash is new → insert with **new** ElementId, emit ElementAdded
+
+This is "get or insert" semantics, not upsert. We don't want to update data when hash matches because:
+
+1. The existing cached data is already valid
+2. Updating would require reconciling two different ElementIds
+3. Clients have references to the existing ID
+
+Updating data happens separately via `update_element(id, data)` when we explicitly refresh.
+
+### State Methods
+
 ```rust
 impl State {
-  // === Insert (add to cache, emit *Added event if not already in cache) ===
-  fn insert_element(&mut self, elem: ElementState) -> Option<ElementId>;
-  fn insert_window(&mut self, window: WindowState) -> WindowId;
-  fn insert_process(&mut self, process: ProcessState) -> ProcessId;
+  // === Get or Insert (ensure tracked, emit *Added only if new) ===
+  fn get_or_insert_element(&mut self, elem: ElementState) -> ElementId;
+  fn get_or_insert_window(&mut self, window: WindowState) -> WindowId;
+  fn get_or_insert_process(&mut self, process: ProcessState) -> ProcessId;
 
-  // === Update (modify, emit *Changed event if different) ===
-  fn update_element(&mut self, id: ElementId, data: AXElement) -> bool;
-  fn update_window(&mut self, id: WindowId, data: AXWindow) -> bool;
+  // === Update (modify existing, emit *Changed if different) ===
+  fn update_element(&mut self, id: ElementId, data: AXElement) -> Result<bool>;
+  fn update_window(&mut self, id: WindowId, data: AXWindow) -> Result<bool>;
 
   // === Remove (cascade + cleanup, emit *Removed events) ===
   fn remove_element(&mut self, id: ElementId);
-  fn remove_window(&mut self, id: WindowId);
-  fn remove_process(&mut self, id: ProcessId);
+  fn remove_window(&mut self, id: WindowId);   // cascades to elements
+  fn remove_process(&mut self, id: ProcessId); // cascades to windows
 
   // === Query (read-only, no events) ===
   fn get_element(&self, id: ElementId) -> Option<&AXElement>;
@@ -115,6 +137,17 @@ impl State {
   fn find_element_by_hash(&self, hash: u64) -> Option<ElementId>;
 }
 ```
+
+### Operation Summary
+
+| Operation               | Key  | Behavior                         | Event                          |
+| ----------------------- | ---- | -------------------------------- | ------------------------------ |
+| `get_or_insert_element` | hash | Return existing ID or insert new | ElementAdded (if inserted)     |
+| `update_element`        | ID   | Update data of existing          | ElementChanged (if changed)    |
+| `remove_element`        | ID   | Remove + cascade children        | ElementRemoved (for all)       |
+| `get_or_insert_window`  | ID   | Return existing or insert new    | WindowAdded (if inserted)      |
+| `update_window`         | ID   | Update data of existing          | WindowChanged (if changed)     |
+| `remove_window`         | ID   | Remove + cascade elements        | WindowRemoved + ElementRemoved |
 
 ### Key Invariant
 
@@ -141,10 +174,10 @@ pub fn fetch_children(&self, parent_id: ElementId, max: usize) -> AxioResult<Vec
   // 2. Call OS
   let child_handles = handle.fetch_children();
 
-  // 3. Cache each (State emits events)
+  // 3. Cache each (State emits events only for truly new elements)
   for child_handle in child_handles {
     let elem_state = build_element_state(child_handle, window_id, pid);
-    state.insert_element(elem_state);
+    state.get_or_insert_element(elem_state);
   }
 
   // 4. Return cached data
@@ -243,8 +276,8 @@ pub fn unwatch(&self, id: ElementId) -> AxioResult<()>;
 
 Because State owns event emission:
 
-- `insert_element` → always emits `ElementAdded` if not already in cache
-- `update_element` → emits `ElementChanged` if data differs
+- `get_or_insert_element` → emits `ElementAdded` only if actually inserted (new hash)
+- `update_element` → emits `ElementChanged` only if data differs
 - `remove_element` → emits `ElementRemoved` for element + all descendants
 - `remove_window` → emits `WindowRemoved` + `ElementRemoved` for all elements
 
@@ -272,15 +305,13 @@ crates/axio/src/
 
 ## Summary
 
-| Concept                  | Meaning                             |
-| ------------------------ | ----------------------------------- |
-| **State**                | Cache with automatic event emission |
-| **get\_**                | Cache lookup (fast, no OS)          |
-| **fetch\_**              | OS call → cache → return            |
-| **set*/perform***        | Write to OS                         |
-| **watch/unwatch**        | Element change subscriptions        |
-| **sync\_**               | Bulk updates from polling           |
-| **on\_**                 | Notification handlers               |
-| **insert/update/remove** | State operations (internal)         |
-
-TODO: think if we want insert/update/remove, or just upsert/remove. Not sure yet what we need from the internal state mutations from elewhere in the code, what would be performant, etc.
+| Concept                         | Meaning                             |
+| ------------------------------- | ----------------------------------- |
+| **State**                       | Cache with automatic event emission |
+| **get\_**                       | Cache lookup (fast, no OS)          |
+| **fetch\_**                     | OS call → cache → return            |
+| **set\_/perform\_**             | Write to OS                         |
+| **watch/unwatch**               | Element change subscriptions        |
+| **sync\_**                      | Bulk updates from polling           |
+| **on\_**                        | Notification handlers               |
+| **get_or_insert/update/remove** | State operations (internal)         |
