@@ -116,11 +116,13 @@ struct Registry {
   /// Parent hash → children waiting for that parent (lazy linking).
   waiting_for_parent: HashMap<u64, Vec<ElementId>>,
 
-  // === Focus ===
+  // === Focus/Input ===
   /// Currently focused window (can be None when desktop is focused).
   focused_window: Option<WindowId>,
   /// Window depth order (front to back, by `z_index`).
   depth_order: Vec<WindowId>,
+  /// Current mouse position.
+  mouse_position: Option<crate::types::Point>,
 }
 
 static REGISTRY: LazyLock<RwLock<Registry>> = LazyLock::new(|| RwLock::new(Registry::new()));
@@ -136,6 +138,7 @@ impl Registry {
       waiting_for_parent: HashMap::new(),
       focused_window: None,
       depth_order: Vec::new(),
+      mouse_position: None,
     }
   }
 
@@ -690,6 +693,7 @@ pub(crate) fn snapshot() -> crate::types::Snapshot {
       focused_element,
       selection,
       depth_order: r.depth_order.clone(),
+      mouse_position: r.mouse_position,
       accessibility_enabled: false, // Caller must set this
     }
   })
@@ -973,4 +977,20 @@ pub(crate) fn write_element_value(
 /// Click element.
 pub(crate) fn click_element(element_id: ElementId) -> AxioResult<()> {
   with_element_handle(element_id, |handle, _| platform::click_element(handle))?
+}
+
+/// Update mouse position and emit event if changed.
+pub(crate) fn update_mouse_position(pos: crate::types::Point) {
+  let changed = Registry::write(|r| {
+    let changed = r
+      .mouse_position
+      .is_none_or(|last| pos.moved_from(last, 1.0));
+    if changed {
+      r.mouse_position = Some(pos);
+    }
+    changed
+  });
+  if changed {
+    events::emit(Event::MousePosition(pos));
+  }
 }

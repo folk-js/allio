@@ -16,7 +16,7 @@ use objc2_core_foundation::{CFRange, CFRetained, CFString};
 use std::ffi::c_void;
 use std::ptr::NonNull;
 
-use crate::platform::handles::ElementHandle;
+use super::handles::ElementHandle;
 use crate::types::WindowId;
 
 use super::element::build_element_from_handle;

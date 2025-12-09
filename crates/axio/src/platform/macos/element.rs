@@ -11,7 +11,7 @@ Handles:
 
 use objc2_core_foundation::CFHash;
 
-use crate::platform::handles::ElementHandle;
+use super::handles::ElementHandle;
 use crate::types::{AXElement, AxioError, AxioResult, ElementId, ProcessId, WindowId};
 
 use super::mapping::{ax_action, role_from_macos};

@@ -46,9 +46,9 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::LazyLock;
 
+use super::handles::{ElementHandle, ObserverHandle};
 use super::mapping::notification_from_macos;
 use crate::accessibility::Notification;
-use crate::platform::handles::{ElementHandle, ObserverHandle};
 use crate::types::{AxioError, AxioResult, ElementId};
 
 /// Next available context ID.

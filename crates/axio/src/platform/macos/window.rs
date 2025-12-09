@@ -14,7 +14,7 @@ Handles:
 use objc2_application_services::AXError;
 use objc2_core_foundation::{CFBoolean, CFString};
 
-use crate::platform::handles::ElementHandle;
+use super::handles::ElementHandle;
 use crate::types::{AXElement, AxioError, AxioResult, WindowId};
 
 use super::element::build_element_from_handle;

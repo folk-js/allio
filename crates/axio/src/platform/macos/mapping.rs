@@ -1,8 +1,5 @@
 /*!
 Bidirectional mappings between axio accessibility types and macOS AX* strings.
-
-Provides zero-cost conversions between our cross-platform types
-and the macOS Accessibility API string constants.
 */
 
 #![allow(dead_code)]

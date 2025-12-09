@@ -14,7 +14,7 @@ use objc2_core_foundation::CFString;
 use std::ffi::c_void;
 
 use crate::accessibility::Notification;
-use crate::platform::handles::{ElementHandle, ObserverHandle};
+use super::handles::{ElementHandle, ObserverHandle};
 use crate::types::{AxioError, AxioResult, ElementId};
 
 use super::mapping::notification_to_macos;

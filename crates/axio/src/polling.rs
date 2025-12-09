@@ -1,20 +1,12 @@
-use crate::events::emit;
 use crate::platform;
-use crate::types::{AXWindow, Event, Point, ProcessId};
+use crate::types::{AXWindow, ProcessId};
 use log::error;
-use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 const DEFAULT_POLLING_INTERVAL_MS: u64 = 8;
-
-/// Mutable state for polling iteration.
-#[derive(Default)]
-struct PollingState {
-  last_mouse_pos: Option<Point>,
-}
 
 /// Internal implementation of the polling handle.
 enum PollingImpl {
@@ -201,12 +193,10 @@ fn start_thread_polling(config: PollingOptions) -> PollingHandle {
   let stop_signal_clone = Arc::clone(&stop_signal);
 
   let thread = thread::spawn(move || {
-    let mut state = PollingState::default();
-
     while !stop_signal_clone.load(Ordering::SeqCst) {
       let loop_start = Instant::now();
 
-      poll_iteration(&config, &mut state);
+      poll_iteration(&config);
 
       let elapsed = loop_start.elapsed();
       let target = Duration::from_millis(config.interval_ms);
@@ -227,11 +217,8 @@ fn start_thread_polling(config: PollingOptions) -> PollingHandle {
 /// Display-synchronized polling implementation (macOS only).
 #[cfg(target_os = "macos")]
 fn start_display_synced_polling(config: PollingOptions) -> PollingHandle {
-  let state = Arc::new(Mutex::new(PollingState::default()));
-
   let handle = match platform::start_display_link(move || {
-    let mut state = state.lock();
-    poll_iteration(&config, &mut state);
+    poll_iteration(&config);
   }) {
     Ok(h) => h,
     Err(e) => {
@@ -246,18 +233,12 @@ fn start_display_synced_polling(config: PollingOptions) -> PollingHandle {
 }
 
 /// Shared polling logic for both thread and display-link implementations.
-fn poll_iteration(config: &PollingOptions, state: &mut PollingState) {
+fn poll_iteration(config: &PollingOptions) {
   use crate::registry;
 
-  // Mouse position polling
+  // Mouse position polling - registry handles dedup and event emission
   if let Some(pos) = platform::get_mouse_position() {
-    let changed = state
-      .last_mouse_pos
-      .is_none_or(|last| pos.moved_from(last, 1.0));
-    if changed {
-      state.last_mouse_pos = Some(pos);
-      emit(Event::MousePosition(pos));
-    }
+    registry::update_mouse_position(pos);
   }
 
   if let Some(raw_windows) = poll_windows(config) {

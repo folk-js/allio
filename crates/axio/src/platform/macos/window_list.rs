@@ -10,7 +10,7 @@ Uses `CGWindowListCopyWindowInfo` to enumerate on-screen windows.
   clippy::cast_possible_wrap
 )]
 
-use super::macos_cf::{
+use super::cf_utils::{
   get_cf_boolean, get_cf_number, get_cf_string, get_cf_window_bounds, retain_cf_dictionary,
 };
 use crate::types::{AXWindow, Bounds, ProcessId, WindowId};
