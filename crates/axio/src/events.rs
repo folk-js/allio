@@ -1,7 +1,7 @@
 /*!
 Event broadcasting for AXIO.
 
-Uses a tokio broadcast channel for multi-subscriber event streaming.
+Uses async-broadcast for multi-subscriber event streaming.
 Events are emitted when Registry state changes.
 
 # Usage
@@ -18,21 +18,26 @@ while let Ok(event) = rx.recv().await {
 */
 
 use crate::types::Event;
+use async_broadcast::{broadcast, InactiveReceiver, Sender};
 use std::sync::LazyLock;
-use tokio::sync::broadcast;
 
 const CHANNEL_CAPACITY: usize = 1000;
 
-static EVENT_CHANNEL: LazyLock<broadcast::Sender<Event>> =
-  LazyLock::new(|| broadcast::channel(CHANNEL_CAPACITY).0);
+/// Holds both sender and an inactive receiver to keep the channel alive.
+/// The inactive receiver prevents the channel from closing when no active receivers exist.
+static EVENT_CHANNEL: LazyLock<(Sender<Event>, InactiveReceiver<Event>)> = LazyLock::new(|| {
+  let (mut tx, rx) = broadcast(CHANNEL_CAPACITY);
+  tx.set_overflow(true); // Drop oldest messages when full instead of blocking
+  (tx, rx.deactivate())
+});
 
 /// Subscribe to events.
-pub fn subscribe() -> broadcast::Receiver<Event> {
-  EVENT_CHANNEL.subscribe()
+pub fn subscribe() -> async_broadcast::Receiver<Event> {
+  EVENT_CHANNEL.1.activate_cloned()
 }
 
 /// Emit an event to all subscribers.
 pub(crate) fn emit(event: Event) {
-  // Ignore send errors - just means no receivers
-  drop(EVENT_CHANNEL.send(event));
+  // try_broadcast returns immediately - we ignore errors (no receivers or overflow)
+  drop(EVENT_CHANNEL.0.try_broadcast(event));
 }

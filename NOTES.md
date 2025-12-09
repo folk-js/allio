@@ -1,3 +1,7 @@
+important TODOs:
+
+- currently we have a hardcoded websocket connection. We need to look at this wiring and see how we might do better discovery here. this isn't immediately obvious, partly because the websocket client is running in a web view...
+
 TODOs:
 
 - figure out why we cant see table data in the accessibility tree

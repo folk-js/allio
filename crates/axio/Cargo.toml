@@ -20,11 +20,11 @@ derive_more = { version = "1", features = ["display", "from", "into"] }
 log = "0.4"
 parking_lot = "0.12"
 thiserror = "2"
-tokio = { version = "1", features = ["sync"] }
+async-broadcast = "0.7"
 ts-rs = "10"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.6.3"
+objc2 = "0.6"
 objc2-core-foundation = "0.3.2"
 objc2-core-graphics = { version = "0.3.2", features = [
   "CGDirectDisplay",
