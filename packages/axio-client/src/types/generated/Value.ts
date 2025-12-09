@@ -4,9 +4,9 @@
  * Typed value for an accessibility element.
  *
  * Role provides semantic context for how to interpret values:
- * - TextField, TextArea → String
+ * - `TextField`, `TextArea` → String
  * - Checkbox, Switch → Boolean
- * - Slider, ProgressBar → Number (float)
+ * - Slider, `ProgressBar` → Number (float)
  * - Stepper → Number (integer, as whole f64)
  *
  * Number is unified f64 for JSON/TypeScript compatibility.

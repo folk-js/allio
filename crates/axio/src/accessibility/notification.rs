@@ -15,7 +15,7 @@ use ts_rs::TS;
 /// by the platform layer. See `platform::notification_to_platform_string`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+#[ts(export)]
 pub enum Notification {
   /// Element was destroyed and is no longer valid.
   /// This is ALWAYS subscribed for all registered elements.

@@ -13,7 +13,7 @@ use ts_rs::TS;
 /// RPC request - deserialize from `{ method, args }` format
 #[derive(Debug, Deserialize, TS)]
 #[serde(tag = "method", content = "args", rename_all = "snake_case")]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+#[ts(export)]
 pub enum RpcRequest {
   /// Get a snapshot of current state (for re-sync)
   Snapshot,
@@ -53,7 +53,7 @@ const fn default_max_children() -> usize {
 /// RPC response variants
 #[derive(Debug, Serialize, TS)]
 #[serde(untagged)]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+#[ts(export)]
 pub enum RpcResponse {
   /// Full state snapshot (for re-sync)
   Snapshot(Box<Snapshot>),

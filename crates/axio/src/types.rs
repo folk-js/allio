@@ -10,13 +10,13 @@ use ts_rs::TS;
 #[derive(
   Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, Display, From, Into,
 )]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+#[ts(export)]
 pub struct WindowId(pub u32);
 
 #[derive(
   Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, Display, From, Into,
 )]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+#[ts(export)]
 pub struct ElementId(pub u32);
 
 /// Global counter for `ElementId` generation. Starts at 1 (0 could be confused with "null").
@@ -39,7 +39,7 @@ impl Default for ElementId {
 #[derive(
   Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, Display, From, Into,
 )]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+#[ts(export)]
 pub struct ProcessId(pub u32);
 
 #[derive(Debug, thiserror::Error)]
@@ -66,7 +66,7 @@ pub enum AxioError {
 pub type AxioResult<T> = Result<T, AxioError>;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, TS)]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+#[ts(export)]
 pub struct Bounds {
   pub x: f64,
   pub y: f64,
@@ -105,7 +105,7 @@ impl Bounds {
 
 /// A 2D point in screen coordinates.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, TS)]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+#[ts(export)]
 pub struct Point {
   pub x: f64,
   pub y: f64,
@@ -123,7 +123,7 @@ impl Point {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+#[ts(export)]
 pub struct AXWindow {
   pub id: WindowId,
   pub title: String,
@@ -144,7 +144,7 @@ pub struct AXWindow {
 /// - `is_root=false, parent_id=Some(id)` → parent is loaded (linked)
 /// - `is_root=false, parent_id=None` → orphan (parent exists but not loaded)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+#[ts(export)]
 pub struct AXElement {
   pub id: ElementId,
   /// Window this element belongs to
@@ -195,7 +195,7 @@ pub struct AXElement {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+#[ts(export)]
 pub struct Selection {
   pub element_id: ElementId,
   pub text: String,
@@ -204,7 +204,7 @@ pub struct Selection {
 
 /// Initial state sent on connection
 #[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+#[ts(export)]
 pub struct Snapshot {
   pub windows: Vec<AXWindow>,
   pub elements: Vec<AXElement>,
@@ -219,7 +219,7 @@ pub struct Snapshot {
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(tag = "event", content = "data")]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+#[ts(export)]
 pub enum Event {
   // Initial sync (on connection)
   #[serde(rename = "sync:init")]
@@ -268,7 +268,7 @@ pub enum Event {
 
 /// Text selection range within an element
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+#[ts(export)]
 pub struct TextRange {
   pub start: u32,
   pub length: u32,

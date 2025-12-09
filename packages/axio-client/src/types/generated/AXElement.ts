@@ -27,7 +27,7 @@ window_id: WindowId,
  */
 pid: ProcessId, is_root: boolean, parent_id: ElementId | null, children: Array<ElementId> | null, role: Role, 
 /**
- * Raw platform role string for debugging (e.g., "AXRadioGroup", "AXButton/AXCloseButton")
+ * Raw platform role string for debugging (e.g., "`AXRadioGroup`", "AXButton/AXCloseButton")
  */
 platform_role: string, label: string | null, description: string | null, placeholder: string | null, 
 /**

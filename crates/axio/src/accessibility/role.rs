@@ -17,7 +17,7 @@ use ts_rs::TS;
 /// handled by the platform layer. See `platform::map_role_from_platform`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+#[ts(export)]
 pub enum Role {
   // === Structural / Containers ===
   Application,
@@ -83,7 +83,7 @@ pub enum Role {
 /// Used for type-safe value handling in TypeScript.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+#[ts(export)]
 pub enum ValueType {
   /// Element does not have a meaningful value
   None,

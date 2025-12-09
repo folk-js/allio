@@ -4,7 +4,7 @@
  * Semantic UI role (cross-platform).
  *
  * These roles are inspired by WAI-ARIA but simplified for our use case.
- * Platform mappings (macOS AXRole strings, Windows UIA ControlTypes) are
+ * Platform mappings (macOS `AXRole` strings, Windows UIA `ControlTypes`) are
  * handled by the platform layer. See `platform::map_role_from_platform`.
  */
 export type Role = "application" | "window" | "document" | "group" | "scrollarea" | "toolbar" | "menu" | "menubar" | "menuitem" | "tab" | "tablist" | "list" | "listitem" | "table" | "row" | "cell" | "tree" | "treeitem" | "button" | "link" | "textfield" | "textarea" | "searchfield" | "combobox" | "checkbox" | "switch" | "radiobutton" | "slider" | "stepper" | "progressbar" | "statictext" | "heading" | "image" | "separator" | "genericgroup" | "genericelement" | "unknown";

@@ -23,7 +23,7 @@ use ts_rs::TS;
 /// Use `Role::expects_integer()` to know if display should truncate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(tag = "type", content = "value")]
-#[ts(export, export_to = "packages/axio-client/src/types/generated/")]
+#[ts(export)]
 pub enum Value {
   /// Text content (text fields, labels)
   String(String),
