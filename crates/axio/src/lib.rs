@@ -51,19 +51,19 @@ impl Axio {
     core::element_ops::get_element_at_position(self, x, y)
   }
 
-  /// Fetch and register children of element.
-  pub fn children(&self, element_id: ElementId, max_children: usize) -> AxioResult<Vec<AXElement>> {
-    core::element_ops::children(self, element_id, max_children)
+  /// Fetch and register children of element from platform.
+  pub fn fetch_children(&self, element_id: ElementId, max_children: usize) -> AxioResult<Vec<AXElement>> {
+    core::element_ops::fetch_children(self, element_id, max_children)
   }
 
-  /// Fetch and register parent of element (None if element is root).
-  pub fn parent(&self, element_id: ElementId) -> AxioResult<Option<AXElement>> {
-    core::element_ops::parent(self, element_id)
+  /// Fetch and register parent of element from platform (None if element is root).
+  pub fn fetch_parent(&self, element_id: ElementId) -> AxioResult<Option<AXElement>> {
+    core::element_ops::fetch_parent(self, element_id)
   }
 
-  /// Refresh element from platform (re-fetch attributes).
-  pub fn refresh(&self, element_id: ElementId) -> AxioResult<AXElement> {
-    core::element_ops::refresh_element(self, element_id)
+  /// Fetch fresh element attributes from platform.
+  pub fn fetch_element(&self, element_id: ElementId) -> AxioResult<AXElement> {
+    core::element_ops::fetch_element(self, element_id)
   }
 
   /// Write a typed value to an element.
@@ -91,17 +91,14 @@ impl Axio {
     core::element_ops::get_window_root(self, window_id)
   }
 
-  /// Get currently focused element and text selection for a window.
-  pub fn window_focus(
+  /// Fetch currently focused element and text selection for a window from platform.
+  pub fn fetch_window_focus(
     &self,
     window_id: WindowId,
   ) -> AxioResult<(Option<AXElement>, Option<TextSelection>)> {
     let window = self
       .get_window(window_id)
       .ok_or(AxioError::WindowNotFound(window_id))?;
-    Ok(core::element_ops::get_current_focus(
-      self,
-      window.process_id.0,
-    ))
+    Ok(core::element_ops::fetch_focus(self, window.process_id.0))
   }
 }

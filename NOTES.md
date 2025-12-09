@@ -7,6 +7,7 @@ important TODOs:
 - our watch logic is a bit weird, we special case destruction. can we simplify this? Same should be investigated for other notifications and state changes. Should element_watch and destruction_watch be merged? Would it make sense for watch+unwatch to just take a list of notifications, which are added/removed from the watch set (which we'd use to not double-subscribe to notifications)? Would this approach work for macOS, are there any platform-specific idiosyncrasies to consider here?
 - for watching, actions, getting/setting values: can we make these both more flexible (watch+unwatch takes a list of notifications, actions takes a list of actions, etc) while also improving type safety? these seem perhaps at odds. E.g. we use specifically the destruction notification for cleaning up our state, but this feels special, and its a pattern that extends beyond just destruction.
 - We do a bit of stuff like `let app_handle = ElementHandle::new(app_element(pid));` which feels off. app element = process lifetime right? should this be part of ProcessState or something?
+- wanna know more about "Used through concrete type (trait bound satisfied)"
 - add mock platform + fuzz for testing
 
 TODOs:

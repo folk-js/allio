@@ -10,6 +10,7 @@ Handles:
 
 use objc2_application_services::AXError;
 use objc2_core_foundation::CFString;
+use std::collections::HashSet;
 use std::ffi::c_void;
 
 use super::handles::{ElementHandle, ObserverHandle};
@@ -24,12 +25,57 @@ use crate::core::Axio;
 use crate::types::{AxioError, AxioResult, ElementId};
 
 /// Inner implementation of WatchHandle for macOS.
-/// Handles unsubscription automatically when dropped.
+/// Manages a set of notifications for an element. Unsubscribes on drop.
 pub(crate) struct WatchHandleInner {
   observer: ObserverHandle,
   handle: ElementHandle,
   context: *mut ObserverContextHandle,
-  notifications: Vec<Notification>,
+  notifications: HashSet<Notification>,
+}
+
+impl WatchHandleInner {
+  /// Add notifications to the watch set.
+  /// Already-subscribed notifications are skipped.
+  pub(crate) fn add(&mut self, notifs: &[Notification]) -> usize {
+    let mut added = 0;
+    for notif in notifs {
+      if self.notifications.contains(notif) {
+        continue;
+      }
+      let notif_str = notification_to_macos(*notif);
+      let notif_cfstring = CFString::from_str(notif_str);
+      let result = unsafe {
+        self.observer.inner().add_notification(
+          self.handle.inner(),
+          &notif_cfstring,
+          self.context.cast::<c_void>(),
+        )
+      };
+      if result == AXError::Success {
+        self.notifications.insert(*notif);
+        added += 1;
+      }
+    }
+    added
+  }
+
+  /// Remove notifications from the watch set.
+  pub(crate) fn remove(&mut self, notifs: &[Notification]) {
+    for notif in notifs {
+      if !self.notifications.contains(notif) {
+        continue;
+      }
+      let notif_str = notification_to_macos(*notif);
+      let notif_cfstring = CFString::from_str(notif_str);
+      unsafe {
+        let _ = self
+          .observer
+          .inner()
+          .remove_notification(self.handle.inner(), &notif_cfstring);
+      }
+      self.notifications.remove(notif);
+    }
+  }
 }
 
 impl Drop for WatchHandleInner {
@@ -50,74 +96,31 @@ impl Drop for WatchHandleInner {
   }
 }
 
-/// Watch for element destruction.
-/// Returns a WatchHandleInner that unsubscribes when dropped.
-pub(super) fn watch_destruction(
+/// Create a watch handle for an element with initial notifications.
+pub(super) fn create_watch(
   observer: &ObserverHandle,
   handle: &ElementHandle,
   element_id: ElementId,
+  initial_notifications: &[Notification],
   axio: Axio,
 ) -> AxioResult<WatchHandleInner> {
   let context = register_observer_context(element_id, axio);
-  let notification = Notification::Destroyed;
 
-  let notif_str = notification_to_macos(notification);
-  let notif_cfstring = CFString::from_str(notif_str);
-  let result = unsafe {
-    observer
-      .inner()
-      .add_notification(handle.inner(), &notif_cfstring, context.cast::<c_void>())
-  };
-
-  if result != AXError::Success {
-    unregister_observer_context(context);
-    return Err(AxioError::ObserverError(format!(
-      "Failed to register destruction notification for element {element_id}: {result:?}"
-    )));
-  }
-
-  Ok(WatchHandleInner {
-    observer: observer.clone(),
-    handle: handle.clone(),
-    context,
-    notifications: vec![notification],
-  })
-}
-
-/// Watch an element for notifications.
-/// Returns a WatchHandleInner that unsubscribes when dropped.
-pub(super) fn watch_element(
-  observer: &ObserverHandle,
-  handle: &ElementHandle,
-  element_id: ElementId,
-  notifications: &[Notification],
-  axio: Axio,
-) -> AxioResult<WatchHandleInner> {
-  if notifications.is_empty() {
-    return Err(AxioError::NotSupported(
-      "No notifications to subscribe".into(),
-    ));
-  }
-
-  let context = register_observer_context(element_id, axio);
-
-  let mut registered = Vec::new();
-  for notification in notifications {
-    let notif_str = notification_to_macos(*notification);
+  let mut notifications = HashSet::new();
+  for notif in initial_notifications {
+    let notif_str = notification_to_macos(*notif);
     let notif_cfstring = CFString::from_str(notif_str);
-    unsafe {
-      let result = observer.inner().add_notification(
-        handle.inner(),
-        &notif_cfstring,
-        context.cast::<c_void>(),
-      );
-      if result == AXError::Success {
-        registered.push(*notification);
-      }
+    let result = unsafe {
+      observer
+        .inner()
+        .add_notification(handle.inner(), &notif_cfstring, context.cast::<c_void>())
+    };
+    if result == AXError::Success {
+      notifications.insert(*notif);
     }
   }
 
-  if registered.is_empty() {
+  if notifications.is_empty() && !initial_notifications.is_empty() {
     unregister_observer_context(context);
     return Err(AxioError::ObserverError(
       "Failed to register any notifications".into(),
@@ -128,7 +131,7 @@ pub(super) fn watch_element(
     observer: observer.clone(),
     handle: handle.clone(),
     context,
-    notifications: registered,
+    notifications,
   })
 }
 

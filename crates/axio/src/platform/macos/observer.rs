@@ -236,7 +236,7 @@ fn handle_element_notification(
 
     Notification::ChildrenChanged => {
       // Re-fetch children - this registers new ones and updates the children list
-      if let Err(e) = crate::core::element_ops::children(axio, element_id, 1000) {
+      if let Err(e) = crate::core::element_ops::fetch_children(axio, element_id, 1000) {
         log::debug!("Failed to refresh children: {e}");
       }
     }

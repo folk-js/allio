@@ -108,17 +108,19 @@ pub fn dispatch(axio: &Axio, request: RpcRequest) -> Result<RpcResponse, String>
       element_id,
       max_children,
     } => {
-      let children = axio.children(element_id, max_children).map_err(|e| e.to_string())?;
+      let children = axio
+        .fetch_children(element_id, max_children)
+        .map_err(|e| e.to_string())?;
       Ok(RpcResponse::Elements(children))
     }
 
     RpcRequest::Parent { element_id } => {
-      let parent = axio.parent(element_id).map_err(|e| e.to_string())?;
+      let parent = axio.fetch_parent(element_id).map_err(|e| e.to_string())?;
       Ok(RpcResponse::OptionalElement(parent.map(Box::new)))
     }
 
     RpcRequest::Refresh { element_id } => {
-      let element = axio.refresh(element_id).map_err(|e| e.to_string())?;
+      let element = axio.fetch_element(element_id).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Element(Box::new(element)))
     }
 

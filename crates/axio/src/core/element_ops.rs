@@ -110,8 +110,8 @@ pub(crate) fn build_and_register_element(
 
 // === Element Discovery ===
 
-/// Fetch and register children of an element.
-pub(crate) fn children(
+/// Fetch and register children of an element from platform.
+pub(crate) fn fetch_children(
   axio: &Axio,
   parent_id: ElementId,
   max_children: usize,
@@ -141,8 +141,8 @@ pub(crate) fn children(
   Ok(children)
 }
 
-/// Fetch and register parent of an element.
-pub(crate) fn parent(axio: &Axio, element_id: ElementId) -> AxioResult<Option<AXElement>> {
+/// Fetch and register parent of an element from platform.
+pub(crate) fn fetch_parent(axio: &Axio, element_id: ElementId) -> AxioResult<Option<AXElement>> {
   let (parent_handle, window_id, pid) = axio.with_element(element_id, |e| {
     (e.handle.parent(), e.element.window_id, e.pid())
   })?;
@@ -160,8 +160,8 @@ pub(crate) fn parent(axio: &Axio, element_id: ElementId) -> AxioResult<Option<AX
   ))
 }
 
-/// Refresh an element's attributes from the platform.
-pub(crate) fn refresh_element(axio: &Axio, element_id: ElementId) -> AxioResult<AXElement> {
+/// Fetch fresh attributes for an element from platform.
+pub(crate) fn fetch_element(axio: &Axio, element_id: ElementId) -> AxioResult<AXElement> {
   let (attrs, raw_role, window_id, pid, is_root, parent_id, existing_children) = axio
     .with_element(element_id, |e| {
       (
@@ -244,8 +244,6 @@ const HIT_TEST_MAX_DEPTH: u8 = 10;
 /// Get the accessibility element at a specific screen position.
 /// Uses retry logic to handle Chromium/Electron lazy initialization.
 pub(crate) fn get_element_at_position(axio: &Axio, x: f64, y: f64) -> AxioResult<AXElement> {
-  use crate::platform::{CurrentPlatform, Platform};
-
   // First, find which TRACKED window is at this point.
   // This ensures we only hit-test within apps we're monitoring (excludes axio overlay).
   let window = axio.find_window_at_point(x, y).ok_or_else(|| {
@@ -254,9 +252,11 @@ pub(crate) fn get_element_at_position(axio: &Axio, x: f64, y: f64) -> AxioResult
   let window_id = window.id;
   let pid = window.process_id.0;
 
-  // Get the app element for the tracked window's process.
+  // Get the app element handle from ProcessState (stored at process creation time).
   // This ensures we only query within the correct app.
-  let app_handle = CurrentPlatform::app_element(pid);
+  let app_handle = axio
+    .get_app_handle(pid)
+    .ok_or_else(|| AxioError::Internal(format!("Process {pid} not registered")))?;
 
   let mut element_handle = None;
   let mut fallback_container = None;
@@ -316,14 +316,19 @@ pub(crate) fn get_element_at_position(axio: &Axio, x: f64, y: f64) -> AxioResult
   })
 }
 
-/// Query the currently focused element and selection for an app.
-pub(crate) fn get_current_focus(
+/// Fetch the currently focused element and selection for an app from platform.
+pub(crate) fn fetch_focus(
   axio: &Axio,
   pid: u32,
 ) -> (Option<AXElement>, Option<crate::types::TextSelection>) {
   use crate::platform::{CurrentPlatform, Platform};
 
-  let Some(focused_handle) = CurrentPlatform::focused_element(pid) else {
+  // Get app handle from ProcessState
+  let Some(app_handle) = axio.get_app_handle(pid) else {
+    return (None, None);
+  };
+
+  let Some(focused_handle) = CurrentPlatform::focused_element(&app_handle) else {
     return (None, None);
   };
 
@@ -346,14 +351,13 @@ pub(crate) fn get_current_focus(
     return (None, None);
   };
 
-  let selection =
-    focused_handle
-      .get_selection()
-      .map(|(text, range)| crate::types::TextSelection {
-        element_id: element.id,
-        text,
-        range,
-      });
+  let selection = focused_handle
+    .get_selection()
+    .map(|(text, range)| crate::types::TextSelection {
+      element_id: element.id,
+      text,
+      range,
+    });
 
   (Some(element), selection)
 }

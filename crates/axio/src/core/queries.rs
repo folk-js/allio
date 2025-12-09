@@ -145,6 +145,17 @@ impl Axio {
     }
   }
 
+  /// Get the app element handle for a process.
+  /// Returns None if the process hasn't been registered yet.
+  pub(crate) fn get_app_handle(&self, pid: u32) -> Option<Handle> {
+    self
+      .state
+      .read()
+      .processes
+      .get(&crate::types::ProcessId(pid))
+      .map(|p| p.app_handle.clone())
+  }
+
   /// Access element state via closure.
   ///
   /// Use this to extract what you need from element state without

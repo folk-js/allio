@@ -13,8 +13,10 @@ use std::collections::HashSet;
 
 impl Axio {
   /// Get or create process state for a PID.
-  /// Creates the `AXObserver` if this is a new process.
+  /// Creates the `AXObserver` and app handle if this is a new process.
   pub(crate) fn get_or_create_process(&self, pid: u32) -> AxioResult<ProcessId> {
+    use crate::platform::{CurrentPlatform, Platform};
+
     let process_id = ProcessId(pid);
 
     // Fast path: check if already exists
@@ -22,8 +24,9 @@ impl Axio {
       return Ok(process_id);
     }
 
-    // Slow path: create observer and insert
+    // Slow path: create observer and app handle
     let observer = platform::create_observer(pid, self.clone())?;
+    let app_handle = CurrentPlatform::app_element(pid);
 
     // Subscribe to app-level notifications (focus, selection)
     if let Err(e) = observer.subscribe_app_notifications(pid, self.clone()) {
@@ -34,6 +37,7 @@ impl Axio {
       process_id,
       ProcessState {
         observer,
+        app_handle,
         focused_element: None,
         last_selection: None,
       },
@@ -492,20 +496,25 @@ impl Axio {
     }
   }
 
-  /// Subscribe to destruction notification for an element.
+  /// Create watch for an element with destruction notification.
   fn subscribe_destruction(elem_state: &mut ElementState, observer: &Observer, axio: &Axio) {
-    if elem_state.destruction_watch.is_some() {
+    if elem_state.watch.is_some() {
       return;
     }
 
-    match observer.watch_destruction(&elem_state.handle, elem_state.element.id, axio.clone()) {
+    // Create watch with Destroyed notification - additional notifications added via watch_element
+    match observer.create_watch(
+      &elem_state.handle,
+      elem_state.element.id,
+      &[Notification::Destroyed],
+      axio.clone(),
+    ) {
       Ok(watch_handle) => {
-        elem_state.destruction_watch = Some(watch_handle);
-        elem_state.subscriptions.insert(Notification::Destroyed);
+        elem_state.watch = Some(watch_handle);
       }
       Err(e) => {
         log::debug!(
-          "Failed to register destruction for element {} (role: {}): {:?}",
+          "Failed to create watch for element {} (role: {}): {:?}",
           elem_state.element.id,
           elem_state.raw_role,
           e
@@ -584,11 +593,8 @@ impl Axio {
   }
 
   /// Unsubscribe from all notifications for an element.
-  /// With WatchHandle, this just drops the handles (RAII cleanup).
+  /// Dropping the watch handle automatically unsubscribes (RAII).
   fn unsubscribe_all(elem_state: &mut ElementState, _observer: &Observer) {
-    // Drop the watch handles - this automatically unsubscribes
-    elem_state.destruction_watch.take();
-    elem_state.element_watch.take();
-    elem_state.subscriptions.clear();
+    elem_state.watch.take();
   }
 }

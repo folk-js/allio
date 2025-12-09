@@ -74,8 +74,7 @@ impl Platform for MacOS {
     window::enable_accessibility_for_pid(crate::ProcessId(pid));
   }
 
-  fn focused_element(pid: u32) -> Option<Self::Handle> {
-    let app_handle = ElementHandle::new(util::app_element(pid));
+  fn focused_element(app_handle: &Self::Handle) -> Option<Self::Handle> {
     app_handle.get_element("AXFocusedUIElement")
   }
 
@@ -129,24 +128,15 @@ impl PlatformObserver for ObserverHandle {
     notifications::subscribe_app_notifications(pid, self, axio)
   }
 
-  fn watch_destruction(
+  fn create_watch(
     &self,
     handle: &Self::Handle,
     element_id: ElementId,
+    initial_notifications: &[Notification],
     axio: Axio,
   ) -> AxioResult<WatchHandle> {
-    let inner = notifications::watch_destruction(self, handle, element_id, axio)?;
-    Ok(WatchHandle { inner })
-  }
-
-  fn watch_element(
-    &self,
-    handle: &Self::Handle,
-    element_id: ElementId,
-    notifs: &[Notification],
-    axio: Axio,
-  ) -> AxioResult<WatchHandle> {
-    let inner = notifications::watch_element(self, handle, element_id, notifs, axio)?;
+    let inner =
+      notifications::create_watch(self, handle, element_id, initial_notifications, axio)?;
     Ok(WatchHandle { inner })
   }
 }

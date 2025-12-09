@@ -2,15 +2,16 @@
 State types for the Axio registry.
 */
 
-use crate::accessibility::Notification;
 use crate::platform::{Handle, Observer, WatchHandle};
 use crate::types::{AXElement, AXWindow, ElementId, ProcessId, TextSelection, WindowId};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 /// Per-process state: owns the `AXObserver` for this application.
 pub(crate) struct ProcessState {
   /// The observer for this process (one per PID).
   pub(crate) observer: Observer,
+  /// The app element handle (lives for process lifetime).
+  pub(crate) app_handle: Handle,
   /// Currently focused element in this app.
   pub(crate) focused_element: Option<ElementId>,
   /// Last selection state for deduplication.
@@ -25,7 +26,7 @@ pub(crate) struct WindowState {
   pub(crate) handle: Option<Handle>,
 }
 
-/// Per-element state: element data + platform handle + subscriptions.
+/// Per-element state: element data + platform handle + watch.
 pub(crate) struct ElementState {
   /// The element data (what we return to callers).
   pub(crate) element: AXElement,
@@ -37,16 +38,13 @@ pub(crate) struct ElementState {
   pub(crate) parent_hash: Option<u64>,
   /// Raw platform role string, e.g. "AXButton" (for role mapping).
   pub(crate) raw_role: String,
-  /// Active notification subscriptions.
-  pub(crate) subscriptions: HashSet<Notification>,
-  /// Destruction watch handle (unsubscribes on drop).
-  pub(crate) destruction_watch: Option<WatchHandle>,
-  /// Element watch handle (unsubscribes on drop).
-  pub(crate) element_watch: Option<WatchHandle>,
+  /// Watch handle managing all notification subscriptions.
+  /// Created at registration (with Destroyed), additional notifications added via watch_element.
+  pub(crate) watch: Option<WatchHandle>,
 }
 
 impl ElementState {
-  /// Create a new element state (subscriptions initialized empty).
+  /// Create a new element state (no watch yet - added during registration).
   pub(crate) fn new(
     element: AXElement,
     handle: Handle,
@@ -60,9 +58,7 @@ impl ElementState {
       hash,
       parent_hash,
       raw_role,
-      subscriptions: HashSet::new(),
-      destruction_watch: None,
-      element_watch: None,
+      watch: None,
     }
   }
 
