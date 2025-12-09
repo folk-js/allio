@@ -48,15 +48,15 @@ pub fn start_polling(config: PollingOptions) -> PollingHandle {
 pub mod elements {
   use crate::platform;
   use crate::registry;
-  use crate::types::{AXElement, AxioResult, ElementId, TextSelection};
+  use crate::types::{AXElement, AxioResult, ElementId, WindowId};
 
   /// Discover element at screen coordinates.
   pub fn at(x: f64, y: f64) -> AxioResult<AXElement> {
     platform::get_element_at_position(x, y)
   }
 
-  /// Get cached element by ID.
-  pub fn get(element_id: ElementId) -> AxioResult<AXElement> {
+  /// Get cached element by ID. Returns None if not in registry.
+  pub fn get(element_id: ElementId) -> Option<AXElement> {
     registry::get_element(element_id)
   }
 
@@ -96,13 +96,13 @@ pub mod elements {
   }
 
   /// Stop watching element.
-  pub fn unwatch(element_id: ElementId) {
-    registry::unwatch_element(element_id);
+  pub fn unwatch(element_id: ElementId) -> AxioResult<()> {
+    registry::unwatch_element(element_id)
   }
 
-  /// Get currently focused element and selection for a given PID.
-  pub fn focus(pid: u32) -> (Option<AXElement>, Option<TextSelection>) {
-    platform::get_current_focus(pid)
+  /// Get the root element for a window.
+  pub fn window(window_id: WindowId) -> AxioResult<AXElement> {
+    platform::get_window_root(window_id)
   }
 
   /// Get all elements in the registry.
@@ -115,7 +115,7 @@ pub mod elements {
 pub mod windows {
   use crate::platform;
   use crate::registry;
-  use crate::types::{AXElement, AXWindow, AxioResult, WindowId};
+  use crate::types::{AXElement, AXWindow, AxioResult, TextSelection, WindowId};
 
   /// Get all current windows.
   pub fn all() -> Vec<AXWindow> {
@@ -128,7 +128,7 @@ pub mod windows {
   }
 
   /// Get the focused window ID (None if desktop is focused).
-  pub fn focused() -> Option<WindowId> {
+  pub fn focused_id() -> Option<WindowId> {
     registry::get_focused_window()
   }
 
@@ -137,24 +137,15 @@ pub mod windows {
     registry::get_depth_order()
   }
 
-  /// Get the root element for a window.
-  pub fn root(window_id: WindowId) -> AxioResult<AXElement> {
-    platform::get_window_root(window_id)
-  }
-}
-
-/// Screen utilities: dimensions and mouse position.
-pub mod screen {
-  use crate::platform;
-  use crate::types::Point;
-
-  /// Get main screen dimensions (width, height).
-  pub fn dimensions() -> (f64, f64) {
+  /// Get screen dimensions (width, height) - the coordinate space windows exist in.
+  pub fn screen_size() -> (f64, f64) {
     platform::get_main_screen_dimensions()
   }
 
-  /// Get current mouse position on screen.
-  pub fn mouse_position() -> Option<Point> {
-    platform::get_mouse_position()
+  /// Get currently focused element and text selection for a window.
+  pub fn focus(window_id: WindowId) -> AxioResult<(Option<AXElement>, Option<TextSelection>)> {
+    let window = registry::get_window(window_id)
+      .ok_or_else(|| crate::types::AxioError::WindowNotFound(window_id))?;
+    Ok(platform::get_current_focus(window.process_id.0))
   }
 }

@@ -215,7 +215,7 @@ fn handle_element_notification(
     Notification::ValueChanged => {
       let handle = ElementHandle::new(ax_element);
       let attrs = handle.get_attributes(None);
-      if let Ok(mut element) = crate::registry::get_element(element_id) {
+      if let Some(mut element) = crate::registry::get_element(element_id) {
         element.value = attrs.value;
         if let Err(e) = crate::registry::update_element(element_id, element) {
           log::debug!("Failed to update element value: {e}");
@@ -225,7 +225,7 @@ fn handle_element_notification(
 
     Notification::TitleChanged => {
       let handle = ElementHandle::new(ax_element);
-      if let Ok(mut element) = crate::registry::get_element(element_id) {
+      if let Some(mut element) = crate::registry::get_element(element_id) {
         element.label = handle.get_string("AXTitle");
         if let Err(e) = crate::registry::update_element(element_id, element) {
           log::debug!("Failed to update element title: {e}");

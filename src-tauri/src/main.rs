@@ -437,7 +437,7 @@ fn create_rpc_handler(app_handle: AppHandle) -> axio::ws::CustomRpcHandler {
 }
 
 fn setup_main_window(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-  let (width, height) = axio::screen::dimensions();
+  let (width, height) = axio::windows::screen_size();
   let window = app
     .get_webview_window("main")
     .ok_or("Main window not found")?;

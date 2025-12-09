@@ -575,19 +575,22 @@ impl Registry {
   }
 
   /// Unsubscribe from watch notifications (keeps destruction tracking).
-  fn unwatch_internal(&mut self, element_id: &ElementId) {
-    let Some(state) = self.elements.get_mut(element_id) else {
-      return;
-    };
+  fn unwatch_internal(&mut self, element_id: &ElementId) -> AxioResult<()> {
+    let state = self
+      .elements
+      .get_mut(element_id)
+      .ok_or(AxioError::ElementNotFound(*element_id))?;
 
+    // Not being watched is not an error - idempotent
     let Some(context) = state.watch_context.take() else {
-      return;
+      return Ok(());
     };
 
     let process_id = ProcessId(state.pid);
-    let Some(process) = self.processes.get(&process_id) else {
-      return;
-    };
+    let process = self
+      .processes
+      .get(&process_id)
+      .ok_or_else(|| AxioError::Internal("Process not found during unwatch".into()))?;
 
     let notifs: Vec<_> = state
       .subscriptions
@@ -607,6 +610,8 @@ impl Registry {
     state
       .subscriptions
       .retain(|n| *n == Notification::Destroyed);
+
+    Ok(())
   }
 }
 
@@ -747,9 +752,9 @@ pub(crate) fn update_focus(pid: u32, element: AXElement) -> Option<ElementId> {
 
   // Auto-unwatch previous element
   if let Some(prev_id) = previous_id {
-    if let Ok(prev_elem) = get_element(prev_id) {
+    if let Some(prev_elem) = get_element(prev_id) {
       if prev_elem.role.auto_watch_on_focus() || prev_elem.role.is_writable() {
-        unwatch_element(prev_id);
+        drop(unwatch_element(prev_id));
       }
     }
   }
@@ -813,14 +818,9 @@ pub(crate) fn register_element(
   Registry::write(|r| r.register_internal(element, handle, pid, platform_role))
 }
 
-/// Get element by ID.
-pub(crate) fn get_element(element_id: ElementId) -> AxioResult<AXElement> {
-  Registry::read(|r| {
-    r.elements
-      .get(&element_id)
-      .map(|e| e.element.clone())
-      .ok_or(AxioError::ElementNotFound(element_id))
-  })
+/// Get element by ID. Returns None if not in registry.
+pub(crate) fn get_element(element_id: ElementId) -> Option<AXElement> {
+  Registry::read(|r| r.elements.get(&element_id).map(|e| e.element.clone()))
 }
 
 /// Get element by hash (for checking if element is already registered).
@@ -914,8 +914,8 @@ pub(crate) fn watch_element(element_id: ElementId) -> AxioResult<()> {
 }
 
 /// Stop watching an element.
-pub(crate) fn unwatch_element(element_id: ElementId) {
-  Registry::write(|r| r.unwatch_internal(&element_id));
+pub(crate) fn unwatch_element(element_id: ElementId) -> AxioResult<()> {
+  Registry::write(|r| r.unwatch_internal(&element_id))
 }
 
 /// Access stored element for operations (click, write).

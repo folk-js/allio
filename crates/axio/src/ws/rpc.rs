@@ -5,7 +5,7 @@ RPC request/response types and dispatch.
 #![allow(missing_docs)]
 
 use crate::accessibility::Value as AXValue;
-use crate::{elements, windows, AXElement, ElementId, Snapshot, WindowId};
+use crate::{elements, AXElement, ElementId, Snapshot, WindowId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use ts_rs::TS;
@@ -93,12 +93,13 @@ pub fn dispatch(request: RpcRequest) -> Result<RpcResponse, String> {
     }
 
     RpcRequest::Get { element_id } => {
-      let element = elements::get(element_id).map_err(|e| e.to_string())?;
+      let element =
+        elements::get(element_id).ok_or_else(|| format!("Element not found: {element_id}"))?;
       Ok(RpcResponse::Element(Box::new(element)))
     }
 
     RpcRequest::WindowRoot { window_id } => {
-      let element = windows::root(window_id).map_err(|e| e.to_string())?;
+      let element = elements::window(window_id).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Element(Box::new(element)))
     }
 
@@ -136,7 +137,7 @@ pub fn dispatch(request: RpcRequest) -> Result<RpcResponse, String> {
     }
 
     RpcRequest::Unwatch { element_id } => {
-      elements::unwatch(element_id);
+      elements::unwatch(element_id).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Null)
     }
   }
