@@ -16,8 +16,4 @@ depth_order: Array<WindowId>,
 /**
  * Current mouse position
  */
-mouse_position: Point | null, 
-/**
- * Whether accessibility permissions are granted
- */
-accessibility_enabled: boolean, };
+mouse_position: Point | null, };

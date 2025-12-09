@@ -53,8 +53,6 @@ pub struct Snapshot {
   pub depth_order: Vec<WindowId>,
   /// Current mouse position
   pub mouse_position: Option<Point>,
-  /// Whether accessibility permissions are granted
-  pub accessibility_enabled: bool,
 }
 
 /// Events emitted when state changes.

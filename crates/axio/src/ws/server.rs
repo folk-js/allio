@@ -130,12 +130,7 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
   println!("[client] connected");
 
   // Send initial state as sync:init (run on blocking thread pool)
-  let init_result = tokio::task::spawn_blocking(|| {
-    let mut init = crate::snapshot();
-    init.accessibility_enabled = crate::verify_permissions();
-    init
-  })
-  .await;
+  let init_result = tokio::task::spawn_blocking(crate::snapshot).await;
 
   let Ok(init) = init_result else {
     return;

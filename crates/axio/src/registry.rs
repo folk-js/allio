@@ -669,7 +669,6 @@ pub(crate) fn get_depth_order() -> Vec<WindowId> {
 }
 
 /// Get a snapshot of the current registry state for sync.
-/// Note: `accessibility_enabled` must be set by caller (platform-specific check).
 pub(crate) fn snapshot() -> crate::types::Snapshot {
   Registry::read(|r| {
     let (focused_element, selection) = r
@@ -694,7 +693,6 @@ pub(crate) fn snapshot() -> crate::types::Snapshot {
       selection,
       depth_order: r.depth_order.clone(),
       mouse_position: r.mouse_position,
-      accessibility_enabled: false, // Caller must set this
     }
   })
 }

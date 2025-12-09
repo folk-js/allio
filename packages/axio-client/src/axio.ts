@@ -393,7 +393,6 @@ export class AXIO extends EventEmitter<AxioEvents> {
           focused_element,
           selection,
           depth_order,
-          accessibility_enabled,
         } = event.data;
         this.windows.clear();
         this.elements.clear();
@@ -403,16 +402,6 @@ export class AXIO extends EventEmitter<AxioEvents> {
         this.focusedElement = focused_element;
         this.selection = selection;
         this.depthOrder = depth_order;
-        this.log(
-          `synced: ${windows.length} windows, ${elements.length} elements`
-        );
-        if (!accessibility_enabled) {
-          this.logError(
-            "Accessibility permissions NOT granted!\n" +
-              "Go to System Preferences > Privacy & Security > Accessibility\n" +
-              "and add this application. You may need to remove and re-add it after rebuilding."
-          );
-        }
         break;
       }
 

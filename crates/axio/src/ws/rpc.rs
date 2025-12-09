@@ -83,8 +83,7 @@ pub fn dispatch_json(method: &str, args: &JsonValue) -> JsonValue {
 pub fn dispatch(request: RpcRequest) -> Result<RpcResponse, String> {
   match request {
     RpcRequest::Snapshot => {
-      let mut snapshot = crate::snapshot();
-      snapshot.accessibility_enabled = crate::verify_permissions();
+      let snapshot = crate::snapshot();
       Ok(RpcResponse::Snapshot(Box::new(snapshot)))
     }
 
