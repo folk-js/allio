@@ -171,6 +171,7 @@ mod tests {
   }
 
   #[test]
+  #[allow(let_underscore_drop)]
   fn from_impls() {
     let _: Value = "test".into();
     let _: Value = String::from("test").into();
