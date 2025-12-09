@@ -16,8 +16,7 @@ export type { Notification } from "./generated/Notification";
 export type { AXElement } from "./generated/AXElement";
 export type { AXWindow } from "./generated/AXWindow";
 export type { Bounds } from "./generated/Bounds";
-export type { Selection } from "./generated/Selection";
-export type { TextRange } from "./generated/TextRange";
+export type { TextSelection } from "./generated/TextSelection";
 
 // Events & RPC
 export type { Event } from "./generated/Event";

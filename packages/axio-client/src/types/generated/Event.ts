@@ -4,7 +4,13 @@ import type { AXWindow } from "./AXWindow";
 import type { ElementId } from "./ElementId";
 import type { Point } from "./Point";
 import type { Snapshot } from "./Snapshot";
-import type { TextRange } from "./TextRange";
 import type { WindowId } from "./WindowId";
 
-export type Event = { "event": "sync:init", "data": Snapshot } | { "event": "window:added", "data": { window: AXWindow, } } | { "event": "window:changed", "data": { window: AXWindow, } } | { "event": "window:removed", "data": { window_id: WindowId, } } | { "event": "element:added", "data": { element: AXElement, } } | { "event": "element:changed", "data": { element: AXElement, } } | { "event": "element:removed", "data": { element_id: ElementId, } } | { "event": "focus:window", "data": { window_id: WindowId | null, } } | { "event": "focus:element", "data": { element: AXElement, previous_element_id: ElementId | null, } } | { "event": "selection:changed", "data": { window_id: WindowId, element_id: ElementId, text: string, range: TextRange | null, } } | { "event": "mouse:position", "data": Point };
+/**
+ * Events emitted when state changes.
+ */
+export type Event = { "event": "sync:init", "data": Snapshot } | { "event": "window:added", "data": { window: AXWindow, } } | { "event": "window:changed", "data": { window: AXWindow, } } | { "event": "window:removed", "data": { window_id: WindowId, } } | { "event": "element:added", "data": { element: AXElement, } } | { "event": "element:changed", "data": { element: AXElement, } } | { "event": "element:removed", "data": { element_id: ElementId, } } | { "event": "focus:window", "data": { window_id: WindowId | null, } } | { "event": "focus:element", "data": { element: AXElement, previous_element_id: ElementId | null, } } | { "event": "selection:changed", "data": { window_id: WindowId, element_id: ElementId, text: string, 
+/**
+ * Character range as (start, end). End is exclusive. None if range is unknown.
+ */
+range: [number, number] | null, } } | { "event": "mouse:position", "data": Point };

@@ -41,9 +41,7 @@ function renderFocusAndSelection(): string {
         <div class="selection-text">"${escapeHtml(selection.text)}"</div>
         ${
           selection.range
-            ? `<div class="property"><span class="property-key">range</span><span class="property-value">${
-                selection.range.start
-              }..${selection.range.start + selection.range.length}</span></div>`
+            ? `<div class="property"><span class="property-key">range</span><span class="property-value">${selection.range[0]}..${selection.range[1]}</span></div>`
             : ""
         }
       </div>

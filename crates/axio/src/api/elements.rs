@@ -5,7 +5,7 @@ All functions for discovering, querying, and interacting with UI elements.
 
 use crate::platform;
 use crate::registry;
-use crate::types::{AXElement, AxioResult, ElementId, Selection};
+use crate::types::{AXElement, AxioResult, ElementId, TextSelection};
 
 /// Discover element at screen coordinates.
 pub fn at(x: f64, y: f64) -> AxioResult<AXElement> {
@@ -58,7 +58,7 @@ pub fn unwatch(element_id: ElementId) {
 }
 
 /// Get currently focused element and selection for a given PID.
-pub fn focus(pid: u32) -> (Option<AXElement>, Option<Selection>) {
+pub fn focus(pid: u32) -> (Option<AXElement>, Option<TextSelection>) {
   platform::get_current_focus(pid)
 }
 

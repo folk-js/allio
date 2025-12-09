@@ -81,7 +81,7 @@ pub(crate) fn get_current_focus(
   pid: u32,
 ) -> (
   Option<crate::types::AXElement>,
-  Option<crate::types::Selection>,
+  Option<crate::types::TextSelection>,
 ) {
   let app_handle = ElementHandle::new(app_element(pid));
 
@@ -99,7 +99,7 @@ pub(crate) fn get_current_focus(
   };
 
   let selection =
-    get_selection_from_handle(&focused_handle).map(|(text, range)| crate::types::Selection {
+    get_selection_from_handle(&focused_handle).map(|(text, range)| crate::types::TextSelection {
       element_id: element.id,
       text,
       range,
@@ -123,7 +123,8 @@ fn get_window_id_for_handle(handle: &ElementHandle, pid: u32) -> Option<WindowId
 }
 
 /// Get the selected text range from an element handle.
-fn get_selected_text_range(handle: &ElementHandle) -> Option<crate::types::TextRange> {
+/// Returns (start, end) tuple where end is exclusive.
+fn get_selected_text_range(handle: &ElementHandle) -> Option<(u32, u32)> {
   use objc2_application_services::AXValue as AXValueRef;
 
   let attr_name = CFString::from_static_str("AXSelectedTextRange");
@@ -140,10 +141,9 @@ fn get_selected_text_range(handle: &ElementHandle) -> Option<crate::types::TextR
       AXValueType::CFRange,
       NonNull::new((&raw mut range).cast::<c_void>())?,
     ) {
-      Some(crate::types::TextRange {
-        start: range.location as u32,
-        length: range.length as u32,
-      })
+      let start = range.location as u32;
+      let end = (range.location + range.length) as u32;
+      Some((start, end))
     } else {
       None
     }
@@ -151,9 +151,7 @@ fn get_selected_text_range(handle: &ElementHandle) -> Option<crate::types::TextR
 }
 
 /// Get selected text and range from an element handle.
-fn get_selection_from_handle(
-  handle: &ElementHandle,
-) -> Option<(String, Option<crate::types::TextRange>)> {
+fn get_selection_from_handle(handle: &ElementHandle) -> Option<(String, Option<(u32, u32)>)> {
   let selected_text = handle.get_string("AXSelectedText")?;
   if selected_text.is_empty() {
     return None;

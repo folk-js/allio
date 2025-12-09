@@ -13,7 +13,7 @@ import type {
   AXWindow,
   ElementId,
   WindowId,
-  Selection,
+  TextSelection,
   Snapshot,
   Value,
 } from "./types";
@@ -147,7 +147,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
   // Focus tracking
   focusedWindow: WindowId | null = null;
   focusedElement: AXElement | null = null;
-  selection: Selection | null = null;
+  selection: TextSelection | null = null;
   passthrough = false;
 
   // === Options ===

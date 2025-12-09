@@ -40,7 +40,7 @@ use crate::accessibility::Notification;
 use crate::events;
 use crate::platform::{self, ElementHandle, ObserverHandle};
 use crate::types::{
-  AXElement, AXWindow, AxioError, AxioResult, ElementId, Event, ProcessId, Selection, WindowId,
+  AXElement, AXWindow, AxioError, AxioResult, ElementId, Event, ProcessId, TextSelection, WindowId,
 };
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -55,7 +55,7 @@ struct ProcessState {
   /// Currently focused element in this app.
   focused_element: Option<ElementId>,
   /// Last selection state for deduplication.
-  last_selection: Option<Selection>,
+  last_selection: Option<TextSelection>,
 }
 
 /// Per-window state.
@@ -776,9 +776,9 @@ pub(crate) fn update_selection(
   window_id: WindowId,
   element_id: ElementId,
   text: String,
-  range: Option<crate::types::TextRange>,
+  range: Option<(u32, u32)>,
 ) {
-  let new_selection = Selection {
+  let new_selection = TextSelection {
     element_id,
     text,
     range,

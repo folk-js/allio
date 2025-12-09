@@ -5,12 +5,39 @@ use serde::Serialize;
 use ts_rs::TS;
 
 /// Text selection within an element.
+///
+/// The `range` tuple is `(start, end)` - character positions within the element's text.
+/// End is exclusive, matching Rust's `Range` semantics.
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[ts(export)]
-pub struct Selection {
+pub struct TextSelection {
   pub element_id: ElementId,
   pub text: String,
-  pub range: Option<TextRange>,
+  /// Character range as (start, end). End is exclusive. None if range is unknown.
+  pub range: Option<(u32, u32)>,
+}
+
+impl TextSelection {
+  /// Length of the selection in characters.
+  pub const fn len(&self) -> Option<u32> {
+    match self.range {
+      Some((start, end)) => Some(end - start),
+      None => None,
+    }
+  }
+
+  /// Check if the selection is empty (cursor with no selection).
+  pub fn is_empty(&self) -> bool {
+    self.text.is_empty()
+  }
+
+  /// Check if a position falls within this selection's range.
+  pub const fn contains(&self, position: u32) -> bool {
+    match self.range {
+      Some((start, end)) => position >= start && position < end,
+      None => false,
+    }
+  }
 }
 
 /// Initial state sent on connection.
@@ -21,7 +48,7 @@ pub struct Snapshot {
   pub elements: Vec<AXElement>,
   pub focused_window: Option<WindowId>,
   pub focused_element: Option<AXElement>,
-  pub selection: Option<Selection>,
+  pub selection: Option<TextSelection>,
   /// Window IDs in z-order (front to back)
   pub depth_order: Vec<WindowId>,
   /// Current mouse position
@@ -72,39 +99,11 @@ pub enum Event {
     window_id: WindowId,
     element_id: ElementId,
     text: String,
-    range: Option<TextRange>,
+    /// Character range as (start, end). End is exclusive. None if range is unknown.
+    range: Option<(u32, u32)>,
   },
 
   // Input tracking
   #[serde(rename = "mouse:position")]
   MousePosition(Point),
 }
-
-/// Text selection range within an element.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, serde::Deserialize, TS)]
-#[ts(export)]
-pub struct TextRange {
-  pub start: u32,
-  pub length: u32,
-}
-
-impl TextRange {
-  pub const fn new(start: u32, length: u32) -> Self {
-    Self { start, length }
-  }
-
-  /// End position (exclusive).
-  pub const fn end(&self) -> u32 {
-    self.start + self.length
-  }
-
-  pub const fn is_empty(&self) -> bool {
-    self.length == 0
-  }
-
-  /// Check if a position falls within this range.
-  pub const fn contains(&self, position: u32) -> bool {
-    position >= self.start && position < self.end()
-  }
-}
-
