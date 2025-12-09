@@ -173,6 +173,7 @@ pub fn get_elements(&self, ids: &[ElementId]) -> Vec<AXElement>;
 pub fn get_focused_window(&self) -> Option<WindowId>;
 pub fn get_depth_order(&self) -> Vec<WindowId>;
 pub fn snapshot(&self) -> Snapshot;
+// TODO: ^ this should be get_snapshot()!
 ```
 
 ### Fetches (OS + cache)
