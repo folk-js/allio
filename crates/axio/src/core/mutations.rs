@@ -142,6 +142,20 @@ impl Axio {
   pub(crate) fn sync_mouse(&self, pos: crate::types::Point) {
     self.write(|s| s.set_mouse_position(pos));
   }
+
+  /// Fast path: update just a single window's bounds.
+  /// Used by event-driven mode when we know only one window moved.
+  /// Returns true if window exists and was updated (or bounds unchanged).
+  pub(crate) fn update_window_bounds(&self, window_id: WindowId, bounds: crate::types::Bounds) -> bool {
+    self.write(|s| {
+      // Check if window exists first
+      if !s.has_window(window_id) {
+        return false;
+      }
+      s.update_window_bounds(window_id, bounds);
+      true
+    })
+  }
 }
 
 // ============================================================================

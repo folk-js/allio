@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Window Outlines</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        background: transparent;
+        overflow: hidden;
+      }
+
+      .window-outline {
+        position: absolute;
+        border: 3px solid #ff3366;
+        pointer-events: none;
+        /* GPU composited for minimal latency */
+        will-change: transform;
+        transform: translateZ(0);
+      }
+
+      .window-outline.focused {
+        border-color: #00ff88;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="container"></div>
+    <script type="module" src="../src/outlines.ts"></script>
+  </body>
+</html>
+

@@ -381,6 +381,27 @@ impl State {
     true
   }
 
+  /// Fast path: update just bounds. Emits WindowChanged if different.
+  /// Used by event-driven mode for minimal latency on move events.
+  pub(crate) fn update_window_bounds(
+    &mut self,
+    id: WindowId,
+    bounds: crate::types::Bounds,
+  ) -> bool {
+    let Some(window) = self.windows.get_mut(&id) else {
+      return false;
+    };
+
+    if window.info.bounds == bounds {
+      return false;
+    }
+
+    window.info.bounds = bounds;
+    let info = window.info.clone();
+    self.emit(Event::WindowChanged { window: info });
+    true
+  }
+
   /// Set window handle (may be obtained lazily after initial insertion).
   pub(crate) fn set_window_handle(&mut self, id: WindowId, handle: Handle) {
     if let Some(window) = self.windows.get_mut(&id) {
@@ -563,6 +584,10 @@ impl State {
 
   pub(crate) fn get_window(&self, id: WindowId) -> Option<&AXWindow> {
     self.windows.get(&id).map(|w| &w.info)
+  }
+
+  pub(crate) fn has_window(&self, id: WindowId) -> bool {
+    self.windows.contains_key(&id)
   }
 
   pub(crate) fn get_window_handle(&self, id: WindowId) -> Option<&Handle> {

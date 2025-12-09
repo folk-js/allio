@@ -72,6 +72,7 @@ fn get_overlay_url(filename: &str) -> String {
 }
 
 const DEFAULT_OVERLAYS: &[&str] = &[
+  "outlines.html",
   "axtrees.html",
   "graph.html",
   "identifiers.html",

@@ -3,6 +3,10 @@ Internal polling implementation.
 
 Handles background polling for windows and mouse position.
 Consumers don't interact with this directly - polling is owned by `Axio`.
+
+Two modes are supported:
+- Thread-based polling: Polls at a fixed interval (default 8ms)
+- Event-driven (macOS): Uses SkyLight window server notifications for instant updates
 */
 
 use crate::core::Axio;
@@ -14,6 +18,9 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "macos")]
+use crate::platform::macos::window_events::{self, WindowEventsHandle};
+
 const DEFAULT_POLLING_INTERVAL_MS: u64 = 8;
 
 /// Internal implementation of the polling handle.
@@ -23,9 +30,14 @@ enum PollingImpl {
     stop_signal: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
   },
-  /// Display-synchronized polling (macOS only)
+  /// Event-driven via SkyLight window server notifications (macOS only).
+  /// Uses display link only for mouse position at vsync cadence.
   #[cfg(target_os = "macos")]
-  DisplayLink(DisplayLinkHandle),
+  WindowEvents {
+    events_handle: WindowEventsHandle,
+    /// Display link for mouse position polling (windows are event-driven)
+    mouse_display_link: Option<DisplayLinkHandle>,
+  },
 }
 
 /// Internal handle to control polling lifetime.
@@ -47,8 +59,14 @@ impl PollingHandle {
         stop_signal.store(true, Ordering::SeqCst);
       }
       #[cfg(target_os = "macos")]
-      PollingImpl::DisplayLink(handle) => {
-        handle.stop();
+      PollingImpl::WindowEvents {
+        events_handle,
+        mouse_display_link,
+      } => {
+        events_handle.stop();
+        if let Some(dl) = mouse_display_link {
+          dl.stop();
+        }
       }
     }
   }
@@ -122,11 +140,12 @@ pub struct AxioOptions {
   /// Filter out offscreen windows. Default: true.
   pub filter_offscreen: bool,
   /// Polling interval in milliseconds. Default: 8ms (~120fps).
-  /// Ignored when `use_display_link` is true.
+  /// Only used when `use_display_link` is false.
   pub interval_ms: u64,
-  /// Use `CVDisplayLink` for display-synchronized polling (macOS only, experimental).
-  /// When true, polling fires exactly once per display refresh (60Hz/120Hz).
-  /// Default: false (use fixed interval timer instead).
+  /// Use event-driven window updates via SkyLight (macOS only).
+  /// When true, window updates are received instantly from the Window Server
+  /// instead of being discovered via polling. Mouse position still polls at vsync.
+  /// Default: true.
   pub use_display_link: bool,
 }
 
@@ -137,7 +156,7 @@ impl Default for AxioOptions {
       filter_fullscreen: true,
       filter_offscreen: true,
       interval_ms: DEFAULT_POLLING_INTERVAL_MS,
-      use_display_link: false,
+      use_display_link: true,
     }
   }
 }
@@ -146,7 +165,7 @@ impl Default for AxioOptions {
 pub(crate) fn start_polling(axio: Axio, config: AxioOptions) -> PollingHandle {
   #[cfg(target_os = "macos")]
   if config.use_display_link {
-    return start_display_synced_polling(axio, config);
+    return start_event_driven(axio, config);
   }
 
   start_thread_polling(axio, config)
@@ -179,30 +198,54 @@ fn start_thread_polling(axio: Axio, config: AxioOptions) -> PollingHandle {
   }
 }
 
-/// Display-synchronized polling implementation (macOS only).
+/// Event-driven implementation using SkyLight window server notifications (macOS only).
+///
+/// Window updates come via SkyLight notifications (instant, no polling).
+/// Mouse position still uses display link for vsync-synchronized updates.
 #[cfg(target_os = "macos")]
-fn start_display_synced_polling(axio: Axio, config: AxioOptions) -> PollingHandle {
-  let handle = match CurrentPlatform::start_display_link(move || {
-    poll_iteration(&axio, &config);
-  }) {
-    Some(h) => h,
-    None => {
-      error!("Failed to start display-synced polling");
-      std::process::exit(1);
+fn start_event_driven(axio: Axio, config: AxioOptions) -> PollingHandle {
+  // Start SkyLight event listening for window updates
+  let events_handle = window_events::start_window_events(axio.clone(), config);
+
+  // Use display link for mouse position polling (synced to vsync)
+  let mouse_display_link = CurrentPlatform::start_display_link({
+    let axio = axio.clone();
+    move || {
+      let pos = CurrentPlatform::fetch_mouse_position();
+      axio.sync_mouse(pos);
     }
-  };
+  });
+
+  if mouse_display_link.is_none() {
+    error!("Failed to start display link for mouse polling");
+  }
 
   PollingHandle {
-    inner: PollingImpl::DisplayLink(handle),
+    inner: PollingImpl::WindowEvents {
+      events_handle,
+      mouse_display_link,
+    },
   }
 }
 
-/// Shared polling logic for both thread and display-link implementations.
+/// Shared polling logic - performs a full sync of windows and mouse.
 fn poll_iteration(axio: &Axio, config: &AxioOptions) {
   // Mouse position polling
   let pos = CurrentPlatform::fetch_mouse_position();
   axio.sync_mouse(pos);
 
+  if let Some(windows) = poll_windows(config) {
+    // Sync windows (handles add/update/remove + events + process creation)
+    axio.sync_windows(windows.clone());
+
+    // Focus tracking
+    let focused_window_id = windows.iter().find(|w| w.focused).map(|w| w.id);
+    axio.sync_focused_window(focused_window_id);
+  }
+}
+
+/// Perform a poll iteration. Exposed for event-driven mode to trigger full syncs.
+pub(crate) fn do_poll_iteration(axio: &Axio, config: &AxioOptions) {
   if let Some(windows) = poll_windows(config) {
     // Sync windows (handles add/update/remove + events + process creation)
     axio.sync_windows(windows.clone());

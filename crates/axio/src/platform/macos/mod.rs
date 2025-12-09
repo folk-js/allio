@@ -16,8 +16,10 @@ pub(crate) mod mapping;
 mod mouse;
 mod notifications;
 mod observer;
+pub(crate) mod skylight;
 mod util;
 mod window;
+pub(crate) mod window_events;
 mod window_list;
 
 // === Re-exports for internal use ===
