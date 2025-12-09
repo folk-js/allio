@@ -35,8 +35,6 @@ pub use types::*;
 pub use crate::core::Axio;
 pub use polling::AxioOptions;
 
-// === Axio Instance Methods ===
-
 impl Axio {
   /// Check if accessibility permissions are granted.
   pub fn verify_permissions() -> bool {
@@ -69,11 +67,7 @@ impl Axio {
   }
 
   /// Write a typed value to an element.
-  pub fn write(
-    &self,
-    element_id: ElementId,
-    value: &crate::accessibility::Value,
-  ) -> AxioResult<()> {
+  pub fn write(&self, element_id: ElementId, value: &accessibility::Value) -> AxioResult<()> {
     self.write_element_value(element_id, value)
   }
 
