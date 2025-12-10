@@ -135,12 +135,25 @@ pub(super) fn create_watch(
   })
 }
 
+/// Inner implementation of AppNotificationHandle for macOS.
+/// Cleans up the observer context when dropped.
+pub(crate) struct AppNotificationHandleInner {
+  context: *mut ObserverContextHandle,
+}
+
+impl Drop for AppNotificationHandleInner {
+  fn drop(&mut self) {
+    unregister_observer_context(self.context);
+  }
+}
+
 /// Subscribe to app-level notifications (focus, selection) on the application element.
+/// Returns a handle that cleans up subscriptions when dropped.
 pub(super) fn subscribe_app_notifications(
   pid: u32,
   observer: &ObserverHandle,
   axio: Axio,
-) -> AxioResult<()> {
+) -> AxioResult<AppNotificationHandleInner> {
   let app_el = app_element(pid);
   let context = register_process_context(pid, axio);
 
@@ -169,8 +182,5 @@ pub(super) fn subscribe_app_notifications(
     )));
   }
 
-  // TODO: This context is leaked when the process is removed.
-  // To fix: store the context handle in ProcessState and clean up on drop.
-  // Impact: minor memory leak (one entry per tracked process).
-  Ok(())
+  Ok(AppNotificationHandleInner { context })
 }

@@ -136,8 +136,9 @@ pub(crate) trait PlatformObserver: Send + Sync {
   type Handle: PlatformHandle;
 
   /// Subscribe to app-level focus and selection notifications.
-  /// Called once when process is registered. Lives for process lifetime.
-  fn subscribe_app_notifications(&self, pid: u32, axio: Axio) -> AxioResult<()>;
+  /// Called once when process is registered. Returns a handle that
+  /// cleans up subscriptions when dropped.
+  fn subscribe_app_notifications(&self, pid: u32, axio: Axio) -> AxioResult<AppNotificationHandle>;
 
   /// Create a watch handle for an element with initial notifications.
   /// The handle manages subscriptions - use add/remove to modify.
@@ -150,6 +151,19 @@ pub(crate) trait PlatformObserver: Send + Sync {
     axio: Axio,
   ) -> AxioResult<WatchHandle>;
 }
+
+// TODO: move these behind the platform boundary (once we figure out more for other OSs):
+
+/// Handle to app-level notification subscriptions.
+/// Cleans up the observer context when dropped.
+pub(crate) struct AppNotificationHandle {
+  #[cfg(target_os = "macos")]
+  pub(crate) _inner: super::macos::AppNotificationHandleInner,
+}
+
+// Send + Sync are safe because the inner type manages its own thread safety
+unsafe impl Send for AppNotificationHandle {}
+unsafe impl Sync for AppNotificationHandle {}
 
 /// Opaque handle to a notification subscription.
 /// Manages a set of notifications for an element.

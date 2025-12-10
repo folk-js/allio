@@ -8,7 +8,6 @@ Consumers don't interact with this directly - polling is owned by `Axio`.
 use crate::core::Axio;
 use crate::platform::{CurrentPlatform, DisplayLinkHandle, Platform};
 use crate::types::{AXWindow, ProcessId};
-use log::error;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -65,14 +64,23 @@ impl Drop for PollingHandle {
   }
 }
 
-/// Poll for current windows. Returns None if `exclude_pid` window isn't found.
-fn poll_windows(options: &AxioOptions) -> Option<Vec<AXWindow>> {
+/// Poll for current windows.
+fn poll_windows(options: &AxioOptions) -> Vec<AXWindow> {
   let all_windows = CurrentPlatform::fetch_windows(None);
 
+  // Get offset from exclude_pid window (typically the overlay app)
+  // If overlay is hidden/offscreen, use zero offset and continue polling
   let (offset_x, offset_y) = if let Some(exclude_pid) = options.exclude_pid {
     match all_windows.iter().find(|w| w.process_id.0 == exclude_pid.0) {
       Some(overlay_window) => (overlay_window.bounds.x, overlay_window.bounds.y),
-      None => return None,
+      None => {
+        // Overlay not visible - continue with absolute coordinates
+        log::debug!(
+          "Overlay window (PID {}) not found, using absolute coordinates",
+          exclude_pid.0
+        );
+        (0.0, 0.0)
+      }
     }
   } else {
     (0.0, 0.0)
@@ -108,7 +116,7 @@ fn poll_windows(options: &AxioOptions) -> Option<Vec<AXWindow>> {
     })
     .collect();
 
-  Some(windows)
+  windows
 }
 
 /// Configuration options for Axio.
@@ -146,7 +154,10 @@ impl Default for AxioOptions {
 pub(crate) fn start_polling(axio: Axio, config: AxioOptions) -> PollingHandle {
   #[cfg(target_os = "macos")]
   if config.use_display_link {
-    return start_display_synced_polling(axio, config);
+    if let Some(handle) = try_start_display_synced_polling(axio.clone(), config) {
+      return handle;
+    }
+    log::warn!("Display link unavailable, falling back to thread-based polling");
   }
 
   start_thread_polling(axio, config)
@@ -179,22 +190,17 @@ fn start_thread_polling(axio: Axio, config: AxioOptions) -> PollingHandle {
   }
 }
 
-/// Display-synchronized polling implementation (macOS only).
+/// Try to start display-synchronized polling (macOS only).
+/// Returns None if display link is unavailable.
 #[cfg(target_os = "macos")]
-fn start_display_synced_polling(axio: Axio, config: AxioOptions) -> PollingHandle {
-  let handle = match CurrentPlatform::start_display_link(move || {
+fn try_start_display_synced_polling(axio: Axio, config: AxioOptions) -> Option<PollingHandle> {
+  let handle = CurrentPlatform::start_display_link(move || {
     poll_iteration(&axio, &config);
-  }) {
-    Some(h) => h,
-    None => {
-      error!("Failed to start display-synced polling");
-      std::process::exit(1);
-    }
-  };
+  })?;
 
-  PollingHandle {
+  Some(PollingHandle {
     inner: PollingImpl::DisplayLink(handle),
-  }
+  })
 }
 
 /// Shared polling logic for both thread and display-link implementations.
@@ -203,12 +209,12 @@ fn poll_iteration(axio: &Axio, config: &AxioOptions) {
   let pos = CurrentPlatform::fetch_mouse_position();
   axio.sync_mouse(pos);
 
-  if let Some(windows) = poll_windows(config) {
-    // Sync windows (handles add/update/remove + events + process creation)
-    axio.sync_windows(windows.clone());
+  let windows = poll_windows(config);
 
-    // Focus tracking
-    let focused_window_id = windows.iter().find(|w| w.focused).map(|w| w.id);
-    axio.sync_focused_window(focused_window_id);
-  }
+  // Sync windows (handles add/update/remove + events + process creation)
+  axio.sync_windows(windows.clone());
+
+  // Focus tracking
+  let focused_window_id = windows.iter().find(|w| w.focused).map(|w| w.id);
+  axio.sync_focused_window(focused_window_id);
 }

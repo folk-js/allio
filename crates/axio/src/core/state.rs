@@ -11,7 +11,7 @@ and emit events. This guarantees:
 use async_broadcast::Sender;
 use std::collections::HashMap;
 
-use crate::platform::{Handle, Observer, WatchHandle};
+use crate::platform::{AppNotificationHandle, Handle, Observer, WatchHandle};
 use crate::types::{
   AXElement, AXWindow, ElementId, Event, Point, ProcessId, TextSelection, WindowId,
 };
@@ -26,6 +26,8 @@ pub(crate) struct ProcessState {
   pub(crate) app_handle: Handle,
   pub(crate) focused_element: Option<ElementId>,
   pub(crate) last_selection: Option<TextSelection>,
+  /// Handle to app-level notifications. Cleaned up via Drop when process is removed.
+  pub(crate) _app_notifications: Option<AppNotificationHandle>,
 }
 
 /// Per-window state.
@@ -271,9 +273,9 @@ impl State {
     }
   }
 
-  /// Get mutable watch handle for element (for adding/removing notifications).
-  pub(crate) fn get_element_watch_mut(&mut self, id: ElementId) -> Option<&mut WatchHandle> {
-    self.elements.get_mut(&id).and_then(|e| e.watch.as_mut())
+  /// Take watch handle from element (for operations that need to release the lock).
+  pub(crate) fn take_element_watch(&mut self, id: ElementId) -> Option<WatchHandle> {
+    self.elements.get_mut(&id).and_then(|e| e.watch.take())
   }
 
   // --- Internal helpers ---
@@ -376,7 +378,13 @@ impl State {
       return false;
     }
 
+    let z_changed = window.info.z_index != info.z_index;
     window.info = info.clone();
+
+    if z_changed {
+      self.update_depth_order();
+    }
+
     self.emit(Event::WindowChanged { window: info });
     true
   }
@@ -428,9 +436,17 @@ impl State {
 // ============================================================================
 
 impl State {
-  /// Insert a process.
-  pub(crate) fn insert_process(&mut self, id: ProcessId, process: ProcessState) {
-    self.processes.insert(id, process);
+  /// Try to insert a process. Returns false if process already exists (no-op).
+  /// This handles the TOCTOU race where another thread may have inserted first.
+  pub(crate) fn try_insert_process(&mut self, id: ProcessId, process: ProcessState) -> bool {
+    use std::collections::hash_map::Entry;
+    match self.processes.entry(id) {
+      Entry::Occupied(_) => false, // Another thread won the race
+      Entry::Vacant(e) => {
+        e.insert(process);
+        true
+      }
+    }
   }
 
   /// Check if process exists.
@@ -597,16 +613,18 @@ impl State {
     self.mouse_position
   }
 
-  /// Find window at point (uses z-order).
+  /// Find window at point (uses cached z-order).
   pub(crate) fn get_window_at_point(&self, x: f64, y: f64) -> Option<&AXWindow> {
     let point = Point::new(x, y);
-    let mut candidates: Vec<_> = self
-      .windows
-      .values()
-      .filter(|w| w.info.bounds.contains(point))
-      .collect();
-    candidates.sort_by_key(|w| w.info.z_index);
-    candidates.first().map(|w| &w.info)
+    // depth_order is sorted front-to-back, so first match is the topmost window
+    for window_id in &self.depth_order {
+      if let Some(window) = self.windows.get(window_id) {
+        if window.info.bounds.contains(point) {
+          return Some(&window.info);
+        }
+      }
+    }
+    None
   }
 
   /// Get focused window for a specific PID.

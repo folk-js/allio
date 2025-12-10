@@ -227,22 +227,34 @@ impl Axio {
     let observer = CurrentPlatform::create_observer(pid, self.clone())?;
     let app_handle = CurrentPlatform::app_element(pid);
 
-    if let Err(e) = observer.subscribe_app_notifications(pid, self.clone()) {
-      log::warn!("Failed to subscribe app notifications for PID {pid}: {e:?}");
-    }
+    // Subscribe to app-level notifications (focus, selection)
+    let app_notifications = match observer.subscribe_app_notifications(pid, self.clone()) {
+      Ok(handle) => Some(handle),
+      Err(e) => {
+        log::warn!("Failed to subscribe app notifications for PID {pid}: {e:?}");
+        None
+      }
+    };
 
-    // Quick write to insert
-    self.write(|s| {
-      s.insert_process(
+    // Try to insert - another thread may have won the race
+    let inserted = self.write(|s| {
+      s.try_insert_process(
         process_id,
         ProcessState {
           observer,
           app_handle,
           focused_element: None,
           last_selection: None,
+          _app_notifications: app_notifications,
         },
       )
     });
+
+    if !inserted {
+      // Another thread inserted first - our ProcessState will be dropped,
+      // cleaning up the observer and notification handles via RAII
+      log::debug!("Process {pid} already registered by another thread");
+    }
 
     Ok(process_id)
   }
@@ -319,7 +331,10 @@ impl Axio {
     element_id: ElementId,
     children: Vec<ElementId>,
   ) -> AxioResult<()> {
-    self.write(|s| s.set_element_children(element_id, children));
+    let updated = self.write(|s| s.set_element_children(element_id, children));
+    if !updated && self.read(|s| s.get_element(element_id).is_none()) {
+      return Err(AxioError::ElementNotFound(element_id));
+    }
     Ok(())
   }
 }

@@ -24,9 +24,12 @@ pub(crate) fn build_element_state(
 ) -> ElementState {
   let attrs = handle.fetch_attributes();
 
+  // Fetch parent once and reuse (OS call is expensive)
+  let parent_handle = handle.fetch_parent();
+
   // Determine if this is a root element (parent is Application)
-  let is_root = handle
-    .fetch_parent()
+  let is_root = parent_handle
+    .as_ref()
     .map(|p| p.fetch_attributes().role == Role::Application)
     .unwrap_or(false);
 
@@ -36,7 +39,7 @@ pub(crate) fn build_element_state(
   let parent_hash = if is_root {
     None
   } else {
-    handle.fetch_parent().map(|p| p.element_hash())
+    parent_handle.as_ref().map(|p| p.element_hash())
   };
 
   let element = AXElement {

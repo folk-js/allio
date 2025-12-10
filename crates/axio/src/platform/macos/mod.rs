@@ -28,7 +28,8 @@ pub(super) use handles::{ElementHandle, ObserverHandle};
 use crate::accessibility::{Notification, Value};
 use crate::core::Axio;
 use crate::platform::traits::{
-  DisplayLinkHandle, ElementAttributes, Platform, PlatformHandle, PlatformObserver, WatchHandle,
+  AppNotificationHandle, DisplayLinkHandle, ElementAttributes, Platform, PlatformHandle,
+  PlatformObserver, WatchHandle,
 };
 use crate::types::{AxioError, AxioResult, ElementId, Point};
 
@@ -124,8 +125,9 @@ impl PlatformHandle for ElementHandle {
 impl PlatformObserver for ObserverHandle {
   type Handle = ElementHandle;
 
-  fn subscribe_app_notifications(&self, pid: u32, axio: Axio) -> AxioResult<()> {
-    notifications::subscribe_app_notifications(pid, self, axio)
+  fn subscribe_app_notifications(&self, pid: u32, axio: Axio) -> AxioResult<AppNotificationHandle> {
+    let inner = notifications::subscribe_app_notifications(pid, self, axio)?;
+    Ok(AppNotificationHandle { _inner: inner })
   }
 
   fn create_watch(
@@ -144,3 +146,4 @@ impl PlatformObserver for ObserverHandle {
 
 pub(crate) type MacOSDisplayLinkHandle = display_link::DisplayLinkHandle;
 pub(crate) type WatchHandleInner = notifications::WatchHandleInner;
+pub(crate) type AppNotificationHandleInner = notifications::AppNotificationHandleInner;
