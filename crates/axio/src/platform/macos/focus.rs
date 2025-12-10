@@ -16,7 +16,7 @@ use objc2_core_foundation::CFRetained;
 use super::handles::ElementHandle;
 use crate::core::Axio;
 use crate::platform::element_ops;
-use crate::types::WindowId;
+use crate::types::{ProcessId, WindowId};
 
 use super::element::element_hash;
 
@@ -30,8 +30,7 @@ pub(super) fn handle_app_focus_changed(axio: &Axio, pid: u32, element: CFRetaine
     return;
   };
 
-  let Some(ax_element) =
-    element_ops::build_and_register_element(axio, handle, window_id, pid, None)
+  let Some(ax_element) = element_ops::build_and_register_element(axio, handle, window_id, pid)
   else {
     log::warn!("FocusChanged: element build failed for PID {pid}");
     return;
@@ -60,7 +59,7 @@ pub(super) fn handle_app_selection_changed(
   };
 
   let Some(ax_element) =
-    element_ops::build_and_register_element(axio, handle.clone(), window_id, pid, None)
+    element_ops::build_and_register_element(axio, handle.clone(), window_id, pid)
   else {
     log::warn!("SelectionChanged: element build failed for PID {pid}");
     return;
@@ -79,7 +78,7 @@ pub(super) fn handle_app_selection_changed(
 /// Get window ID for an `ElementHandle` using hash-based lookup.
 fn get_window_id_for_handle(axio: &Axio, handle: &ElementHandle, pid: u32) -> Option<WindowId> {
   let hash = element_hash(handle);
-  if let Some(element) = axio.get_element_by_hash(hash) {
+  if let Some(element) = axio.get_element_by_hash(hash, Some(ProcessId(pid))) {
     return Some(element.window_id);
   }
   axio.get_focused_window_for_pid(pid)

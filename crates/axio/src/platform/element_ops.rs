@@ -9,22 +9,15 @@ These functions:
 
 use crate::accessibility::Role;
 use crate::core::{Axio, ElementData, ElementEntry};
-use crate::types::{Element, AxioError, AxioResult, ElementId, ProcessId, WindowId};
+use crate::types::{AxioError, AxioResult, Element, ElementId, ProcessId, WindowId};
 
 use super::{Handle, PlatformHandle};
 
 // === Element Building ===
 
 /// Build element state from a handle (pure - no side effects).
-/// Note: `_parent_id` is no longer stored on element - relationships
-/// are managed by TreeRelationships and parent_hash is used for orphan resolution.
-#[allow(unused_variables)]
-pub(crate) fn build_element_state(
-  handle: Handle,
-  window_id: WindowId,
-  pid: u32,
-  _parent_id: Option<ElementId>,
-) -> ElementEntry {
+/// Tree relationships are managed by ElementTree and parent_hash is used for orphan resolution.
+pub(crate) fn build_element_state(handle: Handle, window_id: WindowId, pid: u32) -> ElementEntry {
   let attrs = handle.fetch_attributes();
 
   // Fetch parent once and reuse (OS call is expensive)
@@ -43,30 +36,8 @@ pub(crate) fn build_element_state(
     parent_handle.as_ref().map(|p| p.element_hash())
   };
 
-  let data = ElementData {
-    id: ElementId::new(),
-    window_id,
-    pid: ProcessId(pid),
-    is_root,
-    role: attrs.role,
-    platform_role: attrs.platform_role,
-    label: attrs.title,
-    description: attrs.description,
-    placeholder: attrs.placeholder,
-    url: attrs.url,
-    value: attrs.value,
-    bounds: attrs.bounds,
-    focused: attrs.focused,
-    disabled: attrs.disabled,
-    selected: attrs.selected,
-    expanded: attrs.expanded,
-    row_index: attrs.row_index,
-    column_index: attrs.column_index,
-    row_count: attrs.row_count,
-    column_count: attrs.column_count,
-    actions: attrs.actions,
-    is_fallback: false,
-  };
+  let data =
+    ElementData::from_attributes(ElementId::new(), window_id, ProcessId(pid), is_root, attrs);
 
   ElementEntry::new(data, handle, hash, parent_hash)
 }
@@ -77,9 +48,8 @@ pub(crate) fn build_and_register_element(
   handle: Handle,
   window_id: WindowId,
   pid: u32,
-  parent_id: Option<ElementId>,
 ) -> Option<Element> {
-  let elem_state = build_element_state(handle, window_id, pid, parent_id);
+  let elem_state = build_element_state(handle, window_id, pid);
   axio.register_element(elem_state)
 }
 
@@ -106,9 +76,7 @@ pub(crate) fn fetch_children(
   let mut child_ids = Vec::new();
 
   for child_handle in child_handles.into_iter().take(max_children) {
-    if let Some(child) =
-      build_and_register_element(axio, child_handle, window_id, pid, Some(parent_id))
-    {
+    if let Some(child) = build_and_register_element(axio, child_handle, window_id, pid) {
       child_ids.push(child.id);
       children.push(child);
     }
@@ -135,7 +103,6 @@ pub(crate) fn fetch_parent(axio: &Axio, element_id: ElementId) -> AxioResult<Opt
     parent_handle,
     window_id,
     pid,
-    None,
   ))
 }
 
@@ -147,30 +114,8 @@ pub(crate) fn fetch_element(axio: &Axio, element_id: ElementId) -> AxioResult<El
   // Step 2: Platform call (NO LOCK)
   let attrs = handle.fetch_attributes();
 
-  let updated_data = ElementData {
-    id: element_id,
-    window_id,
-    pid: ProcessId(pid),
-    is_root,
-    role: attrs.role,
-    platform_role: attrs.platform_role,
-    label: attrs.title,
-    description: attrs.description,
-    placeholder: attrs.placeholder,
-    url: attrs.url,
-    value: attrs.value,
-    bounds: attrs.bounds,
-    focused: attrs.focused,
-    disabled: attrs.disabled,
-    selected: attrs.selected,
-    expanded: attrs.expanded,
-    row_index: attrs.row_index,
-    column_index: attrs.column_index,
-    row_count: attrs.row_count,
-    column_count: attrs.column_count,
-    actions: attrs.actions,
-    is_fallback: false, // Only set true by fetch_element_at_position
-  };
+  let updated_data =
+    ElementData::from_attributes(element_id, window_id, ProcessId(pid), is_root, attrs);
 
   axio.update_element_data(element_id, updated_data)
 }
@@ -186,7 +131,7 @@ pub(crate) fn fetch_window_root(axio: &Axio, window_id: WindowId) -> AxioResult<
   let window_handle =
     handle.ok_or_else(|| AxioError::Internal(format!("Window {window_id} has no AX element")))?;
 
-  build_and_register_element(axio, window_handle, window_id, window.process_id.0, None)
+  build_and_register_element(axio, window_handle, window_id, window.process_id.0)
     .ok_or_else(|| AxioError::Internal("Window root element was previously destroyed".to_string()))
 }
 
@@ -229,8 +174,8 @@ pub(crate) fn fetch_element_at_position(
     AxioError::AccessibilityError(format!("No element at ({x}, {y}) in app {pid}"))
   })?;
 
-  let mut element = build_and_register_element(axio, element_handle, window_id, pid, None)
-    .ok_or_else(|| {
+  let mut element =
+    build_and_register_element(axio, element_handle, window_id, pid).ok_or_else(|| {
       AxioError::AccessibilityError(format!("Element at ({x}, {y}) was previously destroyed"))
     })?;
 
@@ -272,7 +217,7 @@ pub(crate) fn fetch_focus(
   let window_id = {
     let hash = focused_handle.element_hash();
     axio
-      .get_element_by_hash(hash)
+      .get_element_by_hash(hash, Some(ProcessId(pid)))
       .map(|e| e.window_id)
       .or_else(|| axio.get_focused_window_for_pid(pid))
   };
@@ -283,7 +228,7 @@ pub(crate) fn fetch_focus(
     ))
   })?;
 
-  let element = build_and_register_element(axio, focused_handle.clone(), window_id, pid, None)
+  let element = build_and_register_element(axio, focused_handle.clone(), window_id, pid)
     .ok_or_else(|| {
       AxioError::Internal("Focused element was destroyed during registration".to_string())
     })?;

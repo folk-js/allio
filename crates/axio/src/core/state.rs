@@ -70,6 +70,42 @@ pub(crate) struct ElementData {
   pub is_fallback: bool,
 }
 
+impl ElementData {
+  /// Create ElementData from platform attributes.
+  pub(crate) fn from_attributes(
+    id: ElementId,
+    window_id: WindowId,
+    pid: ProcessId,
+    is_root: bool,
+    attrs: crate::platform::ElementAttributes,
+  ) -> Self {
+    Self {
+      id,
+      window_id,
+      pid,
+      is_root,
+      role: attrs.role,
+      platform_role: attrs.platform_role,
+      label: attrs.title,
+      description: attrs.description,
+      placeholder: attrs.placeholder,
+      url: attrs.url,
+      value: attrs.value,
+      bounds: attrs.bounds,
+      focused: attrs.focused,
+      disabled: attrs.disabled,
+      selected: attrs.selected,
+      expanded: attrs.expanded,
+      row_index: attrs.row_index,
+      column_index: attrs.column_index,
+      row_count: attrs.row_count,
+      column_count: attrs.column_count,
+      actions: attrs.actions,
+      is_fallback: false,
+    }
+  }
+}
+
 /// Per-element state in the registry.
 pub(crate) struct ElementEntry {
   pub(crate) data: ElementData,
@@ -118,7 +154,6 @@ pub(crate) struct Registry {
   tree: ElementTree,
 
   // Indexes (PRIVATE)
-  element_to_window: HashMap<ElementId, WindowId>,
   hash_to_element: HashMap<u64, ElementId>,
   waiting_for_parent: HashMap<u64, Vec<ElementId>>,
 
@@ -136,7 +171,6 @@ impl Registry {
       windows: HashMap::new(),
       elements: HashMap::new(),
       tree: ElementTree::new(),
-      element_to_window: HashMap::new(),
       hash_to_element: HashMap::new(),
       waiting_for_parent: HashMap::new(),
       focused_window: None,
@@ -228,7 +262,7 @@ impl Registry {
 impl Registry {
   /// Get or insert an element by hash.
   ///
-  /// - If hash exists in same window: returns (existing ElementId, true) where true = already had watch
+  /// - If hash exists in same window: updates data from fresh fetch, returns (existing ElementId, true) where true = already had watch
   /// - If new: inserts, maintains indexes, resolves orphans, emits ElementAdded, returns (id, false)
   ///
   /// NOTE: Does not set up watch subscription - caller must do that via `set_element_watch`.
@@ -238,12 +272,16 @@ impl Registry {
     let is_root = elem.data.is_root;
     let window_id = elem.data.window_id;
 
-    // Fast path: already exists (same hash AND same window)
+    // Element already exists (same hash AND same window) - update data from fresh fetch
     if let Some(&existing_id) = self.hash_to_element.get(&hash) {
       if let Some(existing) = self.elements.get(&existing_id) {
         // Only dedup if same window - different windows can have elements with same CFHash
         if existing.data.window_id == window_id {
           let has_watch = existing.watch.is_some();
+          // Update the element data with fresh values (preserves ID)
+          let mut fresh_data = elem.data;
+          fresh_data.id = existing_id; // Keep the existing ID
+          self.update_element_data(existing_id, fresh_data);
           return (existing_id, has_watch);
         }
         // Different window with same hash - this is normal (common UI patterns), proceed with insert
@@ -260,12 +298,11 @@ impl Registry {
 
     let element_id = elem.data.id;
 
-    // Insert element data into primary collection and indexes
+    // Insert element data into primary collection and hash index
     self.elements.insert(element_id, elem);
-    self.element_to_window.insert(element_id, window_id);
     // Note: This overwrites the hash_to_element entry. For cross-window hash sharing,
-    // the most recently registered element "wins" the hash lookup. This is acceptable
-    // because we use window_id checks everywhere else.
+    // the most recently registered element "wins" the hash lookup. find_element_by_hash
+    // handles this by searching when the fast-path element doesn't match the pid filter.
     self.hash_to_element.insert(hash, element_id);
 
     // Link to parent via tree if parent exists AND is in same window
@@ -409,8 +446,6 @@ impl Registry {
 
   /// Remove element data and indexes (called after tree removal).
   fn remove_element_data(&mut self, id: ElementId) {
-    self.element_to_window.remove(&id);
-
     let Some(mut elem) = self.elements.remove(&id) else {
       return;
     };
@@ -689,8 +724,36 @@ impl Registry {
     self.elements.get(&id).map(|e| &e.data)
   }
 
-  pub(crate) fn find_element_by_hash(&self, hash: u64) -> Option<ElementId> {
-    self.hash_to_element.get(&hash).copied()
+  /// Find element by hash, optionally filtering by process ID.
+  ///
+  /// When `pid` is provided, ensures the returned element belongs to that process.
+  /// This handles hash collisions across windows/processes where the hash_to_element
+  /// fast-path might point to the wrong element.
+  pub(crate) fn find_element_by_hash(
+    &self,
+    hash: u64,
+    pid: Option<ProcessId>,
+  ) -> Option<ElementId> {
+    // Fast path: direct lookup
+    if let Some(&element_id) = self.hash_to_element.get(&hash) {
+      if let Some(elem) = self.elements.get(&element_id) {
+        // If no pid filter, or pid matches, return it
+        if pid.map_or(true, |p| elem.data.pid == p) {
+          return Some(element_id);
+        }
+      }
+    }
+
+    // Slow path: pid filter didn't match (hash collision), search all elements
+    if pid.is_some() {
+      return self
+        .elements
+        .iter()
+        .find(|(_, e)| e.hash == hash && Some(e.data.pid) == pid)
+        .map(|(id, _)| *id);
+    }
+
+    None
   }
 
   /// Get all elements with derived relationships.

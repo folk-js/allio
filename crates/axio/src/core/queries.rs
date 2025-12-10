@@ -41,10 +41,13 @@ impl Axio {
     self.read(|s| s.get_element(element_id))
   }
 
-  /// Get element by hash from registry.
-  pub(crate) fn get_element_by_hash(&self, hash: u64) -> Option<Element> {
+  /// Get element by hash from registry, optionally filtering by process ID.
+  ///
+  /// When `pid` is provided, ensures the returned element belongs to that process.
+  /// This handles hash collisions across windows/processes.
+  pub(crate) fn get_element_by_hash(&self, hash: u64, pid: Option<ProcessId>) -> Option<Element> {
     self.read(|s| {
-      s.find_element_by_hash(hash)
+      s.find_element_by_hash(hash, pid)
         .and_then(|id| s.get_element(id))
     })
   }
