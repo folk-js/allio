@@ -95,7 +95,7 @@ pub fn dispatch(axio: &Axio, request: RpcRequest) -> Result<RpcResponse, String>
 
     RpcRequest::ElementAt { x, y } => {
       let element = axio.fetch_element_at(x, y).map_err(|e| e.to_string())?;
-      Ok(RpcResponse::Element(Box::new(element)))
+      Ok(RpcResponse::OptionalElement(element.map(Box::new)))
     }
 
     RpcRequest::Get { element_id } => {

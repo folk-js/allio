@@ -257,8 +257,10 @@ export class AXIO extends EventEmitter<AxioEvents> {
     return snap;
   }
 
-  /** Get element at screen coordinates (fetches from OS) */
-  elementAt = (x: number, y: number) => this.call("element_at", { x, y });
+  /** Get element at screen coordinates (fetches from OS).
+   * Returns null if no tracked window exists at the position. */
+  elementAt = (x: number, y: number): Promise<AXElement | null> =>
+    this.call("element_at", { x, y });
 
   /** Get element by ID (from registry, fetches if needed) */
   getElement = (element_id: ElementId) => this.call("get", { element_id });

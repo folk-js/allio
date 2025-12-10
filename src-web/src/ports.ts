@@ -172,6 +172,8 @@ async function onMouseDown(e: MouseEvent) {
 
   try {
     const element = await axio.elementAt(e.clientX, e.clientY);
+
+    // No tracked window at this position, or no bounds
     if (!element?.bounds) return;
 
     // Chromium/Electron lazy init: retry on next frame if we got a fallback

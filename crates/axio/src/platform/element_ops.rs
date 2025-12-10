@@ -197,6 +197,9 @@ pub(crate) fn fetch_window_root(axio: &Axio, window_id: WindowId) -> AxioResult<
 
 /// Get the accessibility element at a specific screen position.
 ///
+/// Returns `Ok(None)` if no tracked window exists at the position (e.g., clicking on desktop
+/// or an excluded window). This is not an error - it's valid to query positions outside windows.
+///
 /// # Chromium/Electron Apps
 ///
 /// Chromium/Electron apps lazily build their accessibility spatial index on a per-region
@@ -206,12 +209,17 @@ pub(crate) fn fetch_window_root(axio: &Axio, window_id: WindowId) -> AxioResult<
 ///
 /// When a fallback container is detected, the returned element has `is_fallback = true`.
 /// Clients should check this flag and retry on the next frame to get the real element.
-pub(crate) fn fetch_element_at_position(axio: &Axio, x: f64, y: f64) -> AxioResult<AXElement> {
+pub(crate) fn fetch_element_at_position(
+  axio: &Axio,
+  x: f64,
+  y: f64,
+) -> AxioResult<Option<AXElement>> {
   // First, find which TRACKED window is at this point.
   // This ensures we only hit-test within apps we're monitoring (excludes axio overlay).
-  let window = axio.get_window_at_point(x, y).ok_or_else(|| {
-    AxioError::AccessibilityError(format!("No tracked window found at position ({x}, {y})"))
-  })?;
+  // Returns None if no tracked window at this position (valid - could be desktop, excluded app, etc.)
+  let Some(window) = axio.get_window_at_point(x, y) else {
+    return Ok(None);
+  };
   let window_id = window.id;
   let window_bounds = window.bounds;
   let pid = window.process_id.0;
@@ -241,7 +249,7 @@ pub(crate) fn fetch_element_at_position(axio: &Axio, x: f64, y: f64) -> AxioResu
 
   element.is_fallback = is_fallback;
 
-  Ok(element)
+  Ok(Some(element))
 }
 
 /// Fetch the currently focused element and selection for an app from platform.

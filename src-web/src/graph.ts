@@ -158,11 +158,15 @@ class AXGraph {
       try {
         const element = await this.axio.elementAt(e.clientX, e.clientY);
 
+        // No tracked window at this position - not an error
+        if (!element) return;
+
         // Chromium/Electron lazy init: retry on next frame if we got a fallback
         if (element.is_fallback) {
           requestAnimationFrame(async () => {
             try {
               const retried = await this.axio.elementAt(e.clientX, e.clientY);
+              if (!retried) return;
               const { isNew } = this.addNode(retried);
               if (isNew) this.toast(`+ ${retried.role}`);
             } catch (err) {

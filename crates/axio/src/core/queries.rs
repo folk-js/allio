@@ -153,7 +153,10 @@ impl Axio {
   }
 
   /// Fetch element at screen coordinates from OS.
-  pub fn fetch_element_at(&self, x: f64, y: f64) -> AxioResult<AXElement> {
+  ///
+  /// Returns `Ok(None)` if no tracked window exists at the position.
+  /// This is not an error - it's valid to query positions outside windows.
+  pub fn fetch_element_at(&self, x: f64, y: f64) -> AxioResult<Option<AXElement>> {
     crate::platform::element_ops::fetch_element_at_position(self, x, y)
   }
 
