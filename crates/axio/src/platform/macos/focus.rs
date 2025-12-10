@@ -85,7 +85,9 @@ fn get_window_id_for_handle(axio: &Axio, handle: &ElementHandle, pid: u32) -> Op
 }
 
 /// Get selected text and range from an element handle.
-pub(super) fn get_selection_from_handle(handle: &ElementHandle) -> Option<(String, Option<(u32, u32)>)> {
+pub(super) fn get_selection_from_handle(
+  handle: &ElementHandle,
+) -> Option<(String, Option<(u32, u32)>)> {
   let selected_text = handle.get_string("AXSelectedText")?;
   if selected_text.is_empty() {
     return None;

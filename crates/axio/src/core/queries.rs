@@ -8,7 +8,7 @@ Query methods for Axio.
 use super::Axio;
 use crate::platform::{CurrentPlatform, Handle, Platform};
 use crate::types::{
-  Element, Window, AxioError, AxioResult, ElementId, ProcessId, TextSelection, WindowId,
+  AxioError, AxioResult, Element, ElementId, ProcessId, TextSelection, Window, WindowId,
 };
 
 // ============================================================================
