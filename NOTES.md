@@ -34,6 +34,7 @@ important TODOs:
 
 TODOs:
 
+- fix AXColorWell mapping to a ColorPicker role, then wire up reactivity with color values so we can FINALLY do that demo where we use our 'favorite color' picker to input reactively to e.g. a hex field
 - figure out why we cant see table data in the accessibility tree
 - figure out future ways to handle table (or other structured) data
 - figure out how to get filepaths from macos finder accessibility elements
@@ -55,3 +56,19 @@ notes from crabviz callgraph:
 - Our types are quite spread out. We have our per-file types in accessibility, which is good (vlue, action, notification and role) as this is our cross-platorm abstraction, then we also have many types in a types.rs file, then we have misc types across observer.rs, polling.rs, observer.rs, files in platform, registry.rs...Some in platform are macos specific, some are part of our more generic abstraction... We need to survey our types and use a coherent strategy here. Might also involve changing/removing some types.
 - the macos call graph is messy we can simplify it
 - i wonder about splitting 'ws' into its own crate again... We want 'axio' to be the core thing, and easy to integrate into CLI tools, run on a websocket without tauri, etc, etc. Wonder what the best strategy is here.
+
+note: could be defensive for hash reuse
+
+```rs
+// When registering, if hash already exists, verify it's truly the same element
+if let Some(&existing_id) = self.hash_to_element.get(&hash) {
+    if let Some(existing) = self.elements.get(&existing_id) {
+        // Additional validation: bounds match? window match? role match?
+        if existing.element.bounds != elem.element.bounds {
+            // Likely hash reuse after destruction - remove stale entry
+            self.remove_element(existing_id);
+            // Proceed with registration as new element
+        }
+    }
+}
+```

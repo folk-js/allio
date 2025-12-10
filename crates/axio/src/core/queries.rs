@@ -8,7 +8,7 @@ Query methods for Axio.
 use super::Axio;
 use crate::platform::{CurrentPlatform, Handle, Platform};
 use crate::types::{
-  AXElement, AXWindow, AxioError, AxioResult, ElementId, ProcessId, TextSelection, WindowId,
+  Element, Window, AxioError, AxioResult, ElementId, ProcessId, TextSelection, WindowId,
 };
 
 // ============================================================================
@@ -17,12 +17,12 @@ use crate::types::{
 
 impl Axio {
   /// Get all windows from registry.
-  pub fn get_windows(&self) -> Vec<AXWindow> {
+  pub fn get_windows(&self) -> Vec<Window> {
     self.read(|s| s.get_all_windows().cloned().collect())
   }
 
   /// Get a specific window from registry.
-  pub fn get_window(&self, window_id: WindowId) -> Option<AXWindow> {
+  pub fn get_window(&self, window_id: WindowId) -> Option<Window> {
     self.read(|s| s.get_window(window_id).cloned())
   }
 
@@ -31,18 +31,18 @@ impl Axio {
     self.read(|s| s.get_focused_window())
   }
 
-  /// Get window depth order (front to back) from registry.
-  pub fn get_depth_order(&self) -> Vec<WindowId> {
-    self.read(|s| s.get_depth_order().to_vec())
+  /// Get window z-order (front to back) from registry.
+  pub fn get_z_order(&self) -> Vec<WindowId> {
+    self.read(|s| s.get_z_order().to_vec())
   }
 
   /// Get element by ID from registry (with derived relationships).
-  pub fn get_element(&self, element_id: ElementId) -> Option<AXElement> {
+  pub fn get_element(&self, element_id: ElementId) -> Option<Element> {
     self.read(|s| s.get_element(element_id))
   }
 
   /// Get element by hash from registry.
-  pub(crate) fn get_element_by_hash(&self, hash: u64) -> Option<AXElement> {
+  pub(crate) fn get_element_by_hash(&self, hash: u64) -> Option<Element> {
     self.read(|s| {
       s.find_element_by_hash(hash)
         .and_then(|id| s.get_element(id))
@@ -50,7 +50,7 @@ impl Axio {
   }
 
   /// Get multiple elements by ID from registry.
-  pub fn get_elements(&self, element_ids: &[ElementId]) -> Vec<AXElement> {
+  pub fn get_elements(&self, element_ids: &[ElementId]) -> Vec<Element> {
     self.read(|s| {
       element_ids
         .iter()
@@ -60,7 +60,7 @@ impl Axio {
   }
 
   /// Get all elements from registry.
-  pub fn get_all_elements(&self) -> Vec<AXElement> {
+  pub fn get_all_elements(&self) -> Vec<Element> {
     self.read(|s| s.get_all_elements())
   }
 
@@ -70,7 +70,7 @@ impl Axio {
   }
 
   /// Get window at a point from registry.
-  pub(crate) fn get_window_at_point(&self, x: f64, y: f64) -> Option<AXWindow> {
+  pub(crate) fn get_window_at_point(&self, x: f64, y: f64) -> Option<Window> {
     self.read(|s| s.get_window_at_point(x, y).cloned())
   }
 
@@ -78,7 +78,7 @@ impl Axio {
   pub(crate) fn get_window_with_handle(
     &self,
     window_id: WindowId,
-  ) -> Option<(AXWindow, Option<Handle>)> {
+  ) -> Option<(Window, Option<Handle>)> {
     self.read(|s| {
       let window = s.get_window(window_id)?;
       let handle = s.get_window_handle(window_id).cloned();
@@ -143,7 +143,7 @@ impl Axio {
   ///
   /// Returns `Ok(None)` if no tracked window exists at the position.
   /// This is not an error - it's valid to query positions outside windows.
-  pub fn fetch_element_at(&self, x: f64, y: f64) -> AxioResult<Option<AXElement>> {
+  pub fn fetch_element_at(&self, x: f64, y: f64) -> AxioResult<Option<Element>> {
     crate::platform::element_ops::fetch_element_at_position(self, x, y)
   }
 
@@ -152,22 +152,22 @@ impl Axio {
     &self,
     element_id: ElementId,
     max_children: usize,
-  ) -> AxioResult<Vec<AXElement>> {
+  ) -> AxioResult<Vec<Element>> {
     crate::platform::element_ops::fetch_children(self, element_id, max_children)
   }
 
   /// Fetch and register parent of element from OS (None if element is root).
-  pub fn fetch_parent(&self, element_id: ElementId) -> AxioResult<Option<AXElement>> {
+  pub fn fetch_parent(&self, element_id: ElementId) -> AxioResult<Option<Element>> {
     crate::platform::element_ops::fetch_parent(self, element_id)
   }
 
   /// Fetch fresh element attributes from OS.
-  pub fn fetch_element(&self, element_id: ElementId) -> AxioResult<AXElement> {
+  pub fn fetch_element(&self, element_id: ElementId) -> AxioResult<Element> {
     crate::platform::element_ops::fetch_element(self, element_id)
   }
 
   /// Fetch root element for a window from OS.
-  pub fn fetch_window_root(&self, window_id: WindowId) -> AxioResult<AXElement> {
+  pub fn fetch_window_root(&self, window_id: WindowId) -> AxioResult<Element> {
     crate::platform::element_ops::fetch_window_root(self, window_id)
   }
 
@@ -175,7 +175,7 @@ impl Axio {
   pub fn fetch_window_focus(
     &self,
     window_id: WindowId,
-  ) -> AxioResult<(Option<AXElement>, Option<TextSelection>)> {
+  ) -> AxioResult<(Option<Element>, Option<TextSelection>)> {
     let window = self
       .get_window(window_id)
       .ok_or(AxioError::WindowNotFound(window_id))?;

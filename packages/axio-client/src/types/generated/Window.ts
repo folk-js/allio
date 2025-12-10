@@ -6,7 +6,7 @@ import type { WindowId } from "./WindowId";
 /**
  * An on-screen window.
  */
-export type AXWindow = { id: WindowId, title: string, app_name: string, bounds: Bounds, focused: boolean, process_id: ProcessId, 
+export type Window = { id: WindowId, title: string, app_name: string, bounds: Bounds, focused: boolean, process_id: ProcessId, 
 /**
  * Z-order index: 0 = frontmost, higher = further back
  */

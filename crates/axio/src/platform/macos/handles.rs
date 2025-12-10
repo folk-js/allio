@@ -169,7 +169,7 @@ impl ElementHandle {
   }
 
   /// Fetch all common attributes in a single batch call (10x faster).
-  /// This is the recommended way to build an `AXElement`.
+  /// This is the recommended way to build an `Element`.
   #[allow(clippy::too_many_lines)]
   pub(in crate::platform) fn fetch_attributes_internal(
     &self,

@@ -5,7 +5,7 @@ RPC request/response types and dispatch.
 #![allow(missing_docs)]
 
 use axio::accessibility::Value as AXValue;
-use axio::{AXElement, Axio, ElementId, Snapshot, WindowId};
+use axio::{Element, Axio, ElementId, Snapshot, WindowId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use ts_rs::TS;
@@ -57,11 +57,11 @@ const fn default_max_children() -> usize {
 pub enum RpcResponse {
   /// Full state snapshot (for re-sync)
   Snapshot(Box<Snapshot>),
-  /// Single element (boxed to reduce enum size - `AXElement` is 288 bytes)
-  Element(Box<AXElement>),
+  /// Single element (boxed to reduce enum size - `Element` is 288 bytes)
+  Element(Box<Element>),
   /// Optional element (for parent which can be None)
-  OptionalElement(Option<Box<AXElement>>),
-  Elements(Vec<AXElement>),
+  OptionalElement(Option<Box<Element>>),
+  Elements(Vec<Element>),
   Null,
 }
 

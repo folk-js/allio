@@ -1,6 +1,6 @@
 /*! Event types for state changes and synchronization. */
 
-use super::{AXElement, AXWindow, ElementId, Point, WindowId};
+use super::{Element, Window, ElementId, Point, WindowId};
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -44,13 +44,13 @@ impl TextSelection {
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export)]
 pub struct Snapshot {
-  pub windows: Vec<AXWindow>,
-  pub elements: Vec<AXElement>,
+  pub windows: Vec<Window>,
+  pub elements: Vec<Element>,
   pub focused_window: Option<WindowId>,
-  pub focused_element: Option<AXElement>,
+  pub focused_element: Option<Element>,
   pub selection: Option<TextSelection>,
   /// Window IDs in z-order (front to back)
-  pub depth_order: Vec<WindowId>,
+  pub z_order: Vec<WindowId>,
   /// Current mouse position
   pub mouse_position: Option<Point>,
 }
@@ -66,17 +66,17 @@ pub enum Event {
 
   // Window lifecycle (from polling)
   #[serde(rename = "window:added")]
-  WindowAdded { window: AXWindow },
+  WindowAdded { window: Window },
   #[serde(rename = "window:changed")]
-  WindowChanged { window: AXWindow },
+  WindowChanged { window: Window },
   #[serde(rename = "window:removed")]
   WindowRemoved { window_id: WindowId },
 
   // Element lifecycle (from RPC, watches)
   #[serde(rename = "element:added")]
-  ElementAdded { element: AXElement },
+  ElementAdded { element: Element },
   #[serde(rename = "element:changed")]
-  ElementChanged { element: AXElement },
+  ElementChanged { element: Element },
   #[serde(rename = "element:removed")]
   ElementRemoved { element_id: ElementId },
 
@@ -87,7 +87,7 @@ pub enum Event {
   // Element focus (from Tier 1 app-level observer)
   #[serde(rename = "focus:element")]
   FocusElement {
-    element: AXElement,
+    element: Element,
     previous_element_id: Option<ElementId>,
   },
 

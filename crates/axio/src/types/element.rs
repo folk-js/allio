@@ -14,7 +14,7 @@ use ts_rs::TS;
 /// - `is_root=false, parent_id=None` → orphan (parent exists but not loaded)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct AXElement {
+pub struct Element {
   pub id: ElementId,
   /// Window this element belongs to
   pub window_id: WindowId,

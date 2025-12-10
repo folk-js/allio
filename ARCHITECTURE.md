@@ -19,7 +19,7 @@ Process (1:N)──→ Window (1:N)──→ Element (1:N)──→ Children
 
 Each entity has:
 
-- **Data**: The info we expose (`AXWindow`, `AXElement`)
+- **Data**: The info we expose (`Window`, `Element`)
 - **Handle**: OS reference for operations
 - **Tracking metadata**: hashes, parent links, etc.
 
@@ -53,7 +53,7 @@ Removal cascades down the hierarchy:
 └─────────────────────┬───────────────────────────┘
                       │
 ┌─────────────────────▼───────────────────────────┐
-│              State (Cache)                      │
+│              Registry (Cache)                   │
 │   get_or_insert, update, remove, get            │
 │   Owns: data, indexes, event emission           │
 └─────────────────────┬───────────────────────────┘
@@ -70,11 +70,11 @@ Removal cascades down the hierarchy:
 **Axio (Coordinator)**
 
 - Public API for consumers
-- Orchestrates State + Platform calls
+- Orchestrates Registry + Platform calls
 - Sets up watches after inserts
 - Handles errors and edge cases
 
-**State (Cache + Events)**
+**Registry (Cache + Events)**
 
 - Pure data management
 - Maintains indexes for fast lookups
@@ -89,9 +89,9 @@ Removal cascades down the hierarchy:
 - macOS implementation via Accessibility APIs
 - Handles all FFI and unsafe code
 
-## State Operations
+## Registry Operations
 
-State is the single source of truth for cached data. All mutations emit corresponding events.
+Registry is the single source of truth for cached data. All mutations emit corresponding events.
 
 ### Why Not Upsert?
 
@@ -111,20 +111,20 @@ This is "get or insert" semantics, not upsert. We don't want to update data when
 2. Updating would require reconciling two different ElementIds
 3. Clients have references to the existing ID
 
-Updating data happens separately via `update_element(id, data)` when we explicitly refresh.
+Updating data happens separately via `update_element_data(id, data)` when we explicitly refresh.
 
-### State Methods
+### Registry Methods
 
 ```rust
-impl State {
+impl Registry {
   // === Get or Insert (ensure tracked, emit *Added only if new) ===
-  fn get_or_insert_element(&mut self, elem: ElementState) -> ElementId;
-  fn get_or_insert_window(&mut self, window: WindowState) -> WindowId;
-  fn get_or_insert_process(&mut self, process: ProcessState) -> ProcessId;
+  fn get_or_insert_element(&mut self, elem: ElementEntry) -> ElementId;
+  fn get_or_insert_window(&mut self, window: WindowEntry) -> WindowId;
+  fn get_or_insert_process(&mut self, process: ProcessEntry) -> ProcessId;
 
   // === Update (modify existing, emit *Changed if different) ===
-  fn update_element(&mut self, id: ElementId, data: AXElement) -> Result<bool>;
-  fn update_window(&mut self, id: WindowId, data: AXWindow) -> Result<bool>;
+  fn update_element_data(&mut self, id: ElementId, data: ElementData) -> Result<bool>;
+  fn update_window(&mut self, id: WindowId, data: Window) -> Result<bool>;
 
   // === Remove (cascade + cleanup, emit *Removed events) ===
   fn remove_element(&mut self, id: ElementId);
@@ -132,8 +132,8 @@ impl State {
   fn remove_process(&mut self, id: ProcessId); // cascades to windows
 
   // === Query (read-only, no events) ===
-  fn get_element(&self, id: ElementId) -> Option<&AXElement>;
-  fn get_window(&self, id: WindowId) -> Option<&AXWindow>;
+  fn get_element(&self, id: ElementId) -> Option<Element>;
+  fn get_window(&self, id: WindowId) -> Option<&Window>;
   fn find_element_by_hash(&self, hash: u64) -> Option<ElementId>;
 }
 ```
@@ -151,7 +151,7 @@ impl State {
 
 ### Key Invariant
 
-**State fields are private.** All mutations go through these methods, guaranteeing:
+**Registry fields are private.** All mutations go through these methods, guaranteeing:
 
 - Indexes are always updated
 - Events are always emitted
@@ -162,22 +162,22 @@ impl State {
 Every `fetch_*` operation follows this pattern:
 
 1. Call OS (via Platform)
-2. Insert/update cache (via State)
-3. Events emitted automatically by State
+2. Insert/update cache (via Registry)
+3. Events emitted automatically by Registry
 4. Return the cached data
 
 ```rust
-pub fn fetch_children(&self, parent_id: ElementId, max: usize) -> AxioResult<Vec<AXElement>> {
+pub fn fetch_children(&self, parent_id: ElementId, max: usize) -> AxioResult<Vec<Element>> {
   // 1. Get context from cache
   let (handle, window_id, pid) = ...;
 
   // 2. Call OS
   let child_handles = handle.fetch_children();
 
-  // 3. Cache each (State emits events only for truly new elements)
+  // 3. Cache each (Registry emits events only for truly new elements)
   for child_handle in child_handles {
-    let elem_state = build_element_state(child_handle, window_id, pid);
-    state.get_or_insert_element(elem_state);
+    let elem_entry = build_element_entry(child_handle, window_id, pid);
+    registry.get_or_insert_element(elem_entry);
   }
 
   // 4. Return cached data
@@ -199,12 +199,12 @@ pub fn subscribe(&self) -> Receiver<Event>;
 ### Queries (cache only, fast)
 
 ```rust
-pub fn get_window(&self, id: WindowId) -> Option<AXWindow>;
-pub fn get_windows(&self) -> Vec<AXWindow>;
-pub fn get_element(&self, id: ElementId) -> Option<AXElement>;
-pub fn get_elements(&self, ids: &[ElementId]) -> Vec<AXElement>;
+pub fn get_window(&self, id: WindowId) -> Option<Window>;
+pub fn get_windows(&self) -> Vec<Window>;
+pub fn get_element(&self, id: ElementId) -> Option<Element>;
+pub fn get_elements(&self, ids: &[ElementId]) -> Vec<Element>;
 pub fn get_focused_window(&self) -> Option<WindowId>;
-pub fn get_depth_order(&self) -> Vec<WindowId>;
+pub fn get_z_order(&self) -> Vec<WindowId>;
 pub fn snapshot(&self) -> Snapshot;
 // TODO: ^ this should be get_snapshot()!
 ```
@@ -212,11 +212,11 @@ pub fn snapshot(&self) -> Snapshot;
 ### Fetches (OS + cache)
 
 ```rust
-pub fn fetch_element_at(&self, x: f64, y: f64) -> AxioResult<AXElement>;
-pub fn fetch_children(&self, id: ElementId, max: usize) -> AxioResult<Vec<AXElement>>;
-pub fn fetch_parent(&self, id: ElementId) -> AxioResult<Option<AXElement>>;
-pub fn fetch_element(&self, id: ElementId) -> AxioResult<AXElement>;  // refresh
-pub fn fetch_window_root(&self, id: WindowId) -> AxioResult<AXElement>;
+pub fn fetch_element_at(&self, x: f64, y: f64) -> AxioResult<Element>;
+pub fn fetch_children(&self, id: ElementId, max: usize) -> AxioResult<Vec<Element>>;
+pub fn fetch_parent(&self, id: ElementId) -> AxioResult<Option<Element>>;
+pub fn fetch_element(&self, id: ElementId) -> AxioResult<Element>;  // refresh
+pub fn fetch_window_root(&self, id: WindowId) -> AxioResult<Element>;
 pub fn fetch_window_focus(&self, id: WindowId) -> AxioResult<FocusInfo>;
 pub fn fetch_screen_size(&self) -> (f64, f64);
 ```
@@ -241,7 +241,7 @@ Used by polling and notification handlers:
 
 ```rust
 // Polling updates (bulk sync)
-pub(crate) fn sync_windows(&self, windows: Vec<AXWindow>);
+pub(crate) fn sync_windows(&self, windows: Vec<Window>);
 pub(crate) fn sync_mouse(&self, pos: Point);
 pub(crate) fn sync_focused_window(&self, id: Option<WindowId>);
 
@@ -274,7 +274,7 @@ pub fn unwatch(&self, id: ElementId) -> AxioResult<()>;
 
 ## Event Guarantees
 
-Because State owns event emission:
+Because Registry owns event emission:
 
 - `get_or_insert_element` → emits `ElementAdded` only if actually inserted (new hash)
 - `update_element` → emits `ElementChanged` only if data differs
@@ -290,7 +290,7 @@ crates/axio/src/
 ├── lib.rs              # Re-exports only
 ├── core/
 │   ├── mod.rs          # Axio struct, construction, events
-│   ├── state.rs        # State with private fields + operations
+│   ├── state.rs        # Registry with private fields + operations
 │   ├── queries.rs      # get_*, fetch_* implementations
 │   ├── mutations.rs    # set_*, perform_* implementations
 │   ├── subscriptions.rs # watch/unwatch
@@ -300,14 +300,14 @@ crates/axio/src/
 │   ├── traits.rs       # Platform, PlatformHandle, PlatformObserver
 │   ├── element_ops.rs  # Element building + discovery
 │   └── macos/          # macOS implementation
-└── types/              # AXElement, AXWindow, Event, etc.
+└── types/              # Element, Window, Event, etc.
 ```
 
 ## Summary
 
 | Concept                         | Meaning                             |
 | ------------------------------- | ----------------------------------- |
-| **State**                       | Cache with automatic event emission |
+| **Registry**                    | Cache with automatic event emission |
 | **get\_**                       | Cache lookup (fast, no OS)          |
 | **fetch\_**                     | OS call → cache → return            |
 | **set\_/perform\_**             | Write to OS                         |

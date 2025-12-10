@@ -12,7 +12,7 @@
  *   path.style.clipPath = occlusion.getAbsoluteClipPath(windowId);
  */
 
-import type { AXIO, AXWindow, WindowId } from "./index";
+import type { AXIO, AX } from "./index";
 
 type Rect = { x: number; y: number; w: number; h: number };
 
@@ -20,8 +20,8 @@ export class AxioOcclusion {
   private axio: AXIO;
   private svgDefs: SVGDefsElement;
   private svg: SVGSVGElement;
-  private clipPaths = new Map<WindowId, SVGClipPathElement>();
-  private absoluteClipPaths = new Map<WindowId, SVGClipPathElement>();
+  private clipPaths = new Map<AX.WindowId, SVGClipPathElement>();
+  private absoluteClipPaths = new Map<AX.WindowId, SVGClipPathElement>();
 
   constructor(axio: AXIO) {
     this.axio = axio;
@@ -49,22 +49,22 @@ export class AxioOcclusion {
   }
 
   /** Get the CSS clip-path value for a positioned window container */
-  getClipPath(windowId: WindowId): string {
+  getClipPath(windowId: AX.WindowId): string {
     const clipPath = this.clipPaths.get(windowId);
     if (!clipPath) return "";
     return `url(#${clipPath.id})`;
   }
 
   /** Get the CSS clip-path value for absolute-positioned elements (SVG, etc) */
-  getAbsoluteClipPath(windowId: WindowId): string {
+  getAbsoluteClipPath(windowId: AX.WindowId): string {
     const clipPath = this.absoluteClipPaths.get(windowId);
     if (!clipPath) return "";
     return `url(#${clipPath.id})`;
   }
 
   /** Get z-index for a window (higher = more in front) */
-  getZIndex(windowId: WindowId): number {
-    const index = this.axio.depthOrder.indexOf(windowId);
+  getZIndex(windowId: AX.WindowId): number {
+    const index = this.axio.zOrder.indexOf(windowId);
     if (index === -1) return 0;
     return 1000 - index;
   }
@@ -98,14 +98,14 @@ export class AxioOcclusion {
   }
 
   /** Get windows sorted by z-order (frontmost first) */
-  private getWindows(): AXWindow[] {
-    return this.axio.depthOrder
+  private getWindows(): AX.Window[] {
+    return this.axio.zOrder
       .map((id) => this.axio.windows.get(id))
-      .filter((w): w is AXWindow => !!w);
+      .filter((w): w is AX.Window => !!w);
   }
 
   /** Update or create clipPath for a positioned window container (window-relative coords) */
-  private updateClipPath(window: AXWindow, windowsInFront: AXWindow[]) {
+  private updateClipPath(window: AX.Window, windowsInFront: AX.Window[]) {
     let clipPath = this.clipPaths.get(window.id);
 
     if (!clipPath) {
@@ -173,7 +173,10 @@ export class AxioOcclusion {
   }
 
   /** Update or create absolute clipPath for SVG elements (viewport coords) */
-  private updateAbsoluteClipPath(window: AXWindow, windowsInFront: AXWindow[]) {
+  private updateAbsoluteClipPath(
+    window: AX.Window,
+    windowsInFront: AX.Window[]
+  ) {
     let clipPath = this.absoluteClipPaths.get(window.id);
 
     if (!clipPath) {

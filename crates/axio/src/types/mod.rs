@@ -12,10 +12,10 @@ mod geometry;
 mod ids;
 mod window;
 
-pub use element::AXElement;
+pub use element::Element;
 pub use error::{AxioError, AxioResult};
 pub use event::{Event, Snapshot, TextSelection};
 pub use geometry::{Bounds, Point};
 pub use ids::{ElementId, ProcessId, WindowId};
-pub use window::AXWindow;
+pub use window::Window;
 

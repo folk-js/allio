@@ -1,19 +1,11 @@
-import {
-  AXIO,
-  AXElement,
-  AXWindow,
-  AxioOcclusion,
-  AxioPassthrough,
-  WindowId,
-  ElementId,
-} from "@axio/client";
+import { AXIO, AX, AxioOcclusion, AxioPassthrough } from "@axio/client";
 
 type PortType = "input" | "output";
 
 interface Port {
   id: string;
-  windowId: WindowId;
-  element: AXElement;
+  windowId: AX.WindowId;
+  element: AX.Element;
   type: PortType;
   isTransform: boolean;
 }
@@ -30,10 +22,10 @@ interface PortPosition {
 }
 
 interface DragState {
-  sourceElement: AXElement;
-  sourceWindow: AXWindow;
-  targetElement: AXElement | null;
-  targetWindow: AXWindow | null;
+  sourceElement: AX.Element;
+  sourceWindow: AX.Window;
+  targetElement: AX.Element | null;
+  targetWindow: AX.Window | null;
 }
 
 // State
@@ -48,7 +40,7 @@ const state = {
 };
 
 // Transform input cache: elementId -> last input value
-const transformInputCache = new Map<ElementId, unknown>();
+const transformInputCache = new Map<AX.ElementId, unknown>();
 
 // DOM elements
 const dom = {
@@ -56,8 +48,8 @@ const dom = {
   svg: document.getElementById("connections") as unknown as SVGSVGElement,
   menuBar: document.getElementById("menuBar")!,
   portElements: new Map<string, HTMLElement>(),
-  windowContainers: new Map<WindowId, HTMLElement>(),
-  edgeGroups: new Map<WindowId, { left: HTMLElement; right: HTMLElement }>(),
+  windowContainers: new Map<AX.WindowId, HTMLElement>(),
+  edgeGroups: new Map<AX.WindowId, { left: HTMLElement; right: HTMLElement }>(),
   tempLine: null as SVGPathElement | null,
   hoverOverlay: null as HTMLElement | null,
   infoPanel: null as HTMLElement | null,
@@ -382,7 +374,7 @@ function createDragOverlays() {
   document.body.append(dom.dragSourceOverlay, dom.dragTargetOverlay);
 }
 
-function showDragSource(element: AXElement) {
+function showDragSource(element: AX.Element) {
   if (!dom.dragSourceOverlay || !element.bounds || !state.dragging) return;
   const { x, y, w, h } = element.bounds;
   const window = state.dragging.sourceWindow;
@@ -406,7 +398,7 @@ function hideDragSource() {
   if (dom.dragSourceOverlay) dom.dragSourceOverlay.style.display = "none";
 }
 
-function showDragTarget(element: AXElement) {
+function showDragTarget(element: AX.Element) {
   if (!dom.dragTargetOverlay || !element.bounds) return;
   const targetWindow = state.dragging?.targetWindow;
   if (!targetWindow) return;
@@ -445,8 +437,8 @@ function hideDragLine() {
 // --- Port Creation ---
 
 function createPortPair(
-  windowId: WindowId,
-  element: AXElement,
+  windowId: AX.WindowId,
+  element: AX.Element,
   isTransform: boolean
 ) {
   // Skip if ports already exist for this element
@@ -634,7 +626,7 @@ function renderAll() {
   redrawConnections();
 }
 
-function renderWindowContainer(window: AXWindow) {
+function renderWindowContainer(window: AX.Window) {
   let container = dom.windowContainers.get(window.id);
 
   if (!container) {
@@ -868,7 +860,7 @@ async function showHoverOverlay(port: Port) {
   drawWiringLine(port, bounds);
 }
 
-function buildInfoPanelHtml(element: AXElement, isTransform: boolean): string {
+function buildInfoPanelHtml(element: AX.Element, isTransform: boolean): string {
   const lines: string[] = [];
 
   lines.push(
@@ -980,7 +972,7 @@ function clearHoverOverlay() {
 
 // --- Value Propagation ---
 
-function handleElementUpdate(element: AXElement) {
+function handleElementUpdate(element: AX.Element) {
   for (const port of state.ports.values()) {
     if (port.element.id === element.id) {
       port.element = element;
@@ -1114,7 +1106,7 @@ function parseTransformFunction(code: string): (val: unknown) => unknown {
   return new Function("val", cleanCode) as (val: unknown) => unknown;
 }
 
-async function writeValueToElement(element: AXElement, value: unknown) {
+async function writeValueToElement(element: AX.Element, value: unknown) {
   try {
     const primitive = typeof value === "bigint" ? Number(value) : value;
     await axio.writeValue(element, primitive as string | number | boolean);
@@ -1125,13 +1117,13 @@ async function writeValueToElement(element: AXElement, value: unknown) {
 
 // --- Utilities ---
 
-function getWindowsSorted(): AXWindow[] {
-  return axio.depthOrder
+function getWindowsSorted(): AX.Window[] {
+  return axio.zOrder
     .map((id) => axio.windows.get(id))
-    .filter((w): w is AXWindow => !!w);
+    .filter((w): w is AX.Window => !!w);
 }
 
-function getWindowAt(x: number, y: number): AXWindow | null {
+function getWindowAt(x: number, y: number): AX.Window | null {
   for (const w of getWindowsSorted()) {
     const b = w.bounds;
     if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {

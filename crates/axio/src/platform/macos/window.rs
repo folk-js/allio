@@ -50,7 +50,7 @@ pub(crate) fn enable_accessibility_for_pid(pid: crate::ProcessId) {
 
 /// Fetch an element handle for a window by matching bounds
 /// TODO: find a way to not do this...
-pub(crate) fn fetch_window_handle(window: &crate::AXWindow) -> Option<ElementHandle> {
+pub(crate) fn fetch_window_handle(window: &crate::Window) -> Option<ElementHandle> {
   const MARGIN: f64 = 2.0;
 
   let window_elements = get_window_elements(window.process_id.0);

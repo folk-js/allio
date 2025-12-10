@@ -3,24 +3,18 @@
  * Uses the new AXIO architecture: elements are primary, trees are views.
  */
 
-import {
-  AXIO,
-  AXElement,
-  AxioPassthrough,
-  ElementId,
-  WindowId,
-} from "@axio/client";
+import { AXIO, AX, AxioPassthrough } from "@axio/client";
 
 class AXTreeOverlay {
   private container: HTMLElement;
   private axio: AXIO;
 
   // Minimal local state
-  private expanded = new Set<ElementId>();
+  private expanded = new Set<AX.ElementId>();
   private treeEl: HTMLElement | null = null;
   private outlineEl: HTMLElement | null = null;
   // Track which windows we've fetched the tree root for
-  private fetchedRoots = new Set<WindowId>();
+  private fetchedRoots = new Set<AX.WindowId>();
 
   constructor() {
     this.container = document.getElementById("windowContainer")!;
@@ -84,7 +78,7 @@ class AXTreeOverlay {
   }
 
   /** Fetch root element and its immediate children for a window */
-  private async fetchWindowRoot(windowId: WindowId): Promise<void> {
+  private async fetchWindowRoot(windowId: AX.WindowId): Promise<void> {
     try {
       const root = await this.axio.windowRoot(windowId);
       if (root) {
@@ -145,11 +139,11 @@ class AXTreeOverlay {
     `;
   }
 
-  private renderNodes(elements: AXElement[], depth = 0): string {
+  private renderNodes(elements: AX.Element[], depth = 0): string {
     return elements.map((el) => this.renderNode(el, depth)).join("");
   }
 
-  private renderNode(el: AXElement, depth: number): string {
+  private renderNode(el: AX.Element, depth: number): string {
     const children = this.axio.getChildren(el);
     const notDiscovered = el.children === null;
     // Has children if IDs exist (even if not yet loaded into elements Map)

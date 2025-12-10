@@ -11,11 +11,11 @@ and emit events. This guarantees:
 use async_broadcast::Sender;
 use std::collections::HashMap;
 
-use super::tree::TreeRelationships;
+use super::tree::ElementTree;
 use crate::accessibility::{Action, Role, Value};
 use crate::platform::{AppNotificationHandle, Handle, Observer, WatchHandle};
 use crate::types::{
-  AXElement, AXWindow, Bounds, ElementId, Event, Point, ProcessId, TextSelection, WindowId,
+  Bounds, Element, ElementId, Event, Point, ProcessId, TextSelection, Window, WindowId,
 };
 
 // ============================================================================
@@ -23,7 +23,7 @@ use crate::types::{
 // ============================================================================
 
 /// Per-process state.
-pub(crate) struct ProcessState {
+pub(crate) struct ProcessEntry {
   pub(crate) observer: Observer,
   pub(crate) app_handle: Handle,
   pub(crate) focused_element: Option<ElementId>,
@@ -33,17 +33,17 @@ pub(crate) struct ProcessState {
 }
 
 /// Per-window state.
-pub(crate) struct WindowState {
+pub(crate) struct WindowEntry {
   process_id: ProcessId,
-  info: AXWindow,
+  info: Window,
   handle: Option<Handle>,
 }
 
 /// Pure element data without tree relationships.
 ///
 /// This is the internal storage type. Tree relationships (parent/children)
-/// are managed separately in `TreeRelationships` and derived when building
-/// the public `AXElement` type for events/queries.
+/// are managed separately in `ElementTree` and derived when building
+/// the public `Element` type for events/queries.
 #[derive(Debug, Clone)]
 pub(crate) struct ElementData {
   pub id: ElementId,
@@ -71,7 +71,7 @@ pub(crate) struct ElementData {
 }
 
 /// Per-element state in the registry.
-pub(crate) struct ElementState {
+pub(crate) struct ElementEntry {
   pub(crate) data: ElementData,
   pub(crate) handle: Handle,
   pub(crate) hash: u64,
@@ -79,7 +79,7 @@ pub(crate) struct ElementState {
   pub(crate) watch: Option<WatchHandle>,
 }
 
-impl ElementState {
+impl ElementEntry {
   pub(crate) fn new(
     data: ElementData,
     handle: Handle,
@@ -105,17 +105,17 @@ impl ElementState {
 // ============================================================================
 
 /// Internal state storage with automatic event emission.
-pub(crate) struct State {
+pub(crate) struct Registry {
   // Event emission
   events_tx: Sender<Event>,
 
   // Primary collections (PRIVATE)
-  processes: HashMap<ProcessId, ProcessState>,
-  windows: HashMap<WindowId, WindowState>,
-  elements: HashMap<ElementId, ElementState>,
+  processes: HashMap<ProcessId, ProcessEntry>,
+  windows: HashMap<WindowId, WindowEntry>,
+  elements: HashMap<ElementId, ElementEntry>,
 
   // Tree structure - single source of truth for relationships
-  tree: TreeRelationships,
+  tree: ElementTree,
 
   // Indexes (PRIVATE)
   element_to_window: HashMap<ElementId, WindowId>,
@@ -124,23 +124,23 @@ pub(crate) struct State {
 
   // Focus/UI state (PRIVATE)
   focused_window: Option<WindowId>,
-  depth_order: Vec<WindowId>,
+  z_order: Vec<WindowId>,
   mouse_position: Option<Point>,
 }
 
-impl State {
+impl Registry {
   pub(crate) fn new(events_tx: Sender<Event>) -> Self {
     Self {
       events_tx,
       processes: HashMap::new(),
       windows: HashMap::new(),
       elements: HashMap::new(),
-      tree: TreeRelationships::new(),
+      tree: ElementTree::new(),
       element_to_window: HashMap::new(),
       hash_to_element: HashMap::new(),
       waiting_for_parent: HashMap::new(),
       focused_window: None,
-      depth_order: Vec::new(),
+      z_order: Vec::new(),
       mouse_position: None,
     }
   }
@@ -156,9 +156,9 @@ impl State {
     }
   }
 
-  /// Build an AXElement snapshot from ElementData + tree relationships.
-  /// This derives parent_id and children from TreeRelationships.
-  pub(crate) fn build_element(&self, id: ElementId) -> Option<AXElement> {
+  /// Build an Element snapshot from ElementData + tree relationships.
+  /// This derives parent_id and children from ElementTree.
+  pub(crate) fn build_element(&self, id: ElementId) -> Option<Element> {
     let elem = self.elements.get(&id)?;
     let data = &elem.data;
 
@@ -178,7 +178,7 @@ impl State {
       Some(children_slice.to_vec())
     };
 
-    Some(AXElement {
+    Some(Element {
       id,
       window_id: data.window_id,
       pid: data.pid,
@@ -225,14 +225,14 @@ impl State {
 // Element Operations
 // ============================================================================
 
-impl State {
+impl Registry {
   /// Get or insert an element by hash.
   ///
   /// - If hash exists in same window: returns (existing ElementId, true) where true = already had watch
   /// - If new: inserts, maintains indexes, resolves orphans, emits ElementAdded, returns (id, false)
   ///
   /// NOTE: Does not set up watch subscription - caller must do that via `set_element_watch`.
-  pub(crate) fn get_or_insert_element(&mut self, elem: ElementState) -> (ElementId, bool) {
+  pub(crate) fn get_or_insert_element(&mut self, elem: ElementEntry) -> (ElementId, bool) {
     let hash = elem.hash;
     let parent_hash = elem.parent_hash;
     let is_root = elem.data.is_root;
@@ -452,7 +452,7 @@ impl State {
 // Window Operations
 // ============================================================================
 
-impl State {
+impl Registry {
   /// Get or insert a window.
   ///
   /// - If window ID exists: returns false (already existed)
@@ -461,7 +461,7 @@ impl State {
     &mut self,
     id: WindowId,
     process_id: ProcessId,
-    info: AXWindow,
+    info: Window,
     handle: Option<Handle>,
   ) -> bool {
     if self.windows.contains_key(&id) {
@@ -470,19 +470,19 @@ impl State {
 
     self.windows.insert(
       id,
-      WindowState {
+      WindowEntry {
         process_id,
         info: info.clone(),
         handle,
       },
     );
-    self.update_depth_order();
+    self.update_z_order();
     self.emit(Event::WindowAdded { window: info });
     true
   }
 
   /// Update window info. Emits WindowChanged if different.
-  pub(crate) fn update_window(&mut self, id: WindowId, info: AXWindow) -> bool {
+  pub(crate) fn update_window(&mut self, id: WindowId, info: Window) -> bool {
     let Some(window) = self.windows.get_mut(&id) else {
       return false;
     };
@@ -495,7 +495,7 @@ impl State {
     window.info = info.clone();
 
     if z_changed {
-      self.update_depth_order();
+      self.update_z_order();
     }
 
     self.emit(Event::WindowChanged { window: info });
@@ -525,7 +525,7 @@ impl State {
 
     // Then remove window
     if let Some(window) = self.windows.remove(&id) {
-      self.update_depth_order();
+      self.update_z_order();
       self.emit(Event::WindowRemoved { window_id: id });
 
       // Check if process should be removed
@@ -537,10 +537,10 @@ impl State {
     }
   }
 
-  fn update_depth_order(&mut self) {
+  fn update_z_order(&mut self) {
     let mut windows: Vec<_> = self.windows.values().map(|w| &w.info).collect();
     windows.sort_by_key(|w| w.z_index);
-    self.depth_order = windows.into_iter().map(|w| w.id).collect();
+    self.z_order = windows.into_iter().map(|w| w.id).collect();
   }
 }
 
@@ -548,10 +548,10 @@ impl State {
 // Process Operations
 // ============================================================================
 
-impl State {
+impl Registry {
   /// Try to insert a process. Returns false if process already exists (no-op).
   /// This handles the TOCTOU race where another thread may have inserted first.
-  pub(crate) fn try_insert_process(&mut self, id: ProcessId, process: ProcessState) -> bool {
+  pub(crate) fn try_insert_process(&mut self, id: ProcessId, process: ProcessEntry) -> bool {
     use std::collections::hash_map::Entry;
     match self.processes.entry(id) {
       Entry::Occupied(_) => false, // Another thread won the race
@@ -568,13 +568,13 @@ impl State {
   }
 
   /// Get process state.
-  pub(crate) fn get_process(&self, id: ProcessId) -> Option<&ProcessState> {
+  pub(crate) fn get_process(&self, id: ProcessId) -> Option<&ProcessEntry> {
     self.processes.get(&id)
   }
 
   /// Get mutable process state.
   #[allow(dead_code)] // Part of complete API
-  pub(crate) fn get_process_mut(&mut self, id: ProcessId) -> Option<&mut ProcessState> {
+  pub(crate) fn get_process_mut(&mut self, id: ProcessId) -> Option<&mut ProcessEntry> {
     self.processes.get_mut(&id)
   }
 }
@@ -583,7 +583,7 @@ impl State {
 // Focus & Selection
 // ============================================================================
 
-impl State {
+impl Registry {
   /// Set focused window. Emits FocusWindow if changed.
   pub(crate) fn set_focused_window(&mut self, id: Option<WindowId>) -> bool {
     if self.focused_window == id {
@@ -599,7 +599,7 @@ impl State {
   pub(crate) fn set_focused_element(
     &mut self,
     pid: ProcessId,
-    element: AXElement,
+    element: Element,
   ) -> (bool, Option<ElementId>) {
     let Some(process) = self.processes.get_mut(&pid) else {
       return (false, None);
@@ -669,17 +669,17 @@ impl State {
 // Queries (read-only)
 // ============================================================================
 
-impl State {
+impl Registry {
   // --- Elements ---
 
   /// Get element with derived relationships.
-  /// Returns a built AXElement (cloned, not a reference).
-  pub(crate) fn get_element(&self, id: ElementId) -> Option<AXElement> {
+  /// Returns a built Element (cloned, not a reference).
+  pub(crate) fn get_element(&self, id: ElementId) -> Option<Element> {
     self.build_element(id)
   }
 
   /// Get internal element state (for handle access, etc).
-  pub(crate) fn get_element_state(&self, id: ElementId) -> Option<&ElementState> {
+  pub(crate) fn get_element_state(&self, id: ElementId) -> Option<&ElementEntry> {
     self.elements.get(&id)
   }
 
@@ -694,7 +694,7 @@ impl State {
   }
 
   /// Get all elements with derived relationships.
-  pub(crate) fn get_all_elements(&self) -> Vec<AXElement> {
+  pub(crate) fn get_all_elements(&self) -> Vec<Element> {
     self
       .elements
       .keys()
@@ -704,7 +704,7 @@ impl State {
 
   // --- Windows ---
 
-  pub(crate) fn get_window(&self, id: WindowId) -> Option<&AXWindow> {
+  pub(crate) fn get_window(&self, id: WindowId) -> Option<&Window> {
     self.windows.get(&id).map(|w| &w.info)
   }
 
@@ -717,7 +717,7 @@ impl State {
     self.windows.get(&id).map(|w| w.process_id)
   }
 
-  pub(crate) fn get_all_windows(&self) -> impl Iterator<Item = &AXWindow> {
+  pub(crate) fn get_all_windows(&self) -> impl Iterator<Item = &Window> {
     self.windows.values().map(|w| &w.info)
   }
 
@@ -731,8 +731,8 @@ impl State {
     self.focused_window
   }
 
-  pub(crate) fn get_depth_order(&self) -> &[WindowId] {
-    &self.depth_order
+  pub(crate) fn get_z_order(&self) -> &[WindowId] {
+    &self.z_order
   }
 
   #[allow(dead_code)] // Part of complete API
@@ -741,10 +741,10 @@ impl State {
   }
 
   /// Find window at point (uses cached z-order).
-  pub(crate) fn get_window_at_point(&self, x: f64, y: f64) -> Option<&AXWindow> {
+  pub(crate) fn get_window_at_point(&self, x: f64, y: f64) -> Option<&Window> {
     let point = Point::new(x, y);
-    // depth_order is sorted front-to-back, so first match is the topmost window
-    for window_id in &self.depth_order {
+    // z_order is sorted front-to-back, so first match is the topmost window
+    for window_id in &self.z_order {
       if let Some(window) = self.windows.get(window_id) {
         if window.info.bounds.contains(point) {
           return Some(&window.info);
@@ -785,7 +785,7 @@ impl State {
       focused_window: self.focused_window,
       focused_element,
       selection,
-      depth_order: self.depth_order.clone(),
+      z_order: self.z_order.clone(),
       mouse_position: self.mouse_position,
     }
   }

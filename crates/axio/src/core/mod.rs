@@ -44,7 +44,7 @@ mod state;
 mod subscriptions;
 mod tree;
 
-pub(crate) use state::{ElementData, ElementState, State};
+pub(crate) use state::{ElementData, ElementEntry, Registry};
 
 use crate::platform::{CurrentPlatform, Platform};
 use crate::polling::{self, PollingHandle};
@@ -66,7 +66,7 @@ const EVENT_CHANNEL_CAPACITY: usize = 5000;
 /// Polling starts automatically when created and stops when dropped.
 /// Clone is cheap (Arc bumps) - share freely across threads.
 pub struct Axio {
-  pub(crate) state: Arc<RwLock<State>>,
+  pub(crate) state: Arc<RwLock<Registry>>,
   events_tx: Sender<Event>,
   events_keepalive: InactiveReceiver<Event>,
   polling: Arc<Mutex<Option<PollingHandle>>>,
@@ -120,7 +120,7 @@ impl Axio {
     tx.set_overflow(true); // Drop oldest messages when full
 
     // State owns a clone of the sender for event emission
-    let state = State::new(tx.clone());
+    let state = Registry::new(tx.clone());
 
     let axio = Axio {
       state: Arc::new(RwLock::new(state)),
@@ -148,14 +148,14 @@ impl Axio {
   /// Read state. Lock released when closure returns.
   /// **Never call platform/OS functions inside the closure.**
   #[inline]
-  pub(crate) fn read<R>(&self, f: impl FnOnce(&State) -> R) -> R {
+  pub(crate) fn read<R>(&self, f: impl FnOnce(&Registry) -> R) -> R {
     f(&self.state.read())
   }
 
   /// Write state. Lock released when closure returns.
   /// **Never call platform/OS functions inside the closure.**
   #[inline]
-  pub(crate) fn write<R>(&self, f: impl FnOnce(&mut State) -> R) -> R {
+  pub(crate) fn write<R>(&self, f: impl FnOnce(&mut Registry) -> R) -> R {
     f(&mut self.state.write())
   }
 }

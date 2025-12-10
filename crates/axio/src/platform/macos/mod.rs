@@ -44,7 +44,7 @@ impl Platform for MacOS {
     util::has_permissions()
   }
 
-  fn fetch_windows(_exclude_pid: Option<u32>) -> Vec<crate::types::AXWindow> {
+  fn fetch_windows(_exclude_pid: Option<u32>) -> Vec<crate::types::Window> {
     // Note: exclude_pid filtering happens in polling.rs, not here
     window_list::enumerate_windows()
   }
@@ -57,7 +57,7 @@ impl Platform for MacOS {
     mouse::get_mouse_position().unwrap_or_else(|| Point::new(0.0, 0.0))
   }
 
-  fn fetch_window_handle(window: &crate::types::AXWindow) -> Option<Self::Handle> {
+  fn fetch_window_handle(window: &crate::types::Window) -> Option<Self::Handle> {
     window::fetch_window_handle(window)
   }
 

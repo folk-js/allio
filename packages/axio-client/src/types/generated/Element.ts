@@ -17,7 +17,7 @@ import type { WindowId } from "./WindowId";
  * - `is_root=false, parent_id=Some(id)` → parent is loaded (linked)
  * - `is_root=false, parent_id=None` → orphan (parent exists but not loaded)
  */
-export type AXElement = { id: ElementId, 
+export type Element = { id: ElementId, 
 /**
  * Window this element belongs to
  */

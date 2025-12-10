@@ -8,7 +8,7 @@
  * - Element removal on view changes
  */
 
-import { AXIO, AXElement, ElementId, AxioPassthrough } from "@axio/client";
+import { AXIO, AX, AxioPassthrough } from "@axio/client";
 import {
   forceSimulation,
   forceLink,
@@ -20,8 +20,8 @@ import {
 } from "d3-force";
 
 interface GraphNode extends SimulationNodeDatum {
-  id: ElementId;
-  element: AXElement;
+  id: AX.ElementId;
+  element: AX.Element;
 }
 
 interface GraphLink extends SimulationLinkDatum<GraphNode> {
@@ -37,7 +37,7 @@ class AXGraph {
   private svg: SVGSVGElement;
   private container: HTMLElement;
 
-  private nodes: Map<ElementId, GraphNode> = new Map();
+  private nodes: Map<AX.ElementId, GraphNode> = new Map();
   private links: GraphLink[] = [];
   private simulation: Simulation<GraphNode, GraphLink>;
 
@@ -194,7 +194,7 @@ class AXGraph {
   }
 
   /** Add a node to the graph. Returns { node, isNew } */
-  private addNode(element: AXElement): { node: GraphNode; isNew: boolean } {
+  private addNode(element: AX.Element): { node: GraphNode; isNew: boolean } {
     // Update existing node
     if (this.nodes.has(element.id)) {
       const node = this.nodes.get(element.id)!;
@@ -223,14 +223,14 @@ class AXGraph {
     return { node, isNew: true };
   }
 
-  private onElementAdded(element: AXElement) {
+  private onElementAdded(element: AX.Element) {
     const { isNew } = this.addNode(element);
     if (isNew) {
       this.toast(`+ ${element.role} [${this.parentState(element)}]`);
     }
   }
 
-  private onElementChanged(element: AXElement) {
+  private onElementChanged(element: AX.Element) {
     const node = this.nodes.get(element.id);
     if (!node) return;
 
@@ -260,7 +260,7 @@ class AXGraph {
     }
   }
 
-  private onElementRemoved(elementId: ElementId) {
+  private onElementRemoved(elementId: AX.ElementId) {
     const node = this.nodes.get(elementId);
     if (!node) return;
 
@@ -370,7 +370,7 @@ class AXGraph {
   // SVG element references for efficient updates
   private linkGroup: SVGGElement | null = null;
   private nodeGroup: SVGGElement | null = null;
-  private nodeElements: Map<ElementId, SVGGElement> = new Map();
+  private nodeElements: Map<AX.ElementId, SVGGElement> = new Map();
   private linkElements: SVGLineElement[] = [];
   private needsRebuild = true;
 
@@ -518,7 +518,7 @@ class AXGraph {
   }
 
   /** Get parent state as a string for display */
-  private parentState(el: AXElement): "root" | "linked" | "orphan" {
+  private parentState(el: AX.Element): "root" | "linked" | "orphan" {
     if (el.is_root) return "root";
     if (el.parent_id !== null) return "linked";
     return "orphan";

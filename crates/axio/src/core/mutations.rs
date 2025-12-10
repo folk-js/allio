@@ -7,11 +7,11 @@ Mutation methods for Axio.
 - `on_*` = notification handlers
 */
 
-use super::state::ProcessState;
+use super::state::ProcessEntry;
 use super::Axio;
 use crate::accessibility::Notification;
 use crate::platform::{CurrentPlatform, Platform, PlatformHandle, PlatformObserver};
-use crate::types::{AXElement, AXWindow, AxioError, AxioResult, ElementId, ProcessId, WindowId};
+use crate::types::{AxioError, AxioResult, Element, ElementId, ProcessId, Window, WindowId};
 use std::collections::HashSet;
 
 // ============================================================================
@@ -68,7 +68,7 @@ impl Axio {
   ///
   /// If `skip_removal` is true, windows not present in `new_windows` will NOT be removed.
   /// This is used during space transitions where window visibility is unreliable.
-  pub(crate) fn sync_windows(&self, new_windows: Vec<AXWindow>, skip_removal: bool) {
+  pub(crate) fn sync_windows(&self, new_windows: Vec<Window>, skip_removal: bool) {
     let new_ids: HashSet<WindowId> = new_windows.iter().map(|w| w.id).collect();
 
     // Step 1: Get existing windows that need handle fetch (new or missing handle)
@@ -160,7 +160,7 @@ impl Axio {
   }
 
   /// Handle focus changed notification.
-  pub(crate) fn on_focus_changed(&self, pid: u32, element: AXElement) {
+  pub(crate) fn on_focus_changed(&self, pid: u32, element: Element) {
     // Step 1: Update focus (quick write)
     let (changed, previous_id) =
       self.write(|s| s.set_focused_element(ProcessId(pid), element.clone()));
@@ -245,7 +245,7 @@ impl Axio {
     let inserted = self.write(|s| {
       s.try_insert_process(
         process_id,
-        ProcessState {
+        ProcessEntry {
           observer,
           app_handle,
           focused_element: None,
@@ -256,7 +256,7 @@ impl Axio {
     });
 
     if !inserted {
-      // Another thread inserted first - our ProcessState will be dropped,
+      // Another thread inserted first - our ProcessEntry will be dropped,
       // cleaning up the observer and notification handles via RAII
       log::debug!("Process {pid} already registered by another thread");
     }
@@ -272,8 +272,8 @@ impl Axio {
 impl Axio {
   /// Register an element (get or insert by hash).
   /// Sets up destruction watch after insertion.
-  /// Returns the built AXElement with relationships derived from tree.
-  pub(crate) fn register_element(&self, elem_state: super::ElementState) -> Option<AXElement> {
+  /// Returns the built Element with relationships derived from tree.
+  pub(crate) fn register_element(&self, elem_state: super::ElementEntry) -> Option<Element> {
     let pid = elem_state.data.pid;
     let handle = elem_state.handle.clone();
 
@@ -320,7 +320,7 @@ impl Axio {
     &self,
     element_id: ElementId,
     data: super::ElementData,
-  ) -> AxioResult<AXElement> {
+  ) -> AxioResult<Element> {
     let result = self.write(|s| {
       let (exists, _changed) = s.update_element_data(element_id, data);
       if !exists {

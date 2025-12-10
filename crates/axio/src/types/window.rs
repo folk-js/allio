@@ -7,7 +7,7 @@ use ts_rs::TS;
 /// An on-screen window.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct AXWindow {
+pub struct Window {
   pub id: WindowId,
   pub title: String,
   pub app_name: String,

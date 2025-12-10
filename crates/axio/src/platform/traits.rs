@@ -10,7 +10,7 @@ Core code only uses these traits - never platform-specific types directly.
 
 use crate::accessibility::{Notification, Value};
 use crate::core::Axio;
-use crate::types::{AXWindow, AxioResult, ElementId};
+use crate::types::{Window, AxioResult, ElementId};
 
 /// Attributes fetched from a platform element.
 /// This is the cross-platform interface for element data.
@@ -56,7 +56,7 @@ pub(crate) trait Platform {
 
   /// Fetch all visible windows from the window server.
   /// Returns windows from all apps (filtering is done in core).
-  fn fetch_windows(exclude_pid: Option<u32>) -> Vec<AXWindow>;
+  fn fetch_windows(exclude_pid: Option<u32>) -> Vec<Window>;
 
   /// Fetch main screen dimensions (width, height) in points.
   fn fetch_screen_size() -> (f64, f64);
@@ -67,7 +67,7 @@ pub(crate) trait Platform {
   /// Fetch the accessibility element handle for a window from OS.
   /// This makes platform calls to enumerate window elements and match by bounds.
   /// Returns None if the window has no accessibility element.
-  fn fetch_window_handle(window: &AXWindow) -> Option<Self::Handle>;
+  fn fetch_window_handle(window: &Window) -> Option<Self::Handle>;
 
   /// Create a notification observer for a process.
   /// On macOS: creates an `AXObserver` and adds it to the run loop.
@@ -86,7 +86,7 @@ pub(crate) trait Platform {
   fn fetch_focused_element(app_handle: &Self::Handle) -> Option<Self::Handle>;
 
   /// Get the root application element for a process.
-  /// Called once when process is registered, stored in ProcessState.
+  /// Called once when process is registered, stored in ProcessEntry.
   /// On macOS: calls `AXUIElementCreateApplication(pid)`.
   fn app_element(pid: u32) -> Self::Handle;
 }

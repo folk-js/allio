@@ -13,7 +13,7 @@ Uses `CGWindowListCopyWindowInfo` to enumerate on-screen windows.
 use super::cf_utils::{
   get_cf_boolean, get_cf_number, get_cf_string, get_cf_window_bounds, retain_cf_dictionary,
 };
-use crate::types::{AXWindow, Bounds, ProcessId, WindowId};
+use crate::types::{Window, Bounds, ProcessId, WindowId};
 use objc2_app_kit::NSRunningApplication;
 use objc2_core_foundation::{CFArray, CFDictionary};
 use objc2_core_graphics::{kCGNullWindowID, CGWindowListCopyWindowInfo, CGWindowListOption};
@@ -29,12 +29,12 @@ const FILTERED_BUNDLE_IDS: &[&str] = &[
 /// Enumerate all on-screen windows.
 /// Returns windows in z-order (frontmost first).
 /// Filters out system UI windows.
-pub(crate) fn enumerate_windows() -> Vec<AXWindow> {
+pub(crate) fn enumerate_windows() -> Vec<Window> {
   // IMPORTANT: Wrap in autorelease pool to prevent memory leaks.
   objc2::rc::autoreleasepool(|_pool| enumerate_windows_inner())
 }
 
-fn enumerate_windows_inner() -> Vec<AXWindow> {
+fn enumerate_windows_inner() -> Vec<Window> {
   let mut windows = Vec::new();
   // Track which PIDs we've already seen a window for (to mark only frontmost as focused)
   let mut seen_active_pid: Option<u32> = None;
@@ -108,7 +108,7 @@ fn enumerate_windows_inner() -> Vec<AXWindow> {
     let id = get_cf_number(&dict, "kCGWindowNumber");
     let z_index = windows.len() as u32;
 
-    windows.push(AXWindow {
+    windows.push(Window {
       id: WindowId::from(id as u32),
       title,
       app_name,

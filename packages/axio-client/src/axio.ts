@@ -6,17 +6,7 @@
  */
 
 import EventEmitter from "eventemitter3";
-import type {
-  RpcRequest,
-  Event,
-  AXElement,
-  AXWindow,
-  ElementId,
-  WindowId,
-  TextSelection,
-  Snapshot,
-  Value,
-} from "./types";
+import type { RpcRequest, AX } from "./types";
 
 // === Role-based type utilities ===
 
@@ -31,32 +21,32 @@ const NUMBER_ROLES = new Set(["slider", "progressbar", "stepper"]);
 const INTEGER_ROLES = new Set(["stepper"]); // Subset of NUMBER_ROLES that expect integers
 
 /** Check if element expects string values */
-export function isStringElement(el: AXElement): boolean {
+export function isStringElement(el: AX.Element): boolean {
   return STRING_ROLES.has(el.role);
 }
 
 /** Check if element expects boolean values */
-export function isBooleanElement(el: AXElement): boolean {
+export function isBooleanElement(el: AX.Element): boolean {
   return BOOLEAN_ROLES.has(el.role);
 }
 
 /** Check if element expects numeric values */
-export function isNumberElement(el: AXElement): boolean {
+export function isNumberElement(el: AX.Element): boolean {
   return NUMBER_ROLES.has(el.role);
 }
 
 /** Check if element expects integer values (should display/round as whole number) */
-export function isIntegerElement(el: AXElement): boolean {
+export function isIntegerElement(el: AX.Element): boolean {
   return INTEGER_ROLES.has(el.role);
 }
 
 /** Check if element expects float values (continuous) */
-export function isFloatElement(el: AXElement): boolean {
+export function isFloatElement(el: AX.Element): boolean {
   return NUMBER_ROLES.has(el.role) && !INTEGER_ROLES.has(el.role);
 }
 
 /** Check if element is writable (can accept value input) */
-export function isWritable(el: AXElement): boolean {
+export function isWritable(el: AX.Element): boolean {
   return (
     STRING_ROLES.has(el.role) ||
     BOOLEAN_ROLES.has(el.role) ||
@@ -66,9 +56,9 @@ export function isWritable(el: AXElement): boolean {
 
 /** Create a Value from a primitive, inferring type from element's role */
 export function createValue(
-  el: AXElement,
+  el: AX.Element,
   primitive: string | number | boolean
-): Value {
+): AX.Value {
   if (STRING_ROLES.has(el.role)) {
     return { type: "String", value: String(primitive) };
   }
@@ -93,13 +83,13 @@ type RpcArgs<M extends RpcMethod> = Extract<RpcRequest, { method: M }> extends {
 
 // Manual return type mapping (matches Rust dispatch)
 type RpcReturns = {
-  snapshot: Snapshot;
-  element_at: AXElement;
-  get: AXElement;
-  window_root: AXElement;
-  children: AXElement[];
-  parent: AXElement | null;
-  refresh: AXElement;
+  snapshot: AX.Snapshot;
+  element_at: AX.Element;
+  get: AX.Element;
+  window_root: AX.Element;
+  children: AX.Element[];
+  parent: AX.Element | null;
+  refresh: AX.Element;
   write: boolean;
   click: boolean;
   watch: void;
@@ -107,8 +97,8 @@ type RpcReturns = {
 };
 
 // Event types derived from ServerEvent
-type EventName = Event["event"];
-type EventData<E extends EventName> = Extract<Event, { event: E }>["data"];
+type EventName = AX.Event["event"];
+type EventData<E extends EventName> = Extract<AX.Event, { event: E }>["data"];
 
 // Namespace events (e.g., 'window' catches 'window:added', 'window:changed', 'window:removed')
 type EventNamespace =
@@ -128,26 +118,26 @@ type Pending = {
   timer: number;
 };
 
-type WatchCallback = (element: AXElement) => void;
+type WatchCallback = (element: AX.Element) => void;
 
 export class AXIO extends EventEmitter<AxioEvents> {
   private ws: WebSocket | null = null;
   private requestId = 0;
   private pending = new Map<number, Pending>();
-  private watchCallbacks = new Map<ElementId, Set<WatchCallback>>();
+  private watchCallbacks = new Map<AX.ElementId, Set<WatchCallback>>();
 
   // === State (mirrors Registry) ===
-  readonly windows = new Map<WindowId, AXWindow>();
-  readonly elements = new Map<ElementId, AXElement>();
-  readonly watched = new Set<ElementId>();
+  readonly windows = new Map<AX.WindowId, AX.Window>();
+  readonly elements = new Map<AX.ElementId, AX.Element>();
+  readonly watched = new Set<AX.ElementId>();
 
   /** Window IDs sorted by z-order (front to back) */
-  depthOrder: WindowId[] = [];
+  zOrder: AX.WindowId[] = [];
 
   // Focus tracking
-  focusedWindow: WindowId | null = null;
-  focusedElement: AXElement | null = null;
-  selection: TextSelection | null = null;
+  focusedWindow: AX.WindowId | null = null;
+  focusedElement: AX.Element | null = null;
+  selection: AX.TextSelection | null = null;
   passthrough = false;
 
   // === Options ===
@@ -204,36 +194,36 @@ export class AXIO extends EventEmitter<AxioEvents> {
   // === State access (derived queries, local only) ===
 
   /** Get element by ID from local cache */
-  get(id: ElementId): AXElement | undefined {
+  get(id: AX.ElementId): AX.Element | undefined {
     return this.elements.get(id);
   }
 
   /** Get the currently focused window (null if desktop is focused) */
-  get focused(): AXWindow | null {
+  get focused(): AX.Window | null {
     return this.focusedWindow
       ? this.windows.get(this.focusedWindow) ?? null
       : null;
   }
 
   /** Get all elements for a window */
-  getWindowElements(windowId: WindowId): AXElement[] {
+  getWindowElements(windowId: AX.WindowId): AX.Element[] {
     return Array.from(this.elements.values()).filter(
       (el) => el.window_id === windowId
     );
   }
 
   /** Get root element for a window (element with is_root === true) */
-  getRootElement(windowId: WindowId): AXElement | undefined {
+  getRootElement(windowId: AX.WindowId): AX.Element | undefined {
     return Array.from(this.elements.values()).find(
       (el) => el.window_id === windowId && el.is_root
     );
   }
 
   /** Get children of an element from local cache */
-  getChildren(parent: { children: ElementId[] | null }): AXElement[] {
+  getChildren(parent: { children: AX.ElementId[] | null }): AX.Element[] {
     return (parent.children ?? [])
       .map((id) => this.elements.get(id))
-      .filter((e): e is AXElement => !!e);
+      .filter((e): e is AX.Element => !!e);
   }
 
   // === RPC Methods (questions + actions) ===
@@ -243,7 +233,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
    * Use this to re-sync state if you suspect the client is out of sync.
    * Automatically updates local state (windows, elements, etc.).
    */
-  async snapshot(): Promise<Snapshot> {
+  async snapshot(): Promise<AX.Snapshot> {
     const snap = await this.call("snapshot", {});
     // Apply snapshot to local state
     this.windows.clear();
@@ -253,39 +243,40 @@ export class AXIO extends EventEmitter<AxioEvents> {
     this.focusedWindow = snap.focused_window;
     this.focusedElement = snap.focused_element;
     this.selection = snap.selection;
-    this.depthOrder = snap.depth_order;
+    this.zOrder = snap.z_order;
     return snap;
   }
 
   /** Get element at screen coordinates (fetches from OS).
    * Returns null if no tracked window exists at the position. */
-  elementAt = (x: number, y: number): Promise<AXElement | null> =>
+  elementAt = (x: number, y: number): Promise<AX.Element | null> =>
     this.call("element_at", { x, y });
 
   /** Get element by ID (from registry, fetches if needed) */
-  getElement = (element_id: ElementId) => this.call("get", { element_id });
+  getElement = (element_id: AX.ElementId) => this.call("get", { element_id });
 
   /** Get root element for a window (fetches from OS if not cached) */
-  windowRoot = (window_id: WindowId) => this.call("window_root", { window_id });
+  windowRoot = (window_id: AX.WindowId) =>
+    this.call("window_root", { window_id });
 
   /** Get children of element (fetches from OS) */
-  children = (element_id: ElementId, max_children = 1000) =>
+  children = (element_id: AX.ElementId, max_children = 1000) =>
     this.call("children", { element_id, max_children });
 
   /** Get parent of element (fetches from OS, null if element is root) */
-  parent = (element_id: ElementId): Promise<AXElement | null> =>
+  parent = (element_id: AX.ElementId): Promise<AX.Element | null> =>
     this.call("parent", { element_id });
 
   /** Force re-fetch element from OS */
-  refresh = (element_id: ElementId) => this.call("refresh", { element_id });
+  refresh = (element_id: AX.ElementId) => this.call("refresh", { element_id });
 
   /** Write typed value to element */
-  write = (element_id: ElementId, value: Value) =>
+  write = (element_id: AX.ElementId, value: AX.Value) =>
     this.call("write", { element_id, value });
 
   /** Write a primitive value, auto-converting to the element's expected type */
   writeValue = async (
-    element: AXElement,
+    element: AX.Element,
     primitive: string | number | boolean
   ) => {
     const value = createValue(element, primitive);
@@ -293,14 +284,14 @@ export class AXIO extends EventEmitter<AxioEvents> {
   };
 
   /** Click element */
-  click = (element_id: ElementId) => this.call("click", { element_id });
+  click = (element_id: AX.ElementId) => this.call("click", { element_id });
 
   /**
    * Watch an element for changes.
    * Returns a cleanup function.
    * Optionally pass a callback to be called when the element changes.
    */
-  watch(element_id: ElementId, callback?: WatchCallback): () => void {
+  watch(element_id: AX.ElementId, callback?: WatchCallback): () => void {
     if (callback) {
       if (!this.watchCallbacks.has(element_id)) {
         this.watchCallbacks.set(element_id, new Set());
@@ -330,7 +321,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
   }
 
   /** Unwatch an element */
-  unwatch(element_id: ElementId): Promise<void> {
+  unwatch(element_id: AX.ElementId): Promise<void> {
     this.watched.delete(element_id);
     this.watchCallbacks.delete(element_id);
     return this.rawCall("unwatch", { element_id }) as Promise<void>;
@@ -384,7 +375,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
       this.log(msg.event, msg.data);
     }
 
-    const event = msg as Event;
+    const event = msg as AX.Event;
 
     switch (event.event) {
       case "sync:init": {
@@ -394,7 +385,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
           focused_window,
           focused_element,
           selection,
-          depth_order,
+          z_order,
         } = event.data;
         this.windows.clear();
         this.elements.clear();
@@ -403,21 +394,21 @@ export class AXIO extends EventEmitter<AxioEvents> {
         this.focusedWindow = focused_window;
         this.focusedElement = focused_element;
         this.selection = selection;
-        this.depthOrder = depth_order;
+        this.zOrder = z_order;
         break;
       }
 
       case "window:added": {
         const { window } = event.data;
         this.windows.set(window.id, window);
-        this.updateDepthOrder();
+        this.updateZOrder();
         break;
       }
 
       case "window:changed": {
         const { window } = event.data;
         this.windows.set(window.id, window);
-        this.updateDepthOrder();
+        this.updateZOrder();
         break;
       }
 
@@ -429,7 +420,7 @@ export class AXIO extends EventEmitter<AxioEvents> {
             this.elements.delete(id);
           }
         }
-        this.updateDepthOrder();
+        this.updateZOrder();
         break;
       }
 
@@ -484,8 +475,8 @@ export class AXIO extends EventEmitter<AxioEvents> {
     (this.emit as Function)(namespace, event);
   }
 
-  private updateDepthOrder() {
-    this.depthOrder = Array.from(this.windows.values())
+  private updateZOrder() {
+    this.zOrder = Array.from(this.windows.values())
       .sort((a, b) => a.z_index - b.z_index)
       .map((w) => w.id);
   }

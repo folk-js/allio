@@ -8,8 +8,8 @@ These functions:
 */
 
 use crate::accessibility::Role;
-use crate::core::{Axio, ElementData, ElementState};
-use crate::types::{AXElement, AxioError, AxioResult, ElementId, ProcessId, WindowId};
+use crate::core::{Axio, ElementData, ElementEntry};
+use crate::types::{Element, AxioError, AxioResult, ElementId, ProcessId, WindowId};
 
 use super::{Handle, PlatformHandle};
 
@@ -24,7 +24,7 @@ pub(crate) fn build_element_state(
   window_id: WindowId,
   pid: u32,
   _parent_id: Option<ElementId>,
-) -> ElementState {
+) -> ElementEntry {
   let attrs = handle.fetch_attributes();
 
   // Fetch parent once and reuse (OS call is expensive)
@@ -68,7 +68,7 @@ pub(crate) fn build_element_state(
     is_fallback: false,
   };
 
-  ElementState::new(data, handle, hash, parent_hash)
+  ElementEntry::new(data, handle, hash, parent_hash)
 }
 
 /// Build and register an element (convenience wrapper).
@@ -78,7 +78,7 @@ pub(crate) fn build_and_register_element(
   window_id: WindowId,
   pid: u32,
   parent_id: Option<ElementId>,
-) -> Option<AXElement> {
+) -> Option<Element> {
   let elem_state = build_element_state(handle, window_id, pid, parent_id);
   axio.register_element(elem_state)
 }
@@ -90,7 +90,7 @@ pub(crate) fn fetch_children(
   axio: &Axio,
   parent_id: ElementId,
   max_children: usize,
-) -> AxioResult<Vec<AXElement>> {
+) -> AxioResult<Vec<Element>> {
   // Step 1: Extract handle (quick read, lock released)
   let (handle, window_id, pid) = axio.get_element_handle(parent_id)?;
 
@@ -119,7 +119,7 @@ pub(crate) fn fetch_children(
 }
 
 /// Fetch and register parent of an element from platform.
-pub(crate) fn fetch_parent(axio: &Axio, element_id: ElementId) -> AxioResult<Option<AXElement>> {
+pub(crate) fn fetch_parent(axio: &Axio, element_id: ElementId) -> AxioResult<Option<Element>> {
   // Step 1: Extract handle (quick read, lock released)
   let (handle, window_id, pid) = axio.get_element_handle(element_id)?;
 
@@ -140,7 +140,7 @@ pub(crate) fn fetch_parent(axio: &Axio, element_id: ElementId) -> AxioResult<Opt
 }
 
 /// Fetch fresh attributes for an element from platform.
-pub(crate) fn fetch_element(axio: &Axio, element_id: ElementId) -> AxioResult<AXElement> {
+pub(crate) fn fetch_element(axio: &Axio, element_id: ElementId) -> AxioResult<Element> {
   // Step 1: Extract handle and metadata (quick read, lock released)
   let (handle, window_id, pid, is_root) = axio.get_element_for_refresh(element_id)?;
 
@@ -178,7 +178,7 @@ pub(crate) fn fetch_element(axio: &Axio, element_id: ElementId) -> AxioResult<AX
 // === Window/Hit Testing ===
 
 /// Get the root element for a window.
-pub(crate) fn fetch_window_root(axio: &Axio, window_id: WindowId) -> AxioResult<AXElement> {
+pub(crate) fn fetch_window_root(axio: &Axio, window_id: WindowId) -> AxioResult<Element> {
   let (window, handle) = axio
     .get_window_with_handle(window_id)
     .ok_or(AxioError::WindowNotFound(window_id))?;
@@ -208,7 +208,7 @@ pub(crate) fn fetch_element_at_position(
   axio: &Axio,
   x: f64,
   y: f64,
-) -> AxioResult<Option<AXElement>> {
+) -> AxioResult<Option<Element>> {
   // First, find which TRACKED window is at this point.
   // This ensures we only hit-test within apps we're monitoring (excludes axio overlay).
   // Returns None if no tracked window at this position (valid - could be desktop, excluded app, etc.)
@@ -219,7 +219,7 @@ pub(crate) fn fetch_element_at_position(
   let window_bounds = window.bounds;
   let pid = window.process_id.0;
 
-  // Get the app element handle from ProcessState (stored at process creation time).
+  // Get the app element handle from ProcessEntry (stored at process creation time).
   // This ensures we only query within the correct app.
   let app_handle = axio
     .get_app_handle(pid)
@@ -254,11 +254,11 @@ pub(crate) fn fetch_element_at_position(
 pub(crate) fn fetch_focus(
   axio: &Axio,
   pid: u32,
-) -> AxioResult<(Option<AXElement>, Option<crate::types::TextSelection>)> {
+) -> AxioResult<(Option<Element>, Option<crate::types::TextSelection>)> {
   use crate::platform::{CurrentPlatform, Platform};
   use crate::types::AxioError;
 
-  // Get app handle from ProcessState
+  // Get app handle from ProcessEntry
   let app_handle = axio
     .get_app_handle(pid)
     .ok_or_else(|| AxioError::Internal(format!("Process {pid} not registered")))?;

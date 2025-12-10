@@ -7,7 +7,7 @@ Consumers don't interact with this directly - polling is owned by `Axio`.
 
 use crate::core::Axio;
 use crate::platform::{CurrentPlatform, DisplayLinkHandle, Platform};
-use crate::types::{AXWindow, ProcessId};
+use crate::types::{Window, ProcessId};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -67,7 +67,7 @@ impl Drop for PollingHandle {
 /// Result of polling for windows.
 pub(crate) struct PollWindowsResult {
   /// Windows to sync (may be empty if we should skip this poll).
-  pub windows: Vec<AXWindow>,
+  pub windows: Vec<Window>,
   /// If true, skip window removal this poll (transitional state detected).
   pub skip_removal: bool,
 }
@@ -108,7 +108,7 @@ fn poll_windows(options: &AxioOptions) -> PollWindowsResult {
     log::trace!("Offscreen windows detected - likely in space transition, skipping window removal");
   }
 
-  let windows: Vec<AXWindow> = all_windows
+  let windows: Vec<Window> = all_windows
     .into_iter()
     .filter(|w| {
       // Exclude our own window
