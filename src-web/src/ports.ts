@@ -381,11 +381,19 @@ function createDragOverlays() {
 }
 
 function showDragSource(element: AXElement) {
-  if (!dom.dragSourceOverlay || !element.bounds) return;
+  if (!dom.dragSourceOverlay || !element.bounds || !state.dragging) return;
   const { x, y, w, h } = element.bounds;
+  const window = state.dragging.sourceWindow;
+  const container = dom.windowContainers.get(window.id);
+  if (!container) return;
+
+  // Move overlay into window container so it inherits the container's clip-path
+  container.appendChild(dom.dragSourceOverlay);
+
+  // Position with window-relative coordinates
   Object.assign(dom.dragSourceOverlay.style, {
-    left: `${x}px`,
-    top: `${y}px`,
+    left: `${x - window.bounds.x}px`,
+    top: `${y - window.bounds.y}px`,
     width: `${w}px`,
     height: `${h}px`,
     display: "block",
@@ -398,10 +406,20 @@ function hideDragSource() {
 
 function showDragTarget(element: AXElement) {
   if (!dom.dragTargetOverlay || !element.bounds) return;
+  const targetWindow = state.dragging?.targetWindow;
+  if (!targetWindow) return;
+
+  const container = dom.windowContainers.get(targetWindow.id);
+  if (!container) return;
+
+  // Move overlay into window container so it inherits the container's clip-path
+  container.appendChild(dom.dragTargetOverlay);
+
   const { x, y, w, h } = element.bounds;
+  // Position with window-relative coordinates
   Object.assign(dom.dragTargetOverlay.style, {
-    left: `${x}px`,
-    top: `${y}px`,
+    left: `${x - targetWindow.bounds.x}px`,
+    top: `${y - targetWindow.bounds.y}px`,
     width: `${w}px`,
     height: `${h}px`,
     display: "block",
@@ -810,10 +828,18 @@ async function showHoverOverlay(port: Port) {
   const bounds = element.bounds;
   if (!bounds || !dom.hoverOverlay || !dom.infoPanel) return;
 
-  // Position bounds overlay
+  // Get window container to inherit its clip-path
+  const axWindow = axio.windows.get(port.windowId);
+  const container = dom.windowContainers.get(port.windowId);
+  if (!axWindow || !container) return;
+
+  // Move overlay into window container so it inherits the container's clip-path
+  container.appendChild(dom.hoverOverlay);
+
+  // Position with window-relative coordinates
   Object.assign(dom.hoverOverlay.style, {
-    left: `${bounds.x}px`,
-    top: `${bounds.y}px`,
+    left: `${bounds.x - axWindow.bounds.x}px`,
+    top: `${bounds.y - axWindow.bounds.y}px`,
     width: `${bounds.w}px`,
     height: `${bounds.h}px`,
     display: "block",
