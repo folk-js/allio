@@ -30,7 +30,7 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::LazyLock;
 
-use super::handles::{ElementHandle, ObserverHandle};
+use super::handles::ObserverHandle;
 use super::mapping::notification_from_macos;
 use crate::accessibility::Notification;
 use crate::core::Axio;
@@ -208,25 +208,14 @@ fn handle_element_notification(
   notif: Notification,
   ax_element: CFRetained<AXUIElement>,
 ) {
-  match notif {
-    Notification::ValueChanged => {
-      let handle = ElementHandle::new(ax_element);
-      let attrs = handle.fetch_attributes_internal(None);
-      if let Some(mut element) = axio.get_element(element_id) {
-        element.value = attrs.value;
-        if let Err(e) = axio.update_element(element_id, element) {
-          log::debug!("Failed to update element value: {e}");
-        }
-      }
-    }
+  // Suppress unused variable warning - we don't need the raw element for these handlers
+  drop(ax_element);
 
-    Notification::TitleChanged => {
-      let handle = ElementHandle::new(ax_element);
-      if let Some(mut element) = axio.get_element(element_id) {
-        element.label = handle.get_string("AXTitle");
-        if let Err(e) = axio.update_element(element_id, element) {
-          log::debug!("Failed to update element title: {e}");
-        }
+  match notif {
+    Notification::ValueChanged | Notification::TitleChanged => {
+      // Re-fetch the element to get fresh attribute values
+      if let Err(e) = crate::platform::element_ops::fetch_element(axio, element_id) {
+        log::debug!("Failed to refresh element on {notif:?}: {e}");
       }
     }
 

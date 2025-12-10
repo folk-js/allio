@@ -8,7 +8,7 @@ These functions:
 */
 
 use crate::accessibility::Role;
-use crate::core::{Axio, ElementState};
+use crate::core::{Axio, ElementData, ElementState};
 use crate::types::{AXElement, AxioError, AxioResult, ElementId, ProcessId, WindowId};
 
 use super::{Handle, PlatformHandle};
@@ -16,11 +16,14 @@ use super::{Handle, PlatformHandle};
 // === Element Building ===
 
 /// Build element state from a handle (pure - no side effects).
+/// Note: `_parent_id` is no longer stored on element - relationships
+/// are managed by TreeRelationships and parent_hash is used for orphan resolution.
+#[allow(unused_variables)]
 pub(crate) fn build_element_state(
   handle: Handle,
   window_id: WindowId,
   pid: u32,
-  parent_id: Option<ElementId>,
+  _parent_id: Option<ElementId>,
 ) -> ElementState {
   let attrs = handle.fetch_attributes();
 
@@ -33,8 +36,6 @@ pub(crate) fn build_element_state(
     .map(|p| p.fetch_attributes().role == Role::Application)
     .unwrap_or(false);
 
-  let parent_id_value = if is_root { None } else { parent_id };
-
   let hash = handle.element_hash();
   let parent_hash = if is_root {
     None
@@ -42,13 +43,11 @@ pub(crate) fn build_element_state(
     parent_handle.as_ref().map(|p| p.element_hash())
   };
 
-  let element = AXElement {
+  let data = ElementData {
     id: ElementId::new(),
     window_id,
     pid: ProcessId(pid),
     is_root,
-    parent_id: parent_id_value,
-    children: None,
     role: attrs.role,
     platform_role: attrs.platform_role,
     label: attrs.title,
@@ -69,7 +68,7 @@ pub(crate) fn build_element_state(
     is_fallback: false,
   };
 
-  ElementState::new(element, handle, hash, parent_hash)
+  ElementState::new(data, handle, hash, parent_hash)
 }
 
 /// Build and register an element (convenience wrapper).
@@ -143,19 +142,16 @@ pub(crate) fn fetch_parent(axio: &Axio, element_id: ElementId) -> AxioResult<Opt
 /// Fetch fresh attributes for an element from platform.
 pub(crate) fn fetch_element(axio: &Axio, element_id: ElementId) -> AxioResult<AXElement> {
   // Step 1: Extract handle and metadata (quick read, lock released)
-  let (handle, window_id, pid, is_root, parent_id, existing_children) =
-    axio.get_element_for_refresh(element_id)?;
+  let (handle, window_id, pid, is_root) = axio.get_element_for_refresh(element_id)?;
 
   // Step 2: Platform call (NO LOCK)
   let attrs = handle.fetch_attributes();
 
-  let updated = AXElement {
+  let updated_data = ElementData {
     id: element_id,
     window_id,
     pid: ProcessId(pid),
     is_root,
-    parent_id,
-    children: existing_children,
     role: attrs.role,
     platform_role: attrs.platform_role,
     label: attrs.title,
@@ -176,8 +172,7 @@ pub(crate) fn fetch_element(axio: &Axio, element_id: ElementId) -> AxioResult<AX
     is_fallback: false, // Only set true by fetch_element_at_position
   };
 
-  axio.update_element(element_id, updated.clone())?;
-  Ok(updated)
+  axio.update_element_data(element_id, updated_data)
 }
 
 // === Window/Hit Testing ===

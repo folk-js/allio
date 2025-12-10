@@ -42,8 +42,9 @@ mod mutations;
 mod queries;
 mod state;
 mod subscriptions;
+mod tree;
 
-pub(crate) use state::{ElementState, State};
+pub(crate) use state::{ElementData, ElementState, State};
 
 use crate::platform::{CurrentPlatform, Platform};
 use crate::polling::{self, PollingHandle};

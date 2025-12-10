@@ -11,9 +11,11 @@ and emit events. This guarantees:
 use async_broadcast::Sender;
 use std::collections::HashMap;
 
+use super::tree::TreeRelationships;
+use crate::accessibility::{Action, Role, Value};
 use crate::platform::{AppNotificationHandle, Handle, Observer, WatchHandle};
 use crate::types::{
-  AXElement, AXWindow, ElementId, Event, Point, ProcessId, TextSelection, WindowId,
+  AXElement, AXWindow, Bounds, ElementId, Event, Point, ProcessId, TextSelection, WindowId,
 };
 
 // ============================================================================
@@ -37,9 +39,40 @@ pub(crate) struct WindowState {
   handle: Option<Handle>,
 }
 
-/// Per-element state.
+/// Pure element data without tree relationships.
+///
+/// This is the internal storage type. Tree relationships (parent/children)
+/// are managed separately in `TreeRelationships` and derived when building
+/// the public `AXElement` type for events/queries.
+#[derive(Debug, Clone)]
+pub(crate) struct ElementData {
+  pub id: ElementId,
+  pub window_id: WindowId,
+  pub pid: ProcessId,
+  pub is_root: bool,
+  pub role: Role,
+  pub platform_role: String,
+  pub label: Option<String>,
+  pub description: Option<String>,
+  pub placeholder: Option<String>,
+  pub url: Option<String>,
+  pub value: Option<Value>,
+  pub bounds: Option<Bounds>,
+  pub focused: Option<bool>,
+  pub disabled: bool,
+  pub selected: Option<bool>,
+  pub expanded: Option<bool>,
+  pub row_index: Option<usize>,
+  pub column_index: Option<usize>,
+  pub row_count: Option<usize>,
+  pub column_count: Option<usize>,
+  pub actions: Vec<Action>,
+  pub is_fallback: bool,
+}
+
+/// Per-element state in the registry.
 pub(crate) struct ElementState {
-  pub(crate) element: AXElement,
+  pub(crate) data: ElementData,
   pub(crate) handle: Handle,
   pub(crate) hash: u64,
   pub(crate) parent_hash: Option<u64>,
@@ -48,13 +81,13 @@ pub(crate) struct ElementState {
 
 impl ElementState {
   pub(crate) fn new(
-    element: AXElement,
+    data: ElementData,
     handle: Handle,
     hash: u64,
     parent_hash: Option<u64>,
   ) -> Self {
     Self {
-      element,
+      data,
       handle,
       hash,
       parent_hash,
@@ -63,7 +96,7 @@ impl ElementState {
   }
 
   pub(crate) fn pid(&self) -> u32 {
-    self.element.pid.0
+    self.data.pid.0
   }
 }
 
@@ -80,6 +113,9 @@ pub(crate) struct State {
   processes: HashMap<ProcessId, ProcessState>,
   windows: HashMap<WindowId, WindowState>,
   elements: HashMap<ElementId, ElementState>,
+
+  // Tree structure - single source of truth for relationships
+  tree: TreeRelationships,
 
   // Indexes (PRIVATE)
   element_to_window: HashMap<ElementId, WindowId>,
@@ -99,6 +135,7 @@ impl State {
       processes: HashMap::new(),
       windows: HashMap::new(),
       elements: HashMap::new(),
+      tree: TreeRelationships::new(),
       element_to_window: HashMap::new(),
       hash_to_element: HashMap::new(),
       waiting_for_parent: HashMap::new(),
@@ -118,6 +155,70 @@ impl State {
       }
     }
   }
+
+  /// Build an AXElement snapshot from ElementData + tree relationships.
+  /// This derives parent_id and children from TreeRelationships.
+  pub(crate) fn build_element(&self, id: ElementId) -> Option<AXElement> {
+    let elem = self.elements.get(&id)?;
+    let data = &elem.data;
+
+    // Derive relationships from tree
+    let parent_id = if data.is_root {
+      None
+    } else {
+      self.tree.parent(id)
+    };
+
+    // Get children from tree (empty vec if no children tracked)
+    let children_slice = self.tree.children(id);
+    let children = if children_slice.is_empty() && !self.tree.has_children(id) {
+      // Children not yet fetched (vs explicitly empty)
+      None
+    } else {
+      Some(children_slice.to_vec())
+    };
+
+    Some(AXElement {
+      id,
+      window_id: data.window_id,
+      pid: data.pid,
+      is_root: data.is_root,
+      parent_id,
+      children,
+      role: data.role,
+      platform_role: data.platform_role.clone(),
+      label: data.label.clone(),
+      description: data.description.clone(),
+      placeholder: data.placeholder.clone(),
+      url: data.url.clone(),
+      value: data.value.clone(),
+      bounds: data.bounds,
+      focused: data.focused,
+      disabled: data.disabled,
+      selected: data.selected,
+      expanded: data.expanded,
+      row_index: data.row_index,
+      column_index: data.column_index,
+      row_count: data.row_count,
+      column_count: data.column_count,
+      actions: data.actions.clone(),
+      is_fallback: data.is_fallback,
+    })
+  }
+
+  /// Emit ElementAdded with derived relationships.
+  fn emit_element_added(&self, id: ElementId) {
+    if let Some(element) = self.build_element(id) {
+      self.emit(Event::ElementAdded { element });
+    }
+  }
+
+  /// Emit ElementChanged with derived relationships.
+  fn emit_element_changed(&self, id: ElementId) {
+    if let Some(element) = self.build_element(id) {
+      self.emit(Event::ElementChanged { element });
+    }
+  }
 }
 
 // ============================================================================
@@ -127,142 +228,195 @@ impl State {
 impl State {
   /// Get or insert an element by hash.
   ///
-  /// - If hash exists: returns (existing ElementId, true) where true = already had watch
+  /// - If hash exists in same window: returns (existing ElementId, true) where true = already had watch
   /// - If new: inserts, maintains indexes, resolves orphans, emits ElementAdded, returns (id, false)
   ///
   /// NOTE: Does not set up watch subscription - caller must do that via `set_element_watch`.
-  pub(crate) fn get_or_insert_element(&mut self, mut elem: ElementState) -> (ElementId, bool) {
+  pub(crate) fn get_or_insert_element(&mut self, elem: ElementState) -> (ElementId, bool) {
     let hash = elem.hash;
     let parent_hash = elem.parent_hash;
+    let is_root = elem.data.is_root;
+    let window_id = elem.data.window_id;
 
-    // Fast path: already exists
+    // Fast path: already exists (same hash AND same window)
     if let Some(&existing_id) = self.hash_to_element.get(&hash) {
       if let Some(existing) = self.elements.get(&existing_id) {
-        // Hash collision detection: log if windows don't match
-        if existing.element.window_id != elem.element.window_id {
-          log::error!(
-            "Hash collision detected: hash {} maps to element {} (window {:?}) \
-             but new element claims window {:?}. This may indicate CFHash instability.",
-            hash,
-            existing_id,
-            existing.element.window_id,
-            elem.element.window_id
-          );
+        // Only dedup if same window - different windows can have elements with same CFHash
+        if existing.data.window_id == window_id {
+          let has_watch = existing.watch.is_some();
+          return (existing_id, has_watch);
         }
-        let has_watch = existing.watch.is_some();
-        return (existing_id, has_watch);
+        // Different window with same hash - this is normal (common UI patterns), proceed with insert
+        log::debug!(
+          "Same hash {} in different windows: existing element {} (window {:?}), \
+           new element for window {:?}. Registering as separate elements.",
+          hash,
+          existing_id,
+          existing.data.window_id,
+          window_id
+        );
       }
     }
 
-    // Try to link to parent if parent exists
-    if !elem.element.is_root && elem.element.parent_id.is_none() {
-      if let Some(ref ph) = parent_hash {
-        if let Some(&parent_id) = self.hash_to_element.get(ph) {
-          elem.element.parent_id = Some(parent_id);
-        }
-      }
-    }
+    let element_id = elem.data.id;
 
-    let element_id = elem.element.id;
-    let window_id = elem.element.window_id;
-    let element_parent_id = elem.element.parent_id;
-    let is_root = elem.element.is_root;
-    let element_clone = elem.element.clone();
-
-    // Insert into primary collection and indexes
+    // Insert element data into primary collection and indexes
     self.elements.insert(element_id, elem);
     self.element_to_window.insert(element_id, window_id);
+    // Note: This overwrites the hash_to_element entry. For cross-window hash sharing,
+    // the most recently registered element "wins" the hash lookup. This is acceptable
+    // because we use window_id checks everywhere else.
     self.hash_to_element.insert(hash, element_id);
 
-    // Link to parent's children list
-    if let Some(parent_id) = element_parent_id {
-      self.add_child_to_parent(parent_id, element_id);
-    } else if !is_root {
-      // Orphan: has parent in OS but not loaded yet
+    // Link to parent via tree if parent exists AND is in same window
+    if !is_root {
       if let Some(ref ph) = parent_hash {
-        self
-          .waiting_for_parent
-          .entry(*ph)
-          .or_default()
-          .push(element_id);
+        if let Some(&parent_id) = self.hash_to_element.get(ph) {
+          // Check parent is in same window before linking
+          if self
+            .elements
+            .get(&parent_id)
+            .map_or(false, |p| p.data.window_id == window_id)
+          {
+            self.tree.add_child(parent_id, element_id);
+            self.emit_element_changed(parent_id);
+          } else {
+            // Parent hash exists but in different window - treat as orphan
+            self
+              .waiting_for_parent
+              .entry(*ph)
+              .or_default()
+              .push(element_id);
+          }
+        } else {
+          // Orphan: parent not loaded yet, queue for later
+          self
+            .waiting_for_parent
+            .entry(*ph)
+            .or_default()
+            .push(element_id);
+        }
       }
     }
 
-    // Resolve any orphans waiting for this element
+    // Resolve any orphans waiting for this element (only from same window)
     if let Some(orphans) = self.waiting_for_parent.remove(&hash) {
       for orphan_id in orphans {
-        self.link_orphan_to_parent(orphan_id, element_id);
+        // Only link orphans from the same window
+        let orphan_window = self.elements.get(&orphan_id).map(|e| e.data.window_id);
+        if orphan_window == Some(window_id) {
+          self.tree.add_child(element_id, orphan_id);
+          self.emit_element_changed(orphan_id);
+        } else {
+          // Orphan is from a different window - re-queue it
+          if let Some(orphan_elem) = self.elements.get(&orphan_id) {
+            if let Some(ref ph) = orphan_elem.parent_hash {
+              self
+                .waiting_for_parent
+                .entry(*ph)
+                .or_default()
+                .push(orphan_id);
+            }
+          }
+        }
       }
     }
 
-    self.emit(Event::ElementAdded {
-      element: element_clone,
-    });
+    self.emit_element_added(element_id);
     (element_id, false) // New element, no watch yet
   }
 
-  /// Update element data. Emits ElementChanged if data differs.
+  /// Update element data from fresh platform fetch.
+  /// Only updates the data fields (not relationships). Emits ElementChanged if data differs.
   /// Returns (element_exists, data_changed).
-  pub(crate) fn update_element(&mut self, id: ElementId, data: AXElement) -> (bool, bool) {
+  pub(crate) fn update_element_data(
+    &mut self,
+    id: ElementId,
+    new_data: ElementData,
+  ) -> (bool, bool) {
     let Some(elem) = self.elements.get_mut(&id) else {
       return (false, false);
     };
 
-    if elem.element == data {
+    // Compare relevant fields (id, window_id, pid, is_root shouldn't change)
+    let data = &elem.data;
+    let changed = data.role != new_data.role
+      || data.platform_role != new_data.platform_role
+      || data.label != new_data.label
+      || data.description != new_data.description
+      || data.placeholder != new_data.placeholder
+      || data.url != new_data.url
+      || data.value != new_data.value
+      || data.bounds != new_data.bounds
+      || data.focused != new_data.focused
+      || data.disabled != new_data.disabled
+      || data.selected != new_data.selected
+      || data.expanded != new_data.expanded
+      || data.row_index != new_data.row_index
+      || data.column_index != new_data.column_index
+      || data.row_count != new_data.row_count
+      || data.column_count != new_data.column_count
+      || data.actions != new_data.actions
+      || data.is_fallback != new_data.is_fallback;
+
+    if !changed {
       return (true, false);
     }
 
-    elem.element = data.clone();
-    self.emit(Event::ElementChanged { element: data });
+    elem.data = new_data;
+    self.emit_element_changed(id);
     (true, true)
   }
 
-  /// Set children for an element. Emits ElementChanged if different.
+  /// Set children for an element in OS order.
+  /// Updates tree relationships. Emits ElementChanged if different.
+  /// Filters to only existing elements to prevent dangling refs.
   /// Returns (element_exists, children_changed).
   pub(crate) fn set_element_children(
     &mut self,
     id: ElementId,
     children: Vec<ElementId>,
   ) -> (bool, bool) {
-    let new_children = Some(children);
+    if !self.elements.contains_key(&id) {
+      return (false, false);
+    }
 
-    let element_clone = {
-      let Some(elem) = self.elements.get_mut(&id) else {
-        return (false, false);
-      };
+    // Filter to only existing elements (prevents dangling refs)
+    let valid_children: Vec<ElementId> = children
+      .into_iter()
+      .filter(|&cid| self.elements.contains_key(&cid))
+      .collect();
 
-      if elem.element.children == new_children {
-        return (true, false);
-      }
+    let old_children = self.tree.children(id);
+    if old_children == valid_children {
+      return (true, false);
+    }
 
-      elem.element.children = new_children;
-      elem.element.clone()
-    };
-
-    self.emit(Event::ElementChanged {
-      element: element_clone,
-    });
+    self.tree.set_children(id, valid_children);
+    self.emit_element_changed(id);
     (true, true)
   }
 
-  /// Remove an element and cascade to children.
+  /// Remove an element and cascade to all descendants.
   pub(crate) fn remove_element(&mut self, id: ElementId) {
-    self.remove_element_recursive(id);
+    // Remove subtree from tree structure, get all removed IDs
+    let removed_ids = self.tree.remove_subtree(id);
+
+    for removed_id in removed_ids {
+      self.remove_element_data(removed_id);
+    }
   }
 
-  fn remove_element_recursive(&mut self, id: ElementId) {
-    let Some(_) = self.element_to_window.remove(&id) else {
-      return;
-    };
+  /// Remove element data and indexes (called after tree removal).
+  fn remove_element_data(&mut self, id: ElementId) {
+    self.element_to_window.remove(&id);
 
     let Some(mut elem) = self.elements.remove(&id) else {
       return;
     };
 
-    // Remove from parent's children list
-    if let Some(parent_id) = elem.element.parent_id {
-      self.remove_child_from_parent(parent_id, id);
-    }
+    // Clean hash index
+    self.hash_to_element.remove(&elem.hash);
 
     // Clean waiting_for_parent
     if let Some(ref ph) = elem.parent_hash {
@@ -274,16 +428,6 @@ impl State {
       }
     }
     self.waiting_for_parent.remove(&elem.hash);
-
-    // Cascade to children
-    if let Some(children) = &elem.element.children {
-      for child_id in children.clone() {
-        self.remove_element_recursive(child_id);
-      }
-    }
-
-    // Clean hash index
-    self.hash_to_element.remove(&elem.hash);
 
     // Drop watch (RAII cleanup)
     elem.watch.take();
@@ -301,95 +445,6 @@ impl State {
   /// Take watch handle from element (for operations that need to release the lock).
   pub(crate) fn take_element_watch(&mut self, id: ElementId) -> Option<WatchHandle> {
     self.elements.get_mut(&id).and_then(|e| e.watch.take())
-  }
-
-  // --- Internal helpers ---
-
-  fn add_child_to_parent(&mut self, parent_id: ElementId, child_id: ElementId) {
-    // Assert child's parent_id points to this parent
-    debug_assert!(
-      self
-        .elements
-        .get(&child_id)
-        .map_or(true, |c| c.element.parent_id == Some(parent_id)),
-      "Parent-child inconsistency: adding child {child_id} to parent {parent_id}, \
-       but child's parent_id is {:?}",
-      self.elements.get(&child_id).map(|c| c.element.parent_id)
-    );
-
-    let element_clone = {
-      let Some(parent) = self.elements.get_mut(&parent_id) else {
-        return;
-      };
-      let children = parent.element.children.get_or_insert_with(Vec::new);
-      if children.contains(&child_id) {
-        return;
-      }
-      children.push(child_id);
-      parent.element.clone()
-    };
-
-    self.emit(Event::ElementChanged {
-      element: element_clone,
-    });
-  }
-
-  fn remove_child_from_parent(&mut self, parent_id: ElementId, child_id: ElementId) {
-    // Assert: if child still exists, its parent_id should point to this parent
-    // (it may not exist if we're in the middle of cascading removal)
-    debug_assert!(
-      self
-        .elements
-        .get(&child_id)
-        .map_or(true, |c| c.element.parent_id == Some(parent_id)),
-      "Parent-child inconsistency: removing child {child_id} from parent {parent_id}, \
-       but child's parent_id is {:?}",
-      self.elements.get(&child_id).map(|c| c.element.parent_id)
-    );
-
-    let element_clone = {
-      let Some(parent) = self.elements.get_mut(&parent_id) else {
-        return;
-      };
-      let Some(children) = &mut parent.element.children else {
-        return;
-      };
-      let old_len = children.len();
-      children.retain(|&cid| cid != child_id);
-      if children.len() == old_len {
-        return;
-      }
-      parent.element.clone()
-    };
-
-    self.emit(Event::ElementChanged {
-      element: element_clone,
-    });
-  }
-
-  fn link_orphan_to_parent(&mut self, orphan_id: ElementId, parent_id: ElementId) {
-    // Assert orphan was previously unlinked (no parent_id set)
-    debug_assert!(
-      self
-        .elements
-        .get(&orphan_id)
-        .map_or(true, |o| o.element.parent_id.is_none()),
-      "Orphan linking inconsistency: orphan {orphan_id} already has parent_id {:?}",
-      self.elements.get(&orphan_id).map(|o| o.element.parent_id)
-    );
-
-    let element_clone = {
-      let Some(orphan) = self.elements.get_mut(&orphan_id) else {
-        return;
-      };
-      orphan.element.parent_id = Some(parent_id);
-      orphan.element.clone()
-    };
-
-    self.emit(Event::ElementChanged {
-      element: element_clone,
-    });
-    self.add_child_to_parent(parent_id, orphan_id);
   }
 }
 
@@ -460,7 +515,7 @@ impl State {
     let element_ids: Vec<ElementId> = self
       .elements
       .iter()
-      .filter(|(_, e)| e.element.window_id == id)
+      .filter(|(_, e)| e.data.window_id == id)
       .map(|(eid, _)| *eid)
       .collect();
 
@@ -617,20 +672,34 @@ impl State {
 impl State {
   // --- Elements ---
 
-  pub(crate) fn get_element(&self, id: ElementId) -> Option<&AXElement> {
-    self.elements.get(&id).map(|e| &e.element)
+  /// Get element with derived relationships.
+  /// Returns a built AXElement (cloned, not a reference).
+  pub(crate) fn get_element(&self, id: ElementId) -> Option<AXElement> {
+    self.build_element(id)
   }
 
+  /// Get internal element state (for handle access, etc).
   pub(crate) fn get_element_state(&self, id: ElementId) -> Option<&ElementState> {
     self.elements.get(&id)
+  }
+
+  /// Get element data (without relationships).
+  #[allow(dead_code)] // Available for internal use
+  pub(crate) fn get_element_data(&self, id: ElementId) -> Option<&ElementData> {
+    self.elements.get(&id).map(|e| &e.data)
   }
 
   pub(crate) fn find_element_by_hash(&self, hash: u64) -> Option<ElementId> {
     self.hash_to_element.get(&hash).copied()
   }
 
-  pub(crate) fn get_all_elements(&self) -> impl Iterator<Item = &AXElement> {
-    self.elements.values().map(|e| &e.element)
+  /// Get all elements with derived relationships.
+  pub(crate) fn get_all_elements(&self) -> Vec<AXElement> {
+    self
+      .elements
+      .keys()
+      .filter_map(|&id| self.build_element(id))
+      .collect()
   }
 
   // --- Windows ---
@@ -705,14 +774,14 @@ impl State {
         let process = self.processes.get(&window.process_id)?;
         let focused = process
           .focused_element
-          .and_then(|eid| self.elements.get(&eid).map(|e| e.element.clone()));
+          .and_then(|eid| self.build_element(eid));
         Some((focused, process.last_selection.clone()))
       })
       .unwrap_or((None, None));
 
     crate::types::Snapshot {
       windows: self.windows.values().map(|w| w.info.clone()).collect(),
-      elements: self.elements.values().map(|e| e.element.clone()).collect(),
+      elements: self.get_all_elements(),
       focused_window: self.focused_window,
       focused_element,
       selection,

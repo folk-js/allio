@@ -64,29 +64,49 @@ impl Drop for PollingHandle {
   }
 }
 
+/// Result of polling for windows.
+pub(crate) struct PollWindowsResult {
+  /// Windows to sync (may be empty if we should skip this poll).
+  pub windows: Vec<AXWindow>,
+  /// If true, skip window removal this poll (transitional state detected).
+  pub skip_removal: bool,
+}
+
 /// Poll for current windows.
-fn poll_windows(options: &AxioOptions) -> Vec<AXWindow> {
+fn poll_windows(options: &AxioOptions) -> PollWindowsResult {
   let all_windows = CurrentPlatform::fetch_windows(None);
 
   // Get offset from exclude_pid window (typically the overlay app)
-  // If overlay is hidden/offscreen, use zero offset and continue polling
-  let (offset_x, offset_y) = if let Some(exclude_pid) = options.exclude_pid {
+  let (offset_x, offset_y, overlay_missing) = if let Some(exclude_pid) = options.exclude_pid {
     match all_windows.iter().find(|w| w.process_id.0 == exclude_pid.0) {
-      Some(overlay_window) => (overlay_window.bounds.x, overlay_window.bounds.y),
+      Some(overlay_window) => (overlay_window.bounds.x, overlay_window.bounds.y, false),
       None => {
-        // Overlay not visible - continue with absolute coordinates
-        log::debug!(
-          "Overlay window (PID {}) not found, using absolute coordinates",
+        // Overlay not visible - we're likely in a different space/fullscreen app
+        log::trace!(
+          "Overlay window (PID {}) not found - likely in different space, skipping window removal",
           exclude_pid.0
         );
-        (0.0, 0.0)
+        (0.0, 0.0, true)
       }
     }
   } else {
-    (0.0, 0.0)
+    (0.0, 0.0, false)
   };
 
   let (screen_width, screen_height) = CurrentPlatform::fetch_screen_size();
+
+  // Check if ANY window is offscreen (indicates space transition)
+  let has_offscreen_windows = all_windows.iter().any(|w| {
+    let adjusted_x = w.bounds.x - offset_x;
+    adjusted_x > screen_width + 1.0
+  });
+
+  // Skip window removal if we're in a transitional state
+  let skip_removal = overlay_missing || has_offscreen_windows;
+
+  if has_offscreen_windows && !overlay_missing {
+    log::trace!("Offscreen windows detected - likely in space transition, skipping window removal");
+  }
 
   let windows: Vec<AXWindow> = all_windows
     .into_iter()
@@ -116,7 +136,10 @@ fn poll_windows(options: &AxioOptions) -> Vec<AXWindow> {
     })
     .collect();
 
-  windows
+  PollWindowsResult {
+    windows,
+    skip_removal,
+  }
 }
 
 /// Configuration options for Axio.
@@ -209,13 +232,14 @@ fn poll_iteration(axio: &Axio, config: &AxioOptions) {
   let pos = CurrentPlatform::fetch_mouse_position();
   axio.sync_mouse(pos);
 
-  let windows = poll_windows(config);
+  let poll_result = poll_windows(config);
 
   // Focus tracking (extract before moving windows)
-  let focused_window_id = windows.iter().find(|w| w.focused).map(|w| w.id);
+  let focused_window_id = poll_result.windows.iter().find(|w| w.focused).map(|w| w.id);
 
   // Sync windows (handles add/update/remove + events + process creation)
-  axio.sync_windows(windows);
+  // Skip removal if we're in a transitional state (space switching, etc.)
+  axio.sync_windows(poll_result.windows, poll_result.skip_removal);
 
   axio.sync_focused_window(focused_window_id);
 }

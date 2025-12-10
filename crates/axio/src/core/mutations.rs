@@ -30,7 +30,7 @@ impl Axio {
       let e = s
         .get_element_state(element_id)
         .ok_or(AxioError::ElementNotFound(element_id))?;
-      Ok((e.handle.clone(), e.element.role))
+      Ok((e.handle.clone(), e.data.role))
     })?;
 
     // Step 2: Validate (no lock)
@@ -65,7 +65,10 @@ impl Axio {
 
 impl Axio {
   /// Sync windows from polling. Handles add/update/remove.
-  pub(crate) fn sync_windows(&self, new_windows: Vec<AXWindow>) {
+  ///
+  /// If `skip_removal` is true, windows not present in `new_windows` will NOT be removed.
+  /// This is used during space transitions where window visibility is unreliable.
+  pub(crate) fn sync_windows(&self, new_windows: Vec<AXWindow>, skip_removal: bool) {
     let new_ids: HashSet<WindowId> = new_windows.iter().map(|w| w.id).collect();
 
     // Step 1: Get existing windows that need handle fetch (new or missing handle)
@@ -95,13 +98,15 @@ impl Axio {
 
     // Step 3: Single write for all state mutations
     let new_process_pids = self.write(|s| {
-      // Remove windows no longer present
-      let to_remove: Vec<WindowId> = s
-        .get_all_window_ids()
-        .filter(|id| !new_ids.contains(id))
-        .collect();
-      for window_id in to_remove {
-        s.remove_window(window_id);
+      // Remove windows no longer present (unless skip_removal is set)
+      if !skip_removal {
+        let to_remove: Vec<WindowId> = s
+          .get_all_window_ids()
+          .filter(|id| !new_ids.contains(id))
+          .collect();
+        for window_id in to_remove {
+          s.remove_window(window_id);
+        }
       }
 
       // Add/update windows
@@ -267,11 +272,10 @@ impl Axio {
 impl Axio {
   /// Register an element (get or insert by hash).
   /// Sets up destruction watch after insertion.
+  /// Returns the built AXElement with relationships derived from tree.
   pub(crate) fn register_element(&self, elem_state: super::ElementState) -> Option<AXElement> {
-    let pid = elem_state.element.pid;
+    let pid = elem_state.data.pid;
     let handle = elem_state.handle.clone();
-    // Clone element before insertion for return value (avoids second read)
-    let element_for_return = elem_state.element.clone();
 
     // Step 1: Insert element and check if watch needed (single write, no race)
     let (element_id, already_had_watch) = self.write(|s| s.get_or_insert_element(elem_state));
@@ -281,14 +285,8 @@ impl Axio {
       self.setup_destruction_watch(element_id, pid, &handle);
     }
 
-    // Step 3: Return the element we inserted (no need to re-read, we have the data)
-    // Note: If element was already present, the returned ID matches, so element_for_return
-    // may have slightly different data than what's in state - but that's acceptable since
-    // we're returning "the element that was registered", which is semantically correct.
-    Some(AXElement {
-      id: element_id,
-      ..element_for_return
-    })
+    // Step 3: Build and return the element with derived relationships
+    self.read(|s| s.build_element(element_id))
   }
 
   /// Set up destruction watch for an element.
@@ -318,12 +316,20 @@ impl Axio {
   }
 
   /// Update element data (used by fetch_element).
-  pub(crate) fn update_element(&self, element_id: ElementId, data: AXElement) -> AxioResult<()> {
-    let (exists, _changed) = self.write(|s| s.update_element(element_id, data));
-    if !exists {
-      return Err(AxioError::ElementNotFound(element_id));
-    }
-    Ok(())
+  pub(crate) fn update_element_data(
+    &self,
+    element_id: ElementId,
+    data: super::ElementData,
+  ) -> AxioResult<AXElement> {
+    let result = self.write(|s| {
+      let (exists, _changed) = s.update_element_data(element_id, data);
+      if !exists {
+        return Err(AxioError::ElementNotFound(element_id));
+      }
+      s.build_element(element_id)
+        .ok_or(AxioError::ElementNotFound(element_id))
+    });
+    result
   }
 
   /// Set children for an element (used by fetch_children).

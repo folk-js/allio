@@ -36,16 +36,16 @@ impl Axio {
     self.read(|s| s.get_depth_order().to_vec())
   }
 
-  /// Get element by ID from registry.
+  /// Get element by ID from registry (with derived relationships).
   pub fn get_element(&self, element_id: ElementId) -> Option<AXElement> {
-    self.read(|s| s.get_element(element_id).cloned())
+    self.read(|s| s.get_element(element_id))
   }
 
   /// Get element by hash from registry.
   pub(crate) fn get_element_by_hash(&self, hash: u64) -> Option<AXElement> {
     self.read(|s| {
       s.find_element_by_hash(hash)
-        .and_then(|id| s.get_element(id).cloned())
+        .and_then(|id| s.get_element(id))
     })
   }
 
@@ -54,14 +54,14 @@ impl Axio {
     self.read(|s| {
       element_ids
         .iter()
-        .filter_map(|id| s.get_element(*id).cloned())
+        .filter_map(|id| s.get_element(*id))
         .collect()
     })
   }
 
   /// Get all elements from registry.
   pub fn get_all_elements(&self) -> Vec<AXElement> {
-    self.read(|s| s.get_all_elements().cloned().collect())
+    self.read(|s| s.get_all_elements())
   }
 
   /// Get a snapshot of the current state for sync.
@@ -105,34 +105,21 @@ impl Axio {
       let e = s
         .get_element_state(element_id)
         .ok_or(AxioError::ElementNotFound(element_id))?;
-      Ok((e.handle.clone(), e.element.window_id, e.pid()))
+      Ok((e.handle.clone(), e.data.window_id, e.pid()))
     })
   }
 
   /// Get element state data needed for refresh operations.
+  /// Returns (handle, window_id, pid, is_root).
   pub(crate) fn get_element_for_refresh(
     &self,
     element_id: ElementId,
-  ) -> AxioResult<(
-    Handle,
-    WindowId,
-    u32,
-    bool,
-    Option<ElementId>,
-    Option<Vec<ElementId>>,
-  )> {
+  ) -> AxioResult<(Handle, WindowId, u32, bool)> {
     self.read(|s| {
       let e = s
         .get_element_state(element_id)
         .ok_or(AxioError::ElementNotFound(element_id))?;
-      Ok((
-        e.handle.clone(),
-        e.element.window_id,
-        e.pid(),
-        e.element.is_root,
-        e.element.parent_id,
-        e.element.children.clone(),
-      ))
+      Ok((e.handle.clone(), e.data.window_id, e.pid(), e.data.is_root))
     })
   }
 }
