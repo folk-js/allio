@@ -127,18 +127,30 @@ impl State {
 impl State {
   /// Get or insert an element by hash.
   ///
-  /// - If hash exists: returns existing ElementId (no event)
-  /// - If new: inserts, maintains indexes, resolves orphans, emits ElementAdded
+  /// - If hash exists: returns (existing ElementId, true) where true = already had watch
+  /// - If new: inserts, maintains indexes, resolves orphans, emits ElementAdded, returns (id, false)
   ///
   /// NOTE: Does not set up watch subscription - caller must do that via `set_element_watch`.
-  pub(crate) fn get_or_insert_element(&mut self, mut elem: ElementState) -> ElementId {
+  pub(crate) fn get_or_insert_element(&mut self, mut elem: ElementState) -> (ElementId, bool) {
     let hash = elem.hash;
     let parent_hash = elem.parent_hash;
 
     // Fast path: already exists
     if let Some(&existing_id) = self.hash_to_element.get(&hash) {
-      if self.elements.contains_key(&existing_id) {
-        return existing_id;
+      if let Some(existing) = self.elements.get(&existing_id) {
+        // Hash collision detection: log if windows don't match
+        if existing.element.window_id != elem.element.window_id {
+          log::error!(
+            "Hash collision detected: hash {} maps to element {} (window {:?}) \
+             but new element claims window {:?}. This may indicate CFHash instability.",
+            hash,
+            existing_id,
+            existing.element.window_id,
+            elem.element.window_id
+          );
+        }
+        let has_watch = existing.watch.is_some();
+        return (existing_id, has_watch);
       }
     }
 
@@ -186,35 +198,41 @@ impl State {
     self.emit(Event::ElementAdded {
       element: element_clone,
     });
-    element_id
+    (element_id, false) // New element, no watch yet
   }
 
   /// Update element data. Emits ElementChanged if data differs.
-  pub(crate) fn update_element(&mut self, id: ElementId, data: AXElement) -> bool {
+  /// Returns (element_exists, data_changed).
+  pub(crate) fn update_element(&mut self, id: ElementId, data: AXElement) -> (bool, bool) {
     let Some(elem) = self.elements.get_mut(&id) else {
-      return false;
+      return (false, false);
     };
 
     if elem.element == data {
-      return false;
+      return (true, false);
     }
 
     elem.element = data.clone();
     self.emit(Event::ElementChanged { element: data });
-    true
+    (true, true)
   }
 
   /// Set children for an element. Emits ElementChanged if different.
-  pub(crate) fn set_element_children(&mut self, id: ElementId, children: Vec<ElementId>) -> bool {
+  /// Returns (element_exists, children_changed).
+  pub(crate) fn set_element_children(
+    &mut self,
+    id: ElementId,
+    children: Vec<ElementId>,
+  ) -> (bool, bool) {
     let new_children = Some(children);
 
     let element_clone = {
       let Some(elem) = self.elements.get_mut(&id) else {
-        return false;
+        return (false, false);
       };
 
       if elem.element.children == new_children {
-        return false;
+        return (true, false);
       }
 
       elem.element.children = new_children;
@@ -224,7 +242,7 @@ impl State {
     self.emit(Event::ElementChanged {
       element: element_clone,
     });
-    true
+    (true, true)
   }
 
   /// Remove an element and cascade to children.
@@ -288,6 +306,17 @@ impl State {
   // --- Internal helpers ---
 
   fn add_child_to_parent(&mut self, parent_id: ElementId, child_id: ElementId) {
+    // Assert child's parent_id points to this parent
+    debug_assert!(
+      self
+        .elements
+        .get(&child_id)
+        .map_or(true, |c| c.element.parent_id == Some(parent_id)),
+      "Parent-child inconsistency: adding child {child_id} to parent {parent_id}, \
+       but child's parent_id is {:?}",
+      self.elements.get(&child_id).map(|c| c.element.parent_id)
+    );
+
     let element_clone = {
       let Some(parent) = self.elements.get_mut(&parent_id) else {
         return;
@@ -306,6 +335,18 @@ impl State {
   }
 
   fn remove_child_from_parent(&mut self, parent_id: ElementId, child_id: ElementId) {
+    // Assert: if child still exists, its parent_id should point to this parent
+    // (it may not exist if we're in the middle of cascading removal)
+    debug_assert!(
+      self
+        .elements
+        .get(&child_id)
+        .map_or(true, |c| c.element.parent_id == Some(parent_id)),
+      "Parent-child inconsistency: removing child {child_id} from parent {parent_id}, \
+       but child's parent_id is {:?}",
+      self.elements.get(&child_id).map(|c| c.element.parent_id)
+    );
+
     let element_clone = {
       let Some(parent) = self.elements.get_mut(&parent_id) else {
         return;
@@ -327,6 +368,16 @@ impl State {
   }
 
   fn link_orphan_to_parent(&mut self, orphan_id: ElementId, parent_id: ElementId) {
+    // Assert orphan was previously unlinked (no parent_id set)
+    debug_assert!(
+      self
+        .elements
+        .get(&orphan_id)
+        .map_or(true, |o| o.element.parent_id.is_none()),
+      "Orphan linking inconsistency: orphan {orphan_id} already has parent_id {:?}",
+      self.elements.get(&orphan_id).map(|o| o.element.parent_id)
+    );
+
     let element_clone = {
       let Some(orphan) = self.elements.get_mut(&orphan_id) else {
         return;

@@ -61,4 +61,11 @@ pub struct AXElement {
 
   // === Actions ===
   pub actions: Vec<crate::accessibility::Action>,
+
+  // === Hit Test Status ===
+  /// True if this element is a fallback container from Chromium/Electron lazy init.
+  /// Only meaningful for elements returned from `fetch_element_at`.
+  /// Client should retry hit test on next frame to get the real element.
+  #[serde(default)]
+  pub is_fallback: bool,
 }

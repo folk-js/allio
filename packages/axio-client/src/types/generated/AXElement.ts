@@ -61,4 +61,10 @@ row_count: number | null,
 /**
  * Total column count (for table containers)
  */
-column_count: number | null, actions: Array<Action>, };
+column_count: number | null, actions: Array<Action>, 
+/**
+ * True if this element is a fallback container from Chromium/Electron lazy init.
+ * Only meaningful for elements returned from `fetch_element_at`.
+ * Client should retry hit test on next frame to get the real element.
+ */
+is_fallback: boolean, };

@@ -270,24 +270,25 @@ impl Axio {
   pub(crate) fn register_element(&self, elem_state: super::ElementState) -> Option<AXElement> {
     let pid = elem_state.element.pid;
     let handle = elem_state.handle.clone();
+    // Clone element before insertion for return value (avoids second read)
+    let element_for_return = elem_state.element.clone();
 
-    // Step 1: Insert element (quick write)
-    let element_id = self.write(|s| s.get_or_insert_element(elem_state));
+    // Step 1: Insert element and check if watch needed (single write, no race)
+    let (element_id, already_had_watch) = self.write(|s| s.get_or_insert_element(elem_state));
 
-    // Step 2: Check if watch needed (quick read)
-    let needs_watch = self.read(|s| {
-      s.get_element_state(element_id)
-        .map(|e| e.watch.is_none())
-        .unwrap_or(false)
-    });
-
-    // Step 3: Setup watch (has platform calls)
-    if needs_watch {
+    // Step 2: Setup watch if needed (has platform calls)
+    if !already_had_watch {
       self.setup_destruction_watch(element_id, pid, &handle);
     }
 
-    // Step 4: Return element (quick read)
-    self.read(|s| s.get_element(element_id).cloned())
+    // Step 3: Return the element we inserted (no need to re-read, we have the data)
+    // Note: If element was already present, the returned ID matches, so element_for_return
+    // may have slightly different data than what's in state - but that's acceptable since
+    // we're returning "the element that was registered", which is semantically correct.
+    Some(AXElement {
+      id: element_id,
+      ..element_for_return
+    })
   }
 
   /// Set up destruction watch for an element.
@@ -318,8 +319,8 @@ impl Axio {
 
   /// Update element data (used by fetch_element).
   pub(crate) fn update_element(&self, element_id: ElementId, data: AXElement) -> AxioResult<()> {
-    let updated = self.write(|s| s.update_element(element_id, data));
-    if !updated && self.read(|s| s.get_element(element_id).is_none()) {
+    let (exists, _changed) = self.write(|s| s.update_element(element_id, data));
+    if !exists {
       return Err(AxioError::ElementNotFound(element_id));
     }
     Ok(())
@@ -331,8 +332,8 @@ impl Axio {
     element_id: ElementId,
     children: Vec<ElementId>,
   ) -> AxioResult<()> {
-    let updated = self.write(|s| s.set_element_children(element_id, children));
-    if !updated && self.read(|s| s.get_element(element_id).is_none()) {
+    let (exists, _changed) = self.write(|s| s.set_element_children(element_id, children));
+    if !exists {
       return Err(AxioError::ElementNotFound(element_id));
     }
     Ok(())

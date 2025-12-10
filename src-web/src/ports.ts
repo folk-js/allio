@@ -174,6 +174,29 @@ async function onMouseDown(e: MouseEvent) {
     const element = await axio.elementAt(e.clientX, e.clientY);
     if (!element?.bounds) return;
 
+    // Chromium/Electron lazy init: retry on next frame if we got a fallback
+    if (element.is_fallback) {
+      const x = e.clientX;
+      const y = e.clientY;
+      requestAnimationFrame(async () => {
+        try {
+          const retried = await axio.elementAt(x, y);
+          if (!retried?.bounds) return;
+
+          state.dragging = {
+            sourceElement: retried,
+            sourceWindow: window,
+            targetElement: null,
+            targetWindow: null,
+          };
+          showDragSource(retried);
+        } catch {
+          // Ignore retry errors
+        }
+      });
+      return;
+    }
+
     state.dragging = {
       sourceElement: element,
       sourceWindow: window,
@@ -202,6 +225,9 @@ async function updateDragPreview(x: number, y: number) {
   try {
     const targetElement = await axio.elementAt(x, y);
     const targetWindow = getWindowAt(x, y);
+
+    // Skip fallback elements - next mouse move will retry naturally
+    if (targetElement?.is_fallback) return;
 
     // Update target if changed
     if (targetElement?.id !== state.dragging.targetElement?.id) {

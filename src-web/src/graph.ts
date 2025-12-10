@@ -157,6 +157,21 @@ class AXGraph {
 
       try {
         const element = await this.axio.elementAt(e.clientX, e.clientY);
+
+        // Chromium/Electron lazy init: retry on next frame if we got a fallback
+        if (element.is_fallback) {
+          requestAnimationFrame(async () => {
+            try {
+              const retried = await this.axio.elementAt(e.clientX, e.clientY);
+              const { isNew } = this.addNode(retried);
+              if (isNew) this.toast(`+ ${retried.role}`);
+            } catch (err) {
+              this.toast(`elementAt retry: ${err}`, true);
+            }
+          });
+          return;
+        }
+
         const { isNew } = this.addNode(element);
         if (isNew) this.toast(`+ ${element.role}`);
       } catch (err) {
