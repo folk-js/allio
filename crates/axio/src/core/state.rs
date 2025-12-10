@@ -109,7 +109,14 @@ impl State {
   }
 
   fn emit(&self, event: Event) {
-    drop(self.events_tx.try_broadcast(event));
+    if let Err(e) = self.events_tx.try_broadcast(event) {
+      if e.is_full() {
+        log::error!(
+          "Event channel overflow - events are being dropped. \
+           Consider increasing EVENT_CHANNEL_CAPACITY or processing events faster."
+        );
+      }
+    }
   }
 }
 

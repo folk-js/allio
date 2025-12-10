@@ -189,9 +189,6 @@ impl Axio {
     let window = self
       .get_window(window_id)
       .ok_or(AxioError::WindowNotFound(window_id))?;
-    Ok(crate::platform::element_ops::fetch_focus(
-      self,
-      window.process_id.0,
-    ))
+    crate::platform::element_ops::fetch_focus(self, window.process_id.0)
   }
 }

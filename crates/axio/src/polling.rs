@@ -211,10 +211,11 @@ fn poll_iteration(axio: &Axio, config: &AxioOptions) {
 
   let windows = poll_windows(config);
 
-  // Sync windows (handles add/update/remove + events + process creation)
-  axio.sync_windows(windows.clone());
-
-  // Focus tracking
+  // Focus tracking (extract before moving windows)
   let focused_window_id = windows.iter().find(|w| w.focused).map(|w| w.id);
+
+  // Sync windows (handles add/update/remove + events + process creation)
+  axio.sync_windows(windows);
+
   axio.sync_focused_window(focused_window_id);
 }

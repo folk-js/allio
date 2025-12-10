@@ -122,9 +122,10 @@ pub(super) fn create_watch(
 
   if notifications.is_empty() && !initial_notifications.is_empty() {
     unregister_observer_context(context);
-    return Err(AxioError::ObserverError(
-      "Failed to register any notifications".into(),
-    ));
+    return Err(AxioError::ObserverError(format!(
+      "Failed to register notifications {:?} for element {}",
+      initial_notifications, element_id
+    )));
   }
 
   Ok(WatchHandleInner {
