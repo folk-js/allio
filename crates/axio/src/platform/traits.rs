@@ -8,9 +8,10 @@ Core code only uses these traits - never platform-specific types directly.
 
 #![allow(unsafe_code)]
 
+use std::sync::Arc;
+
 use crate::accessibility::{Notification, Value};
-use crate::core::Axio;
-use crate::types::{Window, AxioResult, ElementId};
+use crate::types::{AxioResult, ElementId, Window};
 
 /// Attributes fetched from a platform element.
 /// This is the cross-platform interface for element data.
@@ -39,6 +40,49 @@ pub(crate) struct ElementAttributes {
   pub column_count: Option<usize>,
   pub actions: Vec<crate::accessibility::Action>,
 }
+
+// ============================================================================
+// Callback Trait
+// ============================================================================
+
+/// Callbacks from Platform to Core when OS events fire.
+///
+/// This trait defines the ONLY interface Platform uses to communicate
+/// back to Core. Axio implements this trait. This decouples Platform
+/// from the full Axio API.
+///
+/// All methods take `&self` - implementations should use interior mutability.
+pub(crate) trait PlatformCallbacks: Send + Sync + 'static {
+  /// The handle type for this platform.
+  type Handle: PlatformHandle;
+
+  /// Called when an element is destroyed by the OS.
+  fn on_element_destroyed(&self, element_id: ElementId);
+
+  /// Called when an element's value/title/bounds changed.
+  fn on_element_changed(&self, element_id: ElementId, notification: Notification);
+
+  /// Called when an element's children structure changed.
+  fn on_children_changed(&self, element_id: ElementId);
+
+  /// Called when app focus changes to a new element.
+  /// The callback implementation is responsible for registering the element.
+  fn on_focus_changed(&self, pid: u32, focused_handle: Self::Handle);
+
+  /// Called when text selection changes.
+  /// The callback implementation is responsible for registering the element.
+  fn on_selection_changed(
+    &self,
+    pid: u32,
+    element_handle: Self::Handle,
+    text: String,
+    range: Option<(u32, u32)>,
+  );
+}
+
+// ============================================================================
+// Platform Traits
+// ============================================================================
 
 /// Platform-global operations (not tied to a specific element).
 ///
@@ -71,7 +115,13 @@ pub(crate) trait Platform {
 
   /// Create a notification observer for a process.
   /// On macOS: creates an `AXObserver` and adds it to the run loop.
-  fn create_observer(pid: u32, axio: Axio) -> AxioResult<Self::Observer>;
+  ///
+  /// Takes a callbacks trait instead of Axio directly to decouple Platform
+  /// from the full Axio API.
+  fn create_observer<C: PlatformCallbacks<Handle = Self::Handle>>(
+    pid: u32,
+    callbacks: Arc<C>,
+  ) -> AxioResult<Self::Observer>;
 
   /// Start a display-linked callback (vsync-synchronized).
   /// Returns None if display link is not available.
@@ -138,17 +188,21 @@ pub(crate) trait PlatformObserver: Send + Sync {
   /// Subscribe to app-level focus and selection notifications.
   /// Called once when process is registered. Returns a handle that
   /// cleans up subscriptions when dropped.
-  fn subscribe_app_notifications(&self, pid: u32, axio: Axio) -> AxioResult<AppNotificationHandle>;
+  fn subscribe_app_notifications<C: PlatformCallbacks<Handle = Self::Handle>>(
+    &self,
+    pid: u32,
+    callbacks: Arc<C>,
+  ) -> AxioResult<AppNotificationHandle>;
 
   /// Create a watch handle for an element with initial notifications.
   /// The handle manages subscriptions - use add/remove to modify.
   /// Drop handle to unsubscribe from all.
-  fn create_watch(
+  fn create_watch<C: PlatformCallbacks<Handle = Self::Handle>>(
     &self,
     handle: &Self::Handle,
     element_id: ElementId,
     initial_notifications: &[Notification],
-    axio: Axio,
+    callbacks: Arc<C>,
   ) -> AxioResult<WatchHandle>;
 }
 

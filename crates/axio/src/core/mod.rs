@@ -3,33 +3,25 @@ Core Axio instance - owns all accessibility state and event broadcasting.
 
 # Module Structure
 
-- `mod.rs` - Axio struct, construction, events
-- `state.rs` - State with private fields + operations + event emission
-- `queries.rs` - get_* (registry lookups) and fetch_* (platform calls)
-- `mutations.rs` - set_*, perform_*, sync_*, on_* handlers
+- `mod.rs` - Axio struct, construction, events, PlatformCallbacks
+- `registry/` - Registry (cache) with private fields + operations + event emission
+- `queries.rs` - get() with freshness, lookups, discovery
+- `mutations.rs` - set_*, perform_*, sync_*, notification handlers
 - `subscriptions.rs` - watch/unwatch
-
-# Naming Convention
-
-- `get_*` = registry/state lookup (fast, no OS calls)
-- `fetch_*` = hits OS/platform (may be slow)
-- `set_*` = value setting
-- `perform_*` = actions
-- `sync_*` = bulk updates from polling
-- `on_*` = notification handlers
 
 # Example
 
 ```ignore
+use axio::Freshness;
+
 let axio = Axio::new()?;
 
-// Registry lookup
-let windows = axio.get_windows();
-let element = axio.get_element(element_id);
+// Get element with explicit freshness
+let element = axio.get(element_id, Freshness::Cached)?;  // From cache
+let element = axio.get(element_id, Freshness::Fresh)?;   // From OS
 
-// Platform fetch
-let element = axio.fetch_element_at(100.0, 200.0)?;
-let children = axio.fetch_children(element.id, 100)?;
+// Traversal with freshness
+let children = axio.children(element.id, Freshness::Fresh)?;
 
 let mut events = axio.subscribe();
 while let Ok(event) = events.recv().await {
@@ -38,13 +30,14 @@ while let Ok(event) = events.recv().await {
 ```
 */
 
+mod builders;
 mod mutations;
 mod queries;
-mod state;
+mod registry;
 mod subscriptions;
-mod tree;
 
-pub(crate) use state::{ElementData, ElementEntry, Registry};
+pub(crate) use builders::{build_element, build_snapshot};
+pub(crate) use registry::{ElementData, ElementEntry, Registry};
 
 use crate::platform::{CurrentPlatform, Platform};
 use crate::polling::{self, PollingHandle};
@@ -157,5 +150,98 @@ impl Axio {
   #[inline]
   pub(crate) fn write<R>(&self, f: impl FnOnce(&mut Registry) -> R) -> R {
     f(&mut self.state.write())
+  }
+}
+
+// ============================================================================
+// PlatformCallbacks Implementation
+// ============================================================================
+
+use crate::accessibility::Notification;
+use crate::platform::{Handle, PlatformCallbacks};
+
+impl PlatformCallbacks for Axio {
+  type Handle = Handle;
+
+  fn on_element_destroyed(&self, element_id: crate::types::ElementId) {
+    // Delegate to existing handler
+    self.handle_element_destroyed(element_id);
+  }
+
+  fn on_element_changed(&self, element_id: crate::types::ElementId, notification: Notification) {
+    // Delegate to existing handler
+    self.handle_element_changed(element_id, notification);
+  }
+
+  fn on_children_changed(&self, element_id: crate::types::ElementId) {
+    // Re-fetch children
+    drop(self.fetch_children(element_id, 1000));
+  }
+
+  fn on_focus_changed(&self, pid: u32, focused_handle: Handle) {
+    use crate::platform::PlatformHandle;
+    use crate::types::ProcessId;
+
+    // Find window for this element: check if element exists, else use focused window
+    let window_id = self.read(|r| {
+      let hash = focused_handle.element_hash();
+      r.find_by_hash(hash, Some(ProcessId(pid)))
+        .and_then(|id| r.element(id))
+        .map(|e| e.data.window_id)
+        .or_else(|| r.focused_window_for_pid(pid))
+    });
+
+    let Some(window_id) = window_id else {
+      log::debug!("FocusChanged: no window_id found for PID {pid}, skipping");
+      return;
+    };
+
+    // Cache element from handle
+    let element_id = self.cache_from_handle(focused_handle, window_id, ProcessId(pid));
+
+    // Build element
+    let Some(element) = self.read(|r| build_element(r, element_id)) else {
+      log::warn!("FocusChanged: element build failed for PID {pid}");
+      return;
+    };
+
+    // Only process focus for elements that self-identify as focused
+    if element.focused != Some(true) {
+      return;
+    }
+
+    // Delegate to existing handler (includes auto-watch logic)
+    self.handle_focus_changed(pid, element);
+  }
+
+  fn on_selection_changed(
+    &self,
+    pid: u32,
+    element_handle: Handle,
+    text: String,
+    range: Option<(u32, u32)>,
+  ) {
+    use crate::platform::PlatformHandle;
+    use crate::types::ProcessId;
+
+    // Find window for this element: check if element exists, else use focused window
+    let window_id = self.read(|r| {
+      let hash = element_handle.element_hash();
+      r.find_by_hash(hash, Some(ProcessId(pid)))
+        .and_then(|id| r.element(id))
+        .map(|e| e.data.window_id)
+        .or_else(|| r.focused_window_for_pid(pid))
+    });
+
+    let Some(window_id) = window_id else {
+      log::debug!("SelectionChanged: no window_id found for PID {pid}, skipping");
+      return;
+    };
+
+    // Cache element from handle
+    let element_id = self.cache_from_handle(element_handle, window_id, ProcessId(pid));
+
+    // Delegate to existing handler
+    self.handle_selection_changed(pid, window_id, element_id, text, range);
   }
 }

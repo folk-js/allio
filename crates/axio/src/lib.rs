@@ -2,18 +2,20 @@
 AXIO - Accessibility I/O Layer
 
 ```ignore
-use axio::Axio;
+use axio::{Axio, Freshness};
 
 // Create instance (polling starts automatically)
 let axio = Axio::new()?;
 
-// Query state (get_ = registry lookup)
-let windows = axio.get_windows();
-let element = axio.get_element(element_id)?;
+// Query state with explicit freshness
+let windows = axio.all_windows();
+let element = axio.get(element_id, Freshness::Cached)?;      // From cache (fast)
+let element = axio.get(element_id, Freshness::Fresh)?;       // From OS (slow)
+let element = axio.get(element_id, Freshness::max_age_ms(100))?; // Refresh if stale
 
-// Fetch from platform (fetch_ = OS call)
-let element = axio.fetch_element_at(100.0, 200.0)?;
-let children = axio.fetch_children(element.id, 100)?;
+// Traversal with freshness
+let children = axio.children(element.id, Freshness::Fresh)?;
+let parent = axio.parent(element.id, Freshness::Cached)?;
 
 // Subscribe to events
 let mut events = axio.subscribe();

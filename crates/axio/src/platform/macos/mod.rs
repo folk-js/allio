@@ -25,11 +25,12 @@ pub(super) use handles::{ElementHandle, ObserverHandle};
 
 // === Trait Implementations ===
 
+use std::sync::Arc;
+
 use crate::accessibility::{Notification, Value};
-use crate::core::Axio;
 use crate::platform::traits::{
-  AppNotificationHandle, DisplayLinkHandle, ElementAttributes, Platform, PlatformHandle,
-  PlatformObserver, WatchHandle,
+  AppNotificationHandle, DisplayLinkHandle, ElementAttributes, Platform, PlatformCallbacks,
+  PlatformHandle, PlatformObserver, WatchHandle,
 };
 use crate::types::{AxioError, AxioResult, ElementId, Point};
 
@@ -61,8 +62,11 @@ impl Platform for MacOS {
     window::fetch_window_handle(window)
   }
 
-  fn create_observer(pid: u32, axio: Axio) -> AxioResult<Self::Observer> {
-    observer::create_observer_for_pid(pid, axio)
+  fn create_observer<C: PlatformCallbacks<Handle = Self::Handle>>(
+    pid: u32,
+    callbacks: Arc<C>,
+  ) -> AxioResult<Self::Observer> {
+    observer::create_observer_for_pid(pid, callbacks)
   }
 
   fn start_display_link<F: Fn() + Send + Sync + 'static>(callback: F) -> Option<DisplayLinkHandle> {
@@ -125,19 +129,24 @@ impl PlatformHandle for ElementHandle {
 impl PlatformObserver for ObserverHandle {
   type Handle = ElementHandle;
 
-  fn subscribe_app_notifications(&self, pid: u32, axio: Axio) -> AxioResult<AppNotificationHandle> {
-    let inner = notifications::subscribe_app_notifications(pid, self, axio)?;
+  fn subscribe_app_notifications<C: PlatformCallbacks<Handle = Self::Handle>>(
+    &self,
+    pid: u32,
+    callbacks: Arc<C>,
+  ) -> AxioResult<AppNotificationHandle> {
+    let inner = notifications::subscribe_app_notifications(pid, self, callbacks)?;
     Ok(AppNotificationHandle { _inner: inner })
   }
 
-  fn create_watch(
+  fn create_watch<C: PlatformCallbacks<Handle = Self::Handle>>(
     &self,
     handle: &Self::Handle,
     element_id: ElementId,
     initial_notifications: &[Notification],
-    axio: Axio,
+    callbacks: Arc<C>,
   ) -> AxioResult<WatchHandle> {
-    let inner = notifications::create_watch(self, handle, element_id, initial_notifications, axio)?;
+    let inner =
+      notifications::create_watch(self, handle, element_id, initial_notifications, callbacks)?;
     Ok(WatchHandle { inner })
   }
 }

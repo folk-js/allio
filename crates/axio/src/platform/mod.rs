@@ -22,12 +22,11 @@ All platform-specific details (CFType, AXUIElement, etc.) stay hidden.
 3. Add conditional compilation in this file
 */
 
-pub(crate) mod element_ops;
 mod traits;
 
 pub(crate) use traits::{
-  AppNotificationHandle, DisplayLinkHandle, ElementAttributes, Platform, PlatformHandle,
-  PlatformObserver, WatchHandle,
+  AppNotificationHandle, DisplayLinkHandle, ElementAttributes, Platform, PlatformCallbacks,
+  PlatformHandle, PlatformObserver, WatchHandle,
 };
 
 // === Platform Implementations ===

@@ -5,7 +5,7 @@ RPC request/response types and dispatch.
 #![allow(missing_docs)]
 
 use axio::accessibility::Value as AXValue;
-use axio::{Element, Axio, ElementId, Snapshot, WindowId};
+use axio::{Axio, Element, ElementId, Snapshot, WindowId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use ts_rs::TS;
@@ -89,46 +89,51 @@ pub fn dispatch_json(axio: &Axio, method: &str, args: &JsonValue) -> JsonValue {
 pub fn dispatch(axio: &Axio, request: RpcRequest) -> Result<RpcResponse, String> {
   match request {
     RpcRequest::Snapshot => {
-      let snapshot = axio.get_snapshot();
+      let snapshot = axio.snapshot();
       Ok(RpcResponse::Snapshot(Box::new(snapshot)))
     }
 
     RpcRequest::ElementAt { x, y } => {
-      let element = axio.fetch_element_at(x, y).map_err(|e| e.to_string())?;
+      let element = axio.element_at(x, y).map_err(|e| e.to_string())?;
       Ok(RpcResponse::OptionalElement(element.map(Box::new)))
     }
 
     RpcRequest::Get { element_id } => {
       let element = axio
-        .get_element(element_id)
+        .get(element_id, axio::Freshness::Cached)
+        .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Element not found: {element_id}"))?;
       Ok(RpcResponse::Element(Box::new(element)))
     }
 
     RpcRequest::WindowRoot { window_id } => {
-      let element = axio
-        .fetch_window_root(window_id)
-        .map_err(|e| e.to_string())?;
+      let element = axio.window_root(window_id).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Element(Box::new(element)))
     }
 
     RpcRequest::Children {
       element_id,
-      max_children,
+      max_children: _max_children,
     } => {
+      // TODO: Support max_children in the public API if needed
       let children = axio
-        .fetch_children(element_id, max_children)
+        .children(element_id, axio::Freshness::Fresh)
         .map_err(|e| e.to_string())?;
       Ok(RpcResponse::Elements(children))
     }
 
     RpcRequest::Parent { element_id } => {
-      let parent = axio.fetch_parent(element_id).map_err(|e| e.to_string())?;
+      let parent = axio
+        .parent(element_id, axio::Freshness::Fresh)
+        .map_err(|e| e.to_string())?;
       Ok(RpcResponse::OptionalElement(parent.map(Box::new)))
     }
 
     RpcRequest::Refresh { element_id } => {
-      let element = axio.fetch_element(element_id).map_err(|e| e.to_string())?;
+      let element = axio
+        .get(element_id, axio::Freshness::Fresh)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Element not found: {element_id}"))?;
       Ok(RpcResponse::Element(Box::new(element)))
     }
 

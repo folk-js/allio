@@ -14,8 +14,8 @@ impl Axio {
     // Step 1: Get role and take watch handle (quick write, releases lock)
     let (notifs, watch_handle) = self.write(|s| {
       let role = s
-        .get_element(element_id)
-        .map(|e| e.role)
+        .element(element_id)
+        .map(|e| e.data.role)
         .ok_or(AxioError::ElementNotFound(element_id))?;
 
       let notifs = Notification::for_watching(role);
@@ -48,8 +48,8 @@ impl Axio {
     // Step 1: Get role and take watch handle (quick write, releases lock)
     let (notifs, watch_handle) = self.write(|s| {
       let role = s
-        .get_element(element_id)
-        .map(|e| e.role)
+        .element(element_id)
+        .map(|e| e.data.role)
         .ok_or(AxioError::ElementNotFound(element_id))?;
 
       let notifs = Notification::for_watching(role);

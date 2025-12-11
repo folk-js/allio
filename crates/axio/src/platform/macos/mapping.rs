@@ -2,8 +2,6 @@
 Bidirectional mappings between axio accessibility types and macOS AX* strings.
 */
 
-#![allow(dead_code)]
-
 use crate::accessibility::{Action, Notification, Role};
 
 /// macOS notification string constants (kAX*Notification).
@@ -60,6 +58,7 @@ pub(in crate::platform::macos) mod ax_action {
 }
 
 /// Convert our Action to macOS action string.
+#[allow(dead_code)] // TODO: more complete action system
 const fn action_to_macos(a: Action) -> &'static str {
   match a {
     Action::Press => ax_action::PRESS,
@@ -249,6 +248,9 @@ pub(in crate::platform) fn role_from_macos(platform_role: &str) -> Role {
 /// Convert our Role to macOS role string.
 ///
 /// Returns the canonical macOS role string (with "AX" prefix).
+#[allow(dead_code)]
+// TODO: more complete role system. Possible this wont be needed
+// as our mapping is already lossy...
 const fn role_to_macos(r: Role) -> &'static str {
   match r {
     // Structural

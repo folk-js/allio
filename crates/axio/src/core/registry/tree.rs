@@ -43,24 +43,6 @@ impl ElementTree {
       .map_or(false, |children| !children.is_empty())
   }
 
-  /// Set parent for a child. Handles unlinking from old parent.
-  /// Does NOT emit events - caller is responsible.
-  #[allow(dead_code)] // Available for future reparenting operations
-  pub(super) fn set_parent(&mut self, child: ElementId, new_parent: Option<ElementId>) {
-    // Remove from old parent's children list
-    if let Some(old_parent) = self.parent_of.remove(&child) {
-      if let Some(siblings) = self.children_of.get_mut(&old_parent) {
-        siblings.retain(|&id| id != child);
-      }
-    }
-
-    // Add to new parent
-    if let Some(parent_id) = new_parent {
-      self.parent_of.insert(child, parent_id);
-      self.children_of.entry(parent_id).or_default().push(child);
-    }
-  }
-
   /// Set children for a parent, replacing any existing children.
   /// Updates parent_of for all new children and clears for old children.
   /// Used by fetch_children to set children in OS order.
@@ -91,17 +73,6 @@ impl ElementTree {
     self.children_of.entry(parent).or_default().push(child);
   }
 
-  /// Remove a child from its parent (but keep the child's entry).
-  /// Used when reparenting or before removal.
-  #[allow(dead_code)] // Available for future reparenting operations
-  pub(super) fn unlink_from_parent(&mut self, child: ElementId) {
-    if let Some(parent_id) = self.parent_of.remove(&child) {
-      if let Some(siblings) = self.children_of.get_mut(&parent_id) {
-        siblings.retain(|&id| id != child);
-      }
-    }
-  }
-
   /// Remove an element and all its descendants.
   /// Returns removed IDs in removal order (parent before children).
   /// Iterative to avoid stack overflow on deep trees.
@@ -126,23 +97,6 @@ impl ElementTree {
     }
 
     removed
-  }
-
-  /// Remove a single element without touching its children.
-  /// Children become orphans (their parent_of entries are removed).
-  /// Used when an element is destroyed but we want to preserve children
-  /// (rare - usually use remove_subtree).
-  #[allow(dead_code)]
-  pub(super) fn remove_single(&mut self, id: ElementId) {
-    // Unlink from parent
-    self.unlink_from_parent(id);
-
-    // Orphan children (remove their parent refs but keep them in tree)
-    if let Some(children) = self.children_of.remove(&id) {
-      for child_id in children {
-        self.parent_of.remove(&child_id);
-      }
-    }
   }
 }
 
@@ -182,19 +136,6 @@ mod tests {
   }
 
   #[test]
-  fn test_set_parent_unlinks_old() {
-    let mut tree = ElementTree::new();
-    tree.add_child(id(1), id(3));
-
-    // Reparent
-    tree.set_parent(id(3), Some(id(2)));
-
-    assert_eq!(tree.parent(id(3)), Some(id(2)));
-    assert_eq!(tree.children(id(1)), &[]); // Removed from old parent
-    assert_eq!(tree.children(id(2)), &[id(3)]); // Added to new parent
-  }
-
-  #[test]
   fn test_remove_subtree() {
     let mut tree = ElementTree::new();
     // Build: 1 -> [2, 3], 2 -> [4, 5]
@@ -219,17 +160,5 @@ mod tests {
     assert_eq!(tree.parent(id(2)), None);
     assert_eq!(tree.parent(id(4)), None);
     assert_eq!(tree.children(id(2)), &[]);
-  }
-
-  #[test]
-  fn test_unlink_from_parent() {
-    let mut tree = ElementTree::new();
-    tree.add_child(id(1), id(2));
-    tree.add_child(id(1), id(3));
-
-    tree.unlink_from_parent(id(2));
-
-    assert_eq!(tree.parent(id(2)), None);
-    assert_eq!(tree.children(id(1)), &[id(3)]);
   }
 }

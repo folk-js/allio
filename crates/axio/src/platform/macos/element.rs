@@ -14,5 +14,5 @@ pub(crate) fn element_hash(handle: &ElementHandle) -> u64 {
   CFHash(Some(handle.inner())) as u64
 }
 
-// Note: Element building, children, parent, refresh have moved to core/element_ops.rs
+// Note: Element building, children, parent, refresh are now in core/queries.rs (Axio methods).
 // Click and write operations use PlatformHandle traits directly.

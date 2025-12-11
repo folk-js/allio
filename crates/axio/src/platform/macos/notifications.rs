@@ -12,6 +12,7 @@ use objc2_application_services::AXError;
 use objc2_core_foundation::CFString;
 use std::collections::HashSet;
 use std::ffi::c_void;
+use std::sync::Arc;
 
 use super::handles::{ElementHandle, ObserverHandle};
 use super::mapping::notification_to_macos;
@@ -21,7 +22,7 @@ use super::observer::{
 };
 use super::util::app_element;
 use crate::accessibility::Notification;
-use crate::core::Axio;
+use crate::platform::PlatformCallbacks;
 use crate::types::{AxioError, AxioResult, ElementId};
 
 /// Inner implementation of WatchHandle for macOS.
@@ -97,14 +98,14 @@ impl Drop for WatchHandleInner {
 }
 
 /// Create a watch handle for an element with initial notifications.
-pub(super) fn create_watch(
+pub(super) fn create_watch<C: PlatformCallbacks<Handle = ElementHandle>>(
   observer: &ObserverHandle,
   handle: &ElementHandle,
   element_id: ElementId,
   initial_notifications: &[Notification],
-  axio: Axio,
+  callbacks: Arc<C>,
 ) -> AxioResult<WatchHandleInner> {
-  let context = register_observer_context(element_id, axio);
+  let context = register_observer_context(element_id, callbacks);
 
   let mut notifications = HashSet::new();
   for notif in initial_notifications {
@@ -150,13 +151,13 @@ impl Drop for AppNotificationHandleInner {
 
 /// Subscribe to app-level notifications (focus, selection) on the application element.
 /// Returns a handle that cleans up subscriptions when dropped.
-pub(super) fn subscribe_app_notifications(
+pub(super) fn subscribe_app_notifications<C: PlatformCallbacks<Handle = ElementHandle>>(
   pid: u32,
   observer: &ObserverHandle,
-  axio: Axio,
+  callbacks: Arc<C>,
 ) -> AxioResult<AppNotificationHandleInner> {
   let app_el = app_element(pid);
-  let context = register_process_context(pid, axio);
+  let context = register_process_context(pid, callbacks);
 
   // Subscribe to focus and selection changes on the app element
   let notifications = [Notification::FocusChanged, Notification::SelectionChanged];

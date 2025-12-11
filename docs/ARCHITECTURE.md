@@ -33,16 +33,41 @@ Removal cascades down the hierarchy:
 
 ### Operations Vocabulary
 
-| Prefix          | Meaning                         | Hits OS? | Modifies Cache? |
-| --------------- | ------------------------------- | -------- | --------------- |
-| `get_`          | Read from cache                 | No       | No              |
-| `fetch_`        | Read from OS, cache result      | Yes      | Yes             |
-| `get_or_fetch_` | Read from cache, fallback to OS | Maybe    | Yes             |
-| `set_`          | Write value to OS               | Yes      | Maybe (?)       |
-| `perform_`      | Execute action on OS            | Yes      | No              |
-| `watch/unwatch` | Subscribe to element changes    | Yes      | Yes (metadata)  |
-| `sync_`         | Bulk update from polling        | No (?)   | Yes             |
-| `on_`           | Handle OS notification          | No (?)   | Yes             |
+| Prefix          | Meaning                                   | Hits OS? | Modifies Cache? |
+| --------------- | ----------------------------------------- | -------- | --------------- |
+| `get`/`get_`    | Read from cache (with optional freshness) | Maybe\*  | Maybe\*         |
+| `fetch_`        | Discovery: find new elements from OS      | Yes      | Yes             |
+| `refresh_`      | Update existing element from OS           | Yes      | Yes             |
+| `set_`          | Write value to OS                         | Yes      | Maybe           |
+| `perform_`      | Execute action on OS                      | Yes      | No              |
+| `watch/unwatch` | Subscribe to element changes              | Yes      | Yes (metadata)  |
+| `sync_`         | Bulk update from polling                  | No       | Yes             |
+| `on_`           | Handle OS notification                    | No       | Yes             |
+
+\*`get(id, freshness)` respects the `Freshness` parameter: `Cached` never hits OS, `Fresh` always does, `MaxAge(d)` hits OS only if cached data is older than `d`.
+
+### Freshness Model
+
+The `Freshness` enum controls how up-to-date data should be:
+
+```rust
+pub enum Freshness {
+    Cached,         // Use cached value, never hit OS
+    Fresh,          // Always fetch from OS
+    MaxAge(Duration), // Fetch if cached data is older than this
+}
+```
+
+This enables callers to make explicit tradeoffs between latency and freshness.
+
+### get vs fetch Distinction
+
+- **`get(id, freshness)`**: Retrieve a known element. The element must already be in the cache (discovered previously). Freshness controls whether to refresh from OS.
+- **`fetch_*()`**: Discovery operations that find new elements. These always hit the OS because we don't know what we'll find. Examples:
+  - `fetch_element_at(x, y)` - Find element at screen position
+  - `fetch_children(id)` - Discover children of an element
+  - `fetch_window_root(id)` - Get root element for a window
+  - `fetch_window_focus(id)` - Find focused element in window
 
 ## Architecture Layers
 
@@ -88,6 +113,19 @@ Removal cascades down the hierarchy:
 - Trait-based abstraction over OS APIs
 - macOS implementation via Accessibility APIs
 - Handles all FFI and unsafe code
+- **Note**: Observer creation requires an `Axio` reference for callbacks (intentional coupling - see below)
+
+### Platform/Axio Coupling for Observers
+
+The `Platform::create_observer()` and `PlatformObserver::subscribe_*` methods take an `Axio` reference. This is intentional:
+
+1. **OS callbacks need state access**: When macOS fires an accessibility notification, the callback must access Axio to update state and emit events.
+
+2. **C callback constraint**: macOS `AXObserver` callbacks receive a raw pointer that we map back to context. We can't pass Rust closures directly to C code.
+
+3. **Alternative considered**: Using channels to decouple Platform from Axio would add latency and complexity. The current design keeps notification handling fast and atomic.
+
+The coupling is contained to observer creation - all other Platform operations (`fetch_*` on handles) are pure and return data without side effects.
 
 ## Registry Operations
 
@@ -196,28 +234,42 @@ pub fn has_permissions() -> bool;
 pub fn subscribe(&self) -> Receiver<Event>;
 ```
 
+### Unified Get API
+
+The primary way to retrieve elements with explicit freshness control:
+
+```rust
+// Get element with freshness control
+pub fn get(&self, id: ElementId, freshness: Freshness) -> AxioResult<Option<Element>>;
+
+// Convenience: always cached
+pub fn get_cached(&self, id: ElementId) -> Option<Element>;
+
+// Convenience: always fresh
+pub fn refresh_element(&self, id: ElementId) -> AxioResult<Element>;
+```
+
 ### Queries (cache only, fast)
 
 ```rust
 pub fn get_window(&self, id: WindowId) -> Option<Window>;
 pub fn get_windows(&self) -> Vec<Window>;
-pub fn get_element(&self, id: ElementId) -> Option<Element>;
 pub fn get_elements(&self, ids: &[ElementId]) -> Vec<Element>;
 pub fn get_focused_window(&self) -> Option<WindowId>;
 pub fn get_z_order(&self) -> Vec<WindowId>;
 pub fn snapshot(&self) -> Snapshot;
-// TODO: ^ this should be get_snapshot()!
 ```
 
-### Fetches (OS + cache)
+### Discovery (OS calls, cache result)
+
+These find new elements - they always hit the OS:
 
 ```rust
-pub fn fetch_element_at(&self, x: f64, y: f64) -> AxioResult<Element>;
+pub fn fetch_element_at(&self, x: f64, y: f64) -> AxioResult<Option<Element>>;
 pub fn fetch_children(&self, id: ElementId, max: usize) -> AxioResult<Vec<Element>>;
 pub fn fetch_parent(&self, id: ElementId) -> AxioResult<Option<Element>>;
-pub fn fetch_element(&self, id: ElementId) -> AxioResult<Element>;  // refresh
 pub fn fetch_window_root(&self, id: WindowId) -> AxioResult<Element>;
-pub fn fetch_window_focus(&self, id: WindowId) -> AxioResult<FocusInfo>;
+pub fn fetch_window_focus(&self, id: WindowId) -> AxioResult<(Option<Element>, Option<TextSelection>)>;
 pub fn fetch_screen_size(&self) -> (f64, f64);
 ```
 
@@ -291,27 +343,30 @@ crates/axio/src/
 ├── core/
 │   ├── mod.rs          # Axio struct, construction, events
 │   ├── state.rs        # Registry with private fields + operations
-│   ├── queries.rs      # get_*, fetch_* implementations
-│   ├── mutations.rs    # set_*, perform_* implementations
+│   ├── queries.rs      # get, get_*, fetch_*, element building
+│   ├── mutations.rs    # set_*, perform_*, on_* handlers
 │   ├── subscriptions.rs # watch/unwatch
-│   └── internal.rs     # sync_*, on_* handlers
+│   └── tree.rs         # ElementTree for parent/child relationships
 ├── platform/
 │   ├── mod.rs          # Traits + type aliases
 │   ├── traits.rs       # Platform, PlatformHandle, PlatformObserver
-│   ├── element_ops.rs  # Element building + discovery
 │   └── macos/          # macOS implementation
-└── types/              # Element, Window, Event, etc.
+├── polling/            # Window/focus sync loop
+└── types/              # Element, Window, Event, Freshness, etc.
 ```
 
 ## Summary
 
-| Concept                         | Meaning                             |
-| ------------------------------- | ----------------------------------- |
-| **Registry**                    | Cache with automatic event emission |
-| **get\_**                       | Cache lookup (fast, no OS)          |
-| **fetch\_**                     | OS call → cache → return            |
-| **set\_/perform\_**             | Write to OS                         |
-| **watch/unwatch**               | Element change subscriptions        |
-| **sync\_**                      | Bulk updates from polling           |
-| **on\_**                        | Notification handlers               |
-| **get_or_insert/update/remove** | State operations (internal)         |
+| Concept                         | Meaning                                             |
+| ------------------------------- | --------------------------------------------------- |
+| **Registry**                    | Cache with automatic event emission                 |
+| **Freshness**                   | How up-to-date data should be (Cached/Fresh/MaxAge) |
+| **get(id, freshness)**          | Unified element retrieval with freshness control    |
+| **get\_**                       | Cache lookup (fast, no OS)                          |
+| **fetch\_**                     | Discovery: find new elements from OS                |
+| **refresh\_**                   | Update existing element from OS                     |
+| **set\_/perform\_**             | Write to OS                                         |
+| **watch/unwatch**               | Element change subscriptions                        |
+| **sync\_**                      | Bulk updates from polling                           |
+| **on\_**                        | Notification handlers                               |
+| **get_or_insert/update/remove** | State operations (internal)                         |
