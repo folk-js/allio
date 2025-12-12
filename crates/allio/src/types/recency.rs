@@ -41,12 +41,33 @@ pub enum Recency {
 
 impl Recency {
   /// Convenience constructor for max age in milliseconds.
+  ///
+  /// # Example
+  ///
+  /// ```
+  /// use allio::Recency;
+  /// use std::time::Duration;
+  ///
+  /// let recency = Recency::max_age_ms(100);
+  /// assert!(recency.is_satisfied_by(Duration::from_millis(50)));
+  /// assert!(!recency.is_satisfied_by(Duration::from_millis(150)));
+  /// ```
   #[inline]
   pub const fn max_age_ms(ms: u64) -> Self {
     Self::MaxAge(Duration::from_millis(ms))
   }
 
   /// Convenience constructor for max age in seconds.
+  ///
+  /// # Example
+  ///
+  /// ```
+  /// use allio::Recency;
+  /// use std::time::Duration;
+  ///
+  /// let recency = Recency::max_age_secs(5);
+  /// assert!(recency.is_satisfied_by(Duration::from_secs(3)));
+  /// ```
   #[inline]
   pub const fn max_age_secs(secs: u64) -> Self {
     Self::MaxAge(Duration::from_secs(secs))
@@ -55,6 +76,24 @@ impl Recency {
   /// Check if a value with the given age satisfies this recency requirement.
   ///
   /// Returns `true` if the value is fresh enough, `false` if it needs refresh.
+  ///
+  /// # Example
+  ///
+  /// ```
+  /// use allio::Recency;
+  /// use std::time::Duration;
+  ///
+  /// // Any accepts any age
+  /// assert!(Recency::Any.is_satisfied_by(Duration::from_secs(1000)));
+  ///
+  /// // Current never accepts any age
+  /// assert!(!Recency::Current.is_satisfied_by(Duration::ZERO));
+  ///
+  /// // MaxAge checks the duration
+  /// let recency = Recency::max_age_ms(100);
+  /// assert!(recency.is_satisfied_by(Duration::from_millis(100)));
+  /// assert!(!recency.is_satisfied_by(Duration::from_millis(101)));
+  /// ```
   #[inline]
   pub fn is_satisfied_by(&self, age: Duration) -> bool {
     match self {
@@ -65,12 +104,32 @@ impl Recency {
   }
 
   /// Whether this recency level requires an OS call.
+  ///
+  /// # Example
+  ///
+  /// ```
+  /// use allio::Recency;
+  ///
+  /// assert!(!Recency::Any.requires_fetch());
+  /// assert!(Recency::Current.requires_fetch());
+  /// assert!(!Recency::max_age_ms(100).requires_fetch());
+  /// ```
   #[inline]
   pub const fn requires_fetch(&self) -> bool {
     matches!(self, Recency::Current)
   }
 
   /// Whether this recency level might require an OS call (depends on age).
+  ///
+  /// # Example
+  ///
+  /// ```
+  /// use allio::Recency;
+  ///
+  /// assert!(!Recency::Any.might_require_fetch());
+  /// assert!(Recency::Current.might_require_fetch());
+  /// assert!(Recency::max_age_ms(100).might_require_fetch());
+  /// ```
   #[inline]
   pub const fn might_require_fetch(&self) -> bool {
     !matches!(self, Recency::Any)

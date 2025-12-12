@@ -56,6 +56,7 @@ pub enum Role {
   Slider,
   Stepper,
   ProgressBar,
+  ColorWell,
 
   // === Static content ===
   StaticText,
@@ -95,15 +96,29 @@ pub enum ValueType {
   Number,
   /// Boolean value (Checkbox, Switch, `RadioButton`)
   Boolean,
+  /// Color value (`ColorWell`)
+  Color,
 }
 
 impl Role {
   /// Expected value type for elements with this role.
+  ///
+  /// # Example
+  ///
+  /// ```
+  /// use allio::a11y::{Role, ValueType};
+  ///
+  /// assert_eq!(Role::TextField.value_type(), ValueType::String);
+  /// assert_eq!(Role::Checkbox.value_type(), ValueType::Boolean);
+  /// assert_eq!(Role::Slider.value_type(), ValueType::Number);
+  /// assert_eq!(Role::Button.value_type(), ValueType::None);
+  /// ```
   pub const fn value_type(&self) -> ValueType {
     match self {
       Self::TextField | Self::TextArea | Self::SearchField | Self::ComboBox => ValueType::String,
       Self::Checkbox | Self::Switch | Self::RadioButton => ValueType::Boolean,
       Self::Slider | Self::ProgressBar | Self::Stepper => ValueType::Number,
+      Self::ColorWell => ValueType::Color,
       // Structural/navigation/static roles have no editable value
       Self::Application
       | Self::Window
@@ -165,7 +180,7 @@ impl Role {
       Self::Button | Self::Link | Self::MenuItem |
       Self::TextField | Self::TextArea | Self::SearchField | Self::ComboBox |
       Self::Checkbox | Self::Switch | Self::RadioButton |
-      Self::Slider | Self::Stepper |
+      Self::Slider | Self::Stepper | Self::ColorWell |
       Self::Tab |
       // Collections (for keyboard navigation)
       Self::List | Self::Table | Self::Tree
@@ -219,6 +234,7 @@ impl Role {
         | Self::RadioButton
         | Self::Slider
         | Self::Stepper
+        | Self::ColorWell
         | Self::ListItem
         | Self::TreeItem
         | Self::Cell
@@ -247,6 +263,7 @@ impl Role {
         | Self::Slider
         | Self::Stepper
         | Self::ProgressBar
+        | Self::ColorWell
     )
   }
 }

@@ -4,4 +4,4 @@
  * Expected value type for elements with a given role.
  * Used for type-safe value handling in TypeScript.
  */
-export type ValueType = "none" | "string" | "number" | "boolean";
+export type ValueType = "none" | "string" | "number" | "boolean" | "color";

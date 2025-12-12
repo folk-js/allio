@@ -137,6 +137,7 @@ pub(in crate::platform::macos) mod ax_role {
   pub(super) const STEPPER: &str = "AXStepper";
   pub(super) const INCREMENTOR: &str = "AXIncrementor"; // Also stepper
   pub(super) const PROGRESS_INDICATOR: &str = "AXProgressIndicator";
+  pub(super) const COLOR_WELL: &str = "AXColorWell";
 
   // Static content
   pub(super) const STATIC_TEXT: &str = "AXStaticText";
@@ -201,6 +202,7 @@ pub(in crate::platform) fn role_from_macos(platform_role: &str) -> Role {
     ax_role::SLIDER => Role::Slider,
     ax_role::STEPPER | ax_role::INCREMENTOR => Role::Stepper,
     ax_role::PROGRESS_INDICATOR => Role::ProgressBar,
+    ax_role::COLOR_WELL => Role::ColorWell,
 
     // Static content
     ax_role::STATIC_TEXT => Role::StaticText,
@@ -271,6 +273,7 @@ const fn role_to_macos(r: Role) -> &'static str {
     Role::Slider => ax_role::SLIDER,
     Role::Stepper => ax_role::STEPPER,
     Role::ProgressBar => ax_role::PROGRESS_INDICATOR,
+    Role::ColorWell => ax_role::COLOR_WELL,
 
     // Static content
     Role::StaticText => ax_role::STATIC_TEXT,

@@ -15,4 +15,6 @@ export type { ProcessId } from "./generated/ProcessId";
 export type { Role } from "./generated/Role";
 export type { Action } from "./generated/Action";
 export type { Value } from "./generated/Value";
+export type { ValueType } from "./generated/ValueType";
+export type { Color } from "./generated/Color";
 export type { Notification } from "./generated/Notification";

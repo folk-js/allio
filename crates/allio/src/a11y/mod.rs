@@ -13,4 +13,4 @@ mod value;
 pub use action::Action;
 pub use notification::Notification;
 pub use role::{Role, ValueType};
-pub use value::Value;
+pub use value::{Color, Value};

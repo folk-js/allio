@@ -178,6 +178,11 @@ impl ElementHandle {
           let cf_value = CFNumber::new_f64(*n);
           self.inner.set_attribute_value(&attr, &cf_value)
         }
+        Value::Color(_) => {
+          // TODO: Setting color values requires creating an NSColor or CGColor
+          // and passing it through the accessibility API. Not yet implemented.
+          return Err(AXError::IllegalArgument);
+        }
       };
       if result == AXError::Success {
         Ok(())
