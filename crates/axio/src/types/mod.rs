@@ -15,7 +15,7 @@ mod window;
 
 pub use element::Element;
 pub use error::{AxioError, AxioResult};
-pub use event::{Event, Snapshot, TextSelection};
+pub use event::{Event, Snapshot, TextRange, TextSelection};
 pub use freshness::Recency;
 pub use geometry::{Bounds, Point};
 pub use ids::{ElementId, ProcessId, WindowId};

@@ -91,7 +91,7 @@ type RpcReturns = {
   parent: AX.Element | null;
   refresh: AX.Element;
   write: boolean;
-  click: boolean;
+  action: boolean;
   watch: void;
   unwatch: void;
 };
@@ -283,8 +283,23 @@ export class AXIO extends EventEmitter<AxioEvents> {
     return this.write(element.id, value);
   };
 
-  /** Click element */
-  click = (element_id: AX.ElementId) => this.call("click", { element_id });
+  /**
+   * Perform an action on an element.
+   *
+   * Actions are platform-agnostic operations like press, showmenu, increment, etc.
+   *
+   * @example
+   * await axio.action(buttonId, 'press');
+   * await axio.action(sliderId, 'increment');
+   * await axio.action(menuId, 'showmenu');
+   */
+  action = (element_id: AX.ElementId, action: AX.Action) =>
+    this.call("action", { element_id, action });
+
+  /**
+   * Click/press an element. Convenience wrapper for action(id, 'press').
+   */
+  click = (element_id: AX.ElementId) => this.action(element_id, "press");
 
   /**
    * Watch an element for changes.

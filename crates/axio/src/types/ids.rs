@@ -24,14 +24,11 @@ static ELEMENT_COUNTER: AtomicU32 = AtomicU32::new(1);
 
 impl ElementId {
   /// Generate a new unique `ElementId`.
-  pub fn new() -> Self {
+  ///
+  /// This is `pub(crate)` to prevent external code from creating arbitrary IDs
+  /// that don't correspond to real elements.
+  pub(crate) fn new() -> Self {
     Self(ELEMENT_COUNTER.fetch_add(1, Ordering::Relaxed))
-  }
-}
-
-impl Default for ElementId {
-  fn default() -> Self {
-    Self::new()
   }
 }
 

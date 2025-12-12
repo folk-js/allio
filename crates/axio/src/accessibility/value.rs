@@ -8,6 +8,7 @@ text content, numeric positions, boolean states, etc.
 #![allow(missing_docs)]
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use super::ValueType;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -95,6 +96,15 @@ impl Value {
 
   pub const fn is_boolean(&self) -> bool {
     matches!(self, Self::Boolean(_))
+  }
+
+  /// Get the `ValueType` for this value.
+  pub const fn value_type(&self) -> ValueType {
+    match self {
+      Self::String(_) => ValueType::String,
+      Self::Number(_) => ValueType::Number,
+      Self::Boolean(_) => ValueType::Boolean,
+    }
   }
 }
 

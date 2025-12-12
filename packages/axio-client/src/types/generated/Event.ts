@@ -3,6 +3,7 @@ import type { Element } from "./Element";
 import type { ElementId } from "./ElementId";
 import type { Point } from "./Point";
 import type { Snapshot } from "./Snapshot";
+import type { TextRange } from "./TextRange";
 import type { Window } from "./Window";
 import type { WindowId } from "./WindowId";
 
@@ -11,6 +12,6 @@ import type { WindowId } from "./WindowId";
  */
 export type Event = { "event": "sync:init", "data": Snapshot } | { "event": "window:added", "data": { window: Window, } } | { "event": "window:changed", "data": { window: Window, } } | { "event": "window:removed", "data": { window_id: WindowId, } } | { "event": "element:added", "data": { element: Element, } } | { "event": "element:changed", "data": { element: Element, } } | { "event": "element:removed", "data": { element_id: ElementId, } } | { "event": "focus:window", "data": { window_id: WindowId | null, } } | { "event": "focus:element", "data": { element: Element, previous_element_id: ElementId | null, } } | { "event": "selection:changed", "data": { window_id: WindowId, element_id: ElementId, text: string, 
 /**
- * Character range as (start, end). End is exclusive. None if range is unknown.
+ * Character range. None if range is unknown.
  */
-range: [number, number] | null, } } | { "event": "mouse:position", "data": Point };
+range: TextRange | null, } } | { "event": "mouse:position", "data": Point };

@@ -25,8 +25,7 @@ use crate::accessibility::Notification;
 use crate::platform::PlatformCallbacks;
 use crate::types::{AxioError, AxioResult, ElementId};
 
-/// Inner implementation of WatchHandle for macOS.
-/// Manages a set of notifications for an element. Unsubscribes on drop.
+/// Manages notification subscriptions for an element. Unsubscribes on drop.
 pub(crate) struct WatchHandleInner {
   observer: ObserverHandle,
   handle: ElementHandle,
@@ -36,7 +35,6 @@ pub(crate) struct WatchHandleInner {
 
 impl WatchHandleInner {
   /// Add notifications to the watch set.
-  /// Already-subscribed notifications are skipped.
   pub(crate) fn add(&mut self, notifs: &[Notification]) -> usize {
     let mut added = 0;
     for notif in notifs {
@@ -81,7 +79,6 @@ impl WatchHandleInner {
 
 impl Drop for WatchHandleInner {
   fn drop(&mut self) {
-    // Unsubscribe from all notifications
     for notification in &self.notifications {
       let notif_str = notification_to_macos(*notification);
       let notif_cfstring = CFString::from_str(notif_str);
@@ -92,7 +89,6 @@ impl Drop for WatchHandleInner {
           .remove_notification(self.handle.inner(), &notif_cfstring);
       }
     }
-    // Clean up the context
     unregister_observer_context(self.context);
   }
 }
@@ -137,7 +133,6 @@ pub(super) fn create_watch<C: PlatformCallbacks<Handle = ElementHandle>>(
   })
 }
 
-/// Inner implementation of AppNotificationHandle for macOS.
 /// Cleans up the observer context when dropped.
 pub(crate) struct AppNotificationHandleInner {
   context: *mut ObserverContextHandle,
@@ -149,8 +144,7 @@ impl Drop for AppNotificationHandleInner {
   }
 }
 
-/// Subscribe to app-level notifications (focus, selection) on the application element.
-/// Returns a handle that cleans up subscriptions when dropped.
+/// Subscribe to app-level notifications (focus, selection).
 pub(super) fn subscribe_app_notifications<C: PlatformCallbacks<Handle = ElementHandle>>(
   pid: u32,
   observer: &ObserverHandle,
@@ -159,7 +153,6 @@ pub(super) fn subscribe_app_notifications<C: PlatformCallbacks<Handle = ElementH
   let app_el = app_element(pid);
   let context = register_process_context(pid, callbacks);
 
-  // Subscribe to focus and selection changes on the app element
   let notifications = [Notification::FocusChanged, Notification::SelectionChanged];
   let mut registered = 0;
 

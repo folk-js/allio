@@ -32,22 +32,7 @@ extern "C" {
   fn CFEqual(cf1: *const c_void, cf2: *const c_void) -> u8;
 }
 
-/// Opaque handle to a UI element.
-///
-/// On macOS this wraps an `AXUIElement` reference with cached hash and PID
-/// for efficient operations without repeated FFI calls.
-///
-/// ## Identity Semantics
-///
-/// - Hash is computed once via CFHash at construction (~5-15ns FFI)
-/// - PID is extracted once via AXUIElementGetPid at construction
-/// - HashMap lookups use cached hash (pure Rust, ~2-5ns)
-/// - Collision resolution uses CFEqual (rare, local comparison, no IPC)
-///
-/// CFEqual compares the (pid, internal_token) data stored locally in the
-/// AXUIElement struct - it does NOT make IPC calls to the target app.
-///
-/// Clone is cheap (reference counted via `CFRetained`).
+/// Opaque handle to a UI element. Clone is cheap (reference counted).
 #[derive(Clone)]
 pub(crate) struct ElementHandle {
   inner: CFRetained<AXUIElement>,
@@ -59,10 +44,7 @@ pub(crate) struct ElementHandle {
 
 impl ElementHandle {
   pub(in crate::platform) fn new(element: CFRetained<AXUIElement>) -> Self {
-    // One-time FFI calls to get hash and PID (~5-15ns each)
     let cached_hash = CFHash(Some(&*element)) as u64;
-
-    // Extract PID from the element (pid_t is i32 on macOS)
     let cached_pid = unsafe {
       let mut pid: i32 = 0;
       let result = element.pid(NonNull::new_unchecked(&mut pid));
@@ -84,10 +66,7 @@ impl ElementHandle {
     &self.inner
   }
 
-  /// Compare with another handle using CFEqual.
-  ///
-  /// This is LOCAL computation (no IPC) - it compares the (pid, token)
-  /// fields stored in the struct, not by querying the remote application.
+  /// Compare with another handle using CFEqual (local, no IPC).
   pub(crate) fn cf_equal(&self, other: &Self) -> bool {
     unsafe {
       CFEqual(
@@ -137,6 +116,7 @@ impl ElementHandle {
     children
   }
 
+  // TODO: rename fetch_element_with_attr? (merge with batch func?)
   /// Get element attribute (returns another `ElementHandle`).
   pub(crate) fn get_element(&self, attr: &str) -> Option<ElementHandle> {
     let value = self.get_raw_attr(&CFString::from_str(attr))?;
@@ -224,8 +204,7 @@ impl ElementHandle {
     }
   }
 
-  /// Fetch all common attributes in a single batch call (10x faster).
-  /// This is the recommended way to build an `Element`.
+  /// Fetch all common attributes in a single batch call.
   #[allow(clippy::too_many_lines)]
   pub(in crate::platform) fn fetch_attributes_internal(
     &self,
@@ -354,8 +333,7 @@ impl ElementHandle {
     let raw_role = role_str.as_deref().unwrap_or("AXUnknown");
     let mut role = role_from_macos(raw_role);
 
-    // Refine role: plain AXGroup with no label/value → GenericGroup (for pruning)
-    // Note: AXSplitGroup and AXRadioGroup stay as Group (they're semantic)
+    // Plain AXGroup with no label/value → GenericGroup (for pruning)
     if role == Role::Group && raw_role == "AXGroup" && title_str.is_none() && value_parsed.is_none()
     {
       role = Role::GenericGroup;
@@ -407,7 +385,6 @@ impl ElementHandle {
     }
   }
 
-  // Private: alias for internal use
   fn get_raw_attr(&self, attr: &CFString) -> Option<CFRetained<CFType>> {
     self.get_raw_attr_internal(attr)
   }
@@ -483,19 +460,15 @@ impl ElementHandle {
 
 impl Hash for ElementHandle {
   fn hash<H: Hasher>(&self, state: &mut H) {
-    // Pure Rust - uses cached value, no FFI in hot path
     self.cached_hash.hash(state);
   }
 }
 
 impl PartialEq for ElementHandle {
   fn eq(&self, other: &Self) -> bool {
-    // Fast path: different hashes = definitely not equal
     if self.cached_hash != other.cached_hash {
       return false;
     }
-    // Same hash: use CFEqual to resolve potential collision (rare, ~0.001%)
-    // This is local computation - no IPC
     self.cf_equal(other)
   }
 }
@@ -505,9 +478,7 @@ impl Eq for ElementHandle {}
 unsafe impl Send for ElementHandle {}
 unsafe impl Sync for ElementHandle {}
 
-/// Opaque handle to an observer (for watching element changes).
-///
-/// On macOS this wraps an `AXObserver`.
+/// Opaque handle to an observer.
 #[derive(Clone)]
 pub(crate) struct ObserverHandle(pub(in crate::platform) CFRetained<AXObserver>);
 

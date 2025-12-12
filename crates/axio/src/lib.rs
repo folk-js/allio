@@ -37,5 +37,4 @@ pub mod accessibility;
 mod types;
 pub use types::*;
 
-pub use crate::core::Axio;
-pub use crate::polling::AxioOptions;
+pub use crate::core::{Axio, AxioBuilder};

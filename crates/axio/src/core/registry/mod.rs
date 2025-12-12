@@ -27,13 +27,9 @@ use std::collections::HashMap;
 use crate::accessibility::{Action, Role, Value};
 use crate::platform::{AppNotificationHandle, Handle, Observer, WatchHandle};
 use crate::types::{
-  Bounds, Element, ElementId, Event, Point, ProcessId, TextSelection, Window, WindowId,
+  Bounds, Element, ElementId, Event, Point, ProcessId, TextRange, TextSelection, Window, WindowId,
 };
 use tree::ElementTree;
-
-// ============================================================================
-// Entry Types
-// ============================================================================
 
 /// Per-process state.
 pub(crate) struct ProcessEntry {
@@ -55,10 +51,6 @@ pub(crate) struct WindowEntry {
 }
 
 /// Pure element data without tree relationships.
-///
-/// This is the internal storage type. Tree relationships (parent/children)
-/// are managed separately in `ElementTree` and derived when building
-/// the public `Element` type for events/queries.
 #[derive(Debug, Clone)]
 pub(crate) struct ElementData {
   pub id: ElementId,
@@ -158,10 +150,6 @@ impl ElementEntry {
   }
 }
 
-// ============================================================================
-// Registry Struct
-// ============================================================================
-
 /// Internal state storage with automatic event emission.
 pub(crate) struct Registry {
   // Event emission
@@ -229,13 +217,7 @@ impl Registry {
       self.emit(Event::ElementChanged { element });
     }
   }
-}
 
-// ============================================================================
-// Tree Accessors (for builders)
-// ============================================================================
-
-impl Registry {
   /// Get parent from tree.
   pub(crate) fn tree_parent(&self, id: ElementId) -> Option<ElementId> {
     self.tree.parent(id)
@@ -251,10 +233,6 @@ impl Registry {
     self.tree.has_children(id)
   }
 }
-
-// ============================================================================
-// Global UI State
-// ============================================================================
 
 impl Registry {
   /// Set focused window. Emits FocusWindow if changed.
@@ -272,11 +250,7 @@ impl Registry {
   }
 
   /// Set focused element for a process. Emits FocusElement if changed.
-  ///
-  /// Returns:
-  /// - `None` - no change (same element or process not found), skip unwatch AND auto-watch
-  /// - `Some(None)` - focus changed, no previous element to unwatch, DO auto-watch
-  /// - `Some(Some(id))` - focus changed, unwatch `id`, DO auto-watch
+  /// Returns previous element ID if changed (for auto-unwatch).
   pub(crate) fn set_focused_element(
     &mut self,
     pid: ProcessId,
@@ -296,7 +270,7 @@ impl Registry {
       element,
       previous_element_id: previous,
     });
-    Some(previous) // Changed - here's what to unwatch (might be None if no previous)
+    Some(previous)
   }
 
   /// Set selection. Emits SelectionChanged if changed.
@@ -311,7 +285,7 @@ impl Registry {
     let new_selection = TextSelection {
       element_id,
       text: text.clone(),
-      range,
+      range: range.map(TextRange::from),
     };
 
     let Some(process) = self.processes.get_mut(&pid) else {
@@ -327,7 +301,7 @@ impl Registry {
       window_id,
       element_id,
       text,
-      range,
+      range: range.map(TextRange::from),
     });
   }
 
@@ -353,10 +327,9 @@ impl Registry {
     &self.z_order
   }
 
-  /// Find window at point (uses cached z-order).
+  /// Find window at point. Returns topmost window containing the point.
   pub(crate) fn window_at_point(&self, x: f64, y: f64) -> Option<&WindowEntry> {
     let point = Point::new(x, y);
-    // z_order is sorted front-to-back, so first match is the topmost window
     for window_id in &self.z_order {
       if let Some(window) = self.windows.get(window_id) {
         if window.info.bounds.contains(point) {

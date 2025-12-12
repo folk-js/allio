@@ -1,40 +1,75 @@
 /*! Event types for state changes and synchronization. */
 
-use super::{Element, Window, ElementId, Point, WindowId};
+use super::{Element, ElementId, Point, Window, WindowId};
 use serde::Serialize;
 use ts_rs::TS;
 
+/// Character range within text. End is exclusive, matching Rust's `Range` semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+pub struct TextRange {
+  /// Start position (inclusive).
+  pub start: u32,
+  /// End position (exclusive).
+  pub end: u32,
+}
+
+impl TextRange {
+  /// Create a new text range.
+  pub const fn new(start: u32, end: u32) -> Self {
+    Self { start, end }
+  }
+
+  /// Length of the range in characters.
+  pub const fn len(&self) -> u32 {
+    self.end - self.start
+  }
+
+  /// Check if the range is empty (cursor position, no selection).
+  pub const fn is_empty(&self) -> bool {
+    self.start == self.end
+  }
+
+  /// Check if a position falls within this range.
+  pub const fn contains(&self, position: u32) -> bool {
+    position >= self.start && position < self.end
+  }
+}
+
+impl From<(u32, u32)> for TextRange {
+  fn from((start, end): (u32, u32)) -> Self {
+    Self { start, end }
+  }
+}
+
 /// Text selection within an element.
-///
-/// The `range` tuple is `(start, end)` - character positions within the element's text.
-/// End is exclusive, matching Rust's `Range` semantics.
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[ts(export)]
 pub struct TextSelection {
   pub element_id: ElementId,
   pub text: String,
-  /// Character range as (start, end). End is exclusive. None if range is unknown.
-  pub range: Option<(u32, u32)>,
+  /// Character range. None if range is unknown.
+  pub range: Option<TextRange>,
 }
 
 impl TextSelection {
   /// Length of the selection in characters.
   pub const fn len(&self) -> Option<u32> {
-    match self.range {
-      Some((start, end)) => Some(end - start),
+    match &self.range {
+      Some(range) => Some(range.len()),
       None => None,
     }
   }
 
-  /// Check if the selection is empty (cursor with no selection).
+  /// Check if the selection text is empty.
   pub const fn is_empty(&self) -> bool {
     self.text.is_empty()
   }
 
   /// Check if a position falls within this selection's range.
   pub const fn contains(&self, position: u32) -> bool {
-    match self.range {
-      Some((start, end)) => position >= start && position < end,
+    match &self.range {
+      Some(range) => range.contains(position),
       None => false,
     }
   }
@@ -97,8 +132,8 @@ pub enum Event {
     window_id: WindowId,
     element_id: ElementId,
     text: String,
-    /// Character range as (start, end). End is exclusive. None if range is unknown.
-    range: Option<(u32, u32)>,
+    /// Character range. None if range is unknown.
+    range: Option<TextRange>,
   },
 
   // Input tracking

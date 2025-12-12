@@ -3,9 +3,6 @@ Builder functions for derived types.
 
 These transform raw Registry entries into public API types,
 and platform handles into Registry entries.
-
-Kept separate from Registry to emphasize that these are
-derived views, not core data operations.
 */
 
 use super::registry::{ElementData, ElementEntry, Registry};
@@ -14,25 +11,17 @@ use crate::platform::{Handle, PlatformHandle};
 use crate::types::{Element, ElementId, ProcessId, Snapshot, WindowId};
 
 /// Build an Element from an ElementEntry + tree relationships.
-///
-/// This is the standard way to convert internal storage to public API types.
-/// Returns None if the element doesn't exist.
 pub(crate) fn build_element(registry: &Registry, id: ElementId) -> Option<Element> {
   let elem = registry.element(id)?;
   let data = &elem.data;
-
-  // Derive relationships from tree
   let parent_id = if data.is_root {
     None
   } else {
     registry.tree_parent(id)
   };
-
-  // Get children from tree (empty vec if no children tracked)
   let children_slice = registry.tree_children(id);
   let children = if children_slice.is_empty() && !registry.tree_has_children(id) {
-    // Children not yet fetched (vs explicitly empty)
-    None
+    None // Children not yet fetched
   } else {
     Some(children_slice.to_vec())
   };
@@ -73,19 +62,7 @@ pub(crate) fn build_all_elements(registry: &Registry) -> Vec<Element> {
     .collect()
 }
 
-// ============================================================================
-// Handle → Entry (Platform → Core boundary)
-// ============================================================================
-
 /// Build an ElementEntry from a platform handle.
-///
-/// This is the Platform → Core boundary: converts an OS accessibility element
-/// into our internal representation. Makes OS calls to fetch attributes.
-///
-/// # Arguments
-/// * `handle` - Platform element handle
-/// * `window_id` - Window this element belongs to
-/// * `pid` - Process ID
 pub(crate) fn build_entry_from_handle(
   handle: Handle,
   window_id: WindowId,
@@ -109,10 +86,6 @@ pub(crate) fn build_entry_from_handle(
 
   ElementEntry::new(data, handle, parent_for_entry)
 }
-
-// ============================================================================
-// Entry → Public API (Core → Public boundary)
-// ============================================================================
 
 /// Build a snapshot of current state.
 pub(crate) fn build_snapshot(registry: &Registry) -> Snapshot {
@@ -138,4 +111,3 @@ pub(crate) fn build_snapshot(registry: &Registry) -> Snapshot {
     mouse_position: registry.mouse_position(),
   }
 }
-

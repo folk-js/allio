@@ -19,7 +19,6 @@ use super::handles::ElementHandle;
 use super::mapping::ax_role;
 use super::util::app_element;
 
-/// Get all window `ElementHandles` for a given PID.
 fn get_window_elements(pid: u32) -> Vec<ElementHandle> {
   let app_handle = ElementHandle::new(app_element(pid));
   let children = app_handle.get_children();
@@ -30,7 +29,7 @@ fn get_window_elements(pid: u32) -> Vec<ElementHandle> {
     .collect()
 }
 
-/// Enable accessibility (mostly for Chromium/Electron apps)
+/// Enable accessibility for Chromium/Electron apps.
 pub(crate) fn enable_accessibility_for_pid(pid: crate::ProcessId) {
   let raw_pid = pid.0;
   let app_el = app_element(raw_pid);
@@ -48,8 +47,7 @@ pub(crate) fn enable_accessibility_for_pid(pid: crate::ProcessId) {
   }
 }
 
-/// Fetch an element handle for a window by matching bounds
-/// TODO: find a way to not do this...
+/// Fetch an element handle for a window by matching bounds.
 pub(crate) fn fetch_window_handle(window: &crate::Window) -> Option<ElementHandle> {
   const MARGIN: f64 = 2.0;
 
@@ -67,7 +65,6 @@ pub(crate) fn fetch_window_handle(window: &crate::Window) -> Option<ElementHandl
     }
   }
 
-  // Fallback: use only element if there's just one
   if window_elements.len() == 1 {
     return window_elements.first().cloned();
   }

@@ -3,6 +3,6 @@ import type { Element } from "./Element";
 import type { Snapshot } from "./Snapshot";
 
 /**
- * RPC response variants
+ * RPC response.
  */
 export type RpcResponse = Snapshot | Element | Element | null | Array<Element> | null;

@@ -1,22 +1,4 @@
-/*!
-Observer management and unified callback for macOS accessibility.
-
-Handles:
-- Context registry for observer callbacks (element-level and process-level)
-- Observer creation and run loop integration
-- Unified callback dispatching
-
-# Context Design
-
-Observer contexts store a `PlatformCallbacks` implementation alongside the element/process ID.
-This allows callbacks to access core state without globals.
-
-The context map (`OBSERVER_CONTEXTS`) exists because:
-1. **C callback constraint**: macOS `AXObserver` callbacks receive a raw pointer (`refcon`)
-   that we need to map back to our typed context. We can't pass Rust closures to C code.
-2. **Lifetime management**: Context handles are passed to macOS which may hold them
-   indefinitely. Using stable u64 IDs with a global map avoids lifetime issues.
-*/
+/*! Observer management and callback for macOS accessibility. */
 
 #![allow(unsafe_code)]
 #![allow(clippy::expect_used)] // NonNull::new on stack pointers - never null
@@ -102,9 +84,13 @@ fn register_context<C: PlatformCallbacks<Handle = ElementHandle>>(
 ) -> *mut ObserverContextHandle {
   let context_id = NEXT_CONTEXT_ID.fetch_add(1, AtomicOrdering::Relaxed);
   let wrapped = Arc::new(CallbacksWrapper(callbacks)) as Arc<dyn CallbacksErased>;
-  OBSERVER_CONTEXTS
-    .lock()
-    .insert(context_id, ObserverContext { callbacks: wrapped, target });
+  OBSERVER_CONTEXTS.lock().insert(
+    context_id,
+    ObserverContext {
+      callbacks: wrapped,
+      target,
+    },
+  );
   Box::into_raw(Box::new(ObserverContextHandle { context_id }))
 }
 
@@ -119,20 +105,17 @@ pub(super) fn unregister_observer_context(handle_ptr: *mut ObserverContextHandle
   }
 }
 
-/// Lookup context info from the handle (lock is released after this returns).
-/// Returns (callbacks_arc, target) if found.
 fn lookup_context(
   handle_ptr: *const ObserverContextHandle,
 ) -> Option<(Arc<dyn CallbacksErased>, ObserverTarget)> {
   if handle_ptr.is_null() {
     return None;
   }
-    let guard = OBSERVER_CONTEXTS.lock();
+  let guard = OBSERVER_CONTEXTS.lock();
   let handle = unsafe { &*handle_ptr };
-  guard.get(&handle.context_id).map(|ctx| {
-    // Clone what we need so we can release the lock before callbacks
-    (ctx.callbacks.clone(), ctx.target.clone())
-  })
+  guard
+    .get(&handle.context_id)
+    .map(|ctx| (ctx.callbacks.clone(), ctx.target.clone()))
 }
 
 /// Create an `AXObserver` and add it to the main run loop.
@@ -161,7 +144,7 @@ fn create_observer_raw(
     )
   };
 
-  // Add to main run loop - required for callbacks to fire
+  // Add to main run loop (required for callbacks to fire)
   unsafe {
     let run_loop_source = observer.run_loop_source();
     if let Some(main_run_loop) = CFRunLoop::main() {
@@ -181,10 +164,7 @@ pub(crate) fn create_observer_for_pid<C: PlatformCallbacks<Handle = ElementHandl
   Ok(ObserverHandle::new(observer))
 }
 
-/// Observer callback - handles both element-level and app-level notifications.
-/// Dispatches based on context type:
-/// - Element context → element-level notifications (destruction, value change, title change)
-/// - Process context → app-level notifications (focus change, selection change)
+/// Observer callback - dispatches to element-level or app-level handlers.
 unsafe extern "C-unwind" fn unified_observer_callback(
   _observer: NonNull<AXObserver>,
   element: NonNull<AXUIElement>,
@@ -207,12 +187,10 @@ unsafe extern "C-unwind" fn unified_observer_callback(
       return;
     };
 
-    // Lookup context (releases lock before we invoke callbacks)
     let Some((callbacks, target)) = lookup_context(refcon as *const ObserverContextHandle) else {
       return;
     };
 
-    // Now invoke callbacks without holding the OBSERVER_CONTEXTS lock
     match target {
       ObserverTarget::Element(element_id) => {
         handle_element_notification(callbacks.as_ref(), element_id, notif);
@@ -228,7 +206,6 @@ unsafe extern "C-unwind" fn unified_observer_callback(
   }
 }
 
-/// Handle element-level notifications.
 fn handle_element_notification(
   callbacks: &dyn CallbacksErased,
   element_id: ElementId,
@@ -238,12 +215,8 @@ fn handle_element_notification(
     Notification::ValueChanged | Notification::TitleChanged => {
       ElementEvent::Changed(element_id, notif)
     }
-
     Notification::Destroyed => ElementEvent::Destroyed(element_id),
-
     Notification::ChildrenChanged => ElementEvent::ChildrenChanged(element_id),
-
-    // Element-level handler doesn't process these app-level notifications
     Notification::FocusChanged | Notification::SelectionChanged | Notification::BoundsChanged => {
       return;
     }
@@ -252,7 +225,6 @@ fn handle_element_notification(
   callbacks.on_element_event(event);
 }
 
-/// Handle app/process-level notifications (focus change, selection change).
 fn handle_process_notification(
   callbacks: &dyn CallbacksErased,
   notif: Notification,
@@ -266,9 +238,12 @@ fn handle_process_notification(
     Notification::SelectionChanged => {
       let handle = ElementHandle::new(ax_element.clone());
       let (text, range) = super::focus::get_selection_from_handle(&handle).unwrap_or_default();
-      ElementEvent::SelectionChanged { handle, text, range }
+      ElementEvent::SelectionChanged {
+        handle,
+        text,
+        range,
+      }
     }
-    // Process-level handler doesn't process these element-level notifications
     Notification::Destroyed
     | Notification::ValueChanged
     | Notification::TitleChanged

@@ -26,12 +26,13 @@ pub(super) use handles::{ElementHandle, ObserverHandle};
 
 use std::sync::Arc;
 
-use crate::accessibility::{Notification, Value};
+use crate::accessibility::{Action, Notification, Value};
 use crate::platform::traits::{
   AppNotificationHandle, DisplayLinkHandle, ElementAttributes, Platform, PlatformCallbacks,
   PlatformHandle, PlatformObserver, WatchHandle,
 };
 use crate::types::{AxioError, AxioResult, ElementId, Point};
+use mapping::action_to_macos;
 
 /// macOS platform implementation.
 pub(crate) struct MacOS;
@@ -78,10 +79,6 @@ impl Platform for MacOS {
     window::enable_accessibility_for_pid(crate::ProcessId(pid));
   }
 
-  fn fetch_focused_element(app_handle: &Self::Handle) -> Option<Self::Handle> {
-    app_handle.get_element("AXFocusedUIElement")
-  }
-
   fn app_element(pid: u32) -> Self::Handle {
     ElementHandle::new(util::app_element(pid))
   }
@@ -103,13 +100,19 @@ impl PlatformHandle for ElementHandle {
   fn set_value(&self, value: &Value) -> AxioResult<()> {
     self
       .set_typed_value(value)
-      .map_err(|e| AxioError::AccessibilityError(format!("Failed to set value: {e:?}")))
+      .map_err(|e| AxioError::SetValueFailed {
+        reason: format!("{e:?}"),
+      })
   }
 
-  fn perform_action(&self, action: &str) -> AxioResult<()> {
+  fn perform_action(&self, action: Action) -> AxioResult<()> {
+    let action_str = action_to_macos(action);
     self
-      .perform_action_internal(action)
-      .map_err(|e| AxioError::AccessibilityError(format!("Action '{action}' failed: {e:?}")))
+      .perform_action_internal(action_str)
+      .map_err(|e| AxioError::ActionFailed {
+        action,
+        reason: format!("{e:?}"),
+      })
   }
 
   fn fetch_attributes(&self) -> ElementAttributes {
@@ -118,10 +121,6 @@ impl PlatformHandle for ElementHandle {
 
   fn fetch_element_at_position(&self, x: f64, y: f64) -> Option<Self> {
     handles::ElementHandle::element_at_position(self, x, y)
-  }
-
-  fn fetch_selection(&self) -> Option<(String, Option<(u32, u32)>)> {
-    focus::get_selection_from_handle(self)
   }
 
   fn window(&self) -> Option<Self> {

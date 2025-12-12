@@ -36,8 +36,8 @@ The `Recency` enum controls how up-to-date data should be:
 
 ```rust
 pub enum Recency {
-    Cached,           // Use cached value, never hit OS
-    Fresh,            // Always fetch from OS
+    Any,              // Use cached value, never hit OS
+    Current,          // Always fetch from OS
     MaxAge(Duration), // Fetch if cached data is older than this
 }
 ```
@@ -102,9 +102,9 @@ pub(crate) trait PlatformCallbacks: Send + Sync + 'static {
 
 pub enum ElementEvent<H> {
     Destroyed(ElementId),
-    Changed { element_id: ElementId, notification: Notification },
+    Changed(ElementId, Notification),
     ChildrenChanged(ElementId),
-    FocusChanged { handle: H },
+    FocusChanged(H),
     SelectionChanged { handle: H, text: String, range: Option<(u32, u32)> },
 }
 ```
@@ -165,23 +165,25 @@ impl Registry {
 
 ```rust
 pub fn new() -> AxioResult<Self>;
-pub fn with_options(opts: AxioOptions) -> AxioResult<Self>;
+pub fn builder() -> AxioBuilder;  // .exclude_pid(u32).build()
 pub fn has_permissions() -> bool;
 pub fn subscribe(&self) -> Receiver<Event>;
 ```
 
 ### Element Retrieval
 
-The unified `get` method with freshness (I'd like a better name for this):
+The unified `get` method with freshness:
 
 ```rust
 /// Get element by ID with specified freshness.
-pub fn get(&self, id: ElementId, freshness: Recency) -> AxioResult<Option<Element>>;
+/// Returns Err(ElementNotFound) if element doesn't exist.
+pub fn get(&self, id: ElementId, freshness: Recency) -> AxioResult<Element>;
 
 /// Get children with freshness control.
 pub fn children(&self, id: ElementId, freshness: Recency) -> AxioResult<Vec<Element>>;
 
 /// Get parent with freshness control.
+/// Returns Ok(None) if element is root (has no parent).
 pub fn parent(&self, id: ElementId, freshness: Recency) -> AxioResult<Option<Element>>;
 ```
 
@@ -193,9 +195,6 @@ pub fn element_at(&self, x: f64, y: f64) -> AxioResult<Option<Element>>;
 
 /// Get root element for a window.
 pub fn window_root(&self, window_id: WindowId) -> AxioResult<Option<Element>>;
-
-/// Get focused element and selection in a window.
-pub fn window_focus(&self, id: WindowId) -> AxioResult<(Option<Element>, Option<TextSelection>)>;
 
 /// Get screen dimensions (cached after first call).
 pub fn screen_size(&self) -> (f64, f64);
@@ -216,7 +215,7 @@ pub fn snapshot(&self) -> Snapshot;
 
 ```rust
 pub fn set_value(&self, id: ElementId, value: &Value) -> AxioResult<()>;
-pub fn perform_click(&self, id: ElementId) -> AxioResult<()>;
+pub fn perform_action(&self, id: ElementId, action: Action) -> AxioResult<()>;
 ```
 
 ### Subscriptions
@@ -280,7 +279,7 @@ crates/axio/src/
 ├── core/
 │   ├── mod.rs          # Axio struct, construction, PlatformCallbacks impl
 │   ├── queries.rs      # get, children, parent, element_at, etc.
-│   ├── mutations.rs    # set_value, perform_click, sync_*, handlers
+│   ├── mutations.rs    # set_value, perform_action, sync_*, handlers
 │   ├── subscriptions.rs # watch/unwatch
 │   ├── builders.rs     # build_element, build_snapshot (Registry → public types)
 │   └── registry/
@@ -306,7 +305,7 @@ crates/axio/src/
 | Concept                  | Meaning                                             |
 | ------------------------ | --------------------------------------------------- |
 | **Registry**             | Cache with automatic event emission                 |
-| **Recency**              | How up-to-date data should be (Cached/Fresh/MaxAge) |
+| **Recency**              | How up-to-date data should be (Any/Current/MaxAge)  |
 | **get(id, freshness)**   | Element retrieval with freshness control            |
 | **Handle**               | OS reference, used as HashMap key for deduplication |
 | **ElementId**            | Our stable ID given to clients                      |

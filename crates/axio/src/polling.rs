@@ -15,20 +15,16 @@ use std::time::{Duration, Instant};
 
 const DEFAULT_POLLING_INTERVAL_MS: u64 = 8;
 
-/// Internal implementation of the polling handle.
 enum PollingImpl {
-  /// Thread-based polling with fixed interval
   Thread {
     stop_signal: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
   },
-  /// Display-synchronized polling (macOS only)
   #[cfg(target_os = "macos")]
   DisplayLink(DisplayLinkHandle),
 }
 
-/// Internal handle to control polling lifetime.
-/// Polling stops when this is dropped.
+/// Handle to control polling lifetime. Stops on drop.
 pub(crate) struct PollingHandle {
   inner: PollingImpl,
 }
@@ -64,30 +60,18 @@ impl Drop for PollingHandle {
   }
 }
 
-/// Result of polling for windows.
 pub(crate) struct PollWindowsResult {
-  /// Windows to sync (may be empty if we should skip this poll).
   pub windows: Vec<Window>,
-  /// If true, skip window removal this poll (transitional state detected).
   pub skip_removal: bool,
 }
 
-/// Poll for current windows.
-fn poll_windows(options: &AxioOptions) -> PollWindowsResult {
+fn poll_windows(options: &PollingConfig) -> PollWindowsResult {
   let all_windows = CurrentPlatform::fetch_windows(None);
 
-  // Get offset from exclude_pid window (typically the overlay app)
   let (offset_x, offset_y, overlay_missing) = if let Some(exclude_pid) = options.exclude_pid {
     match all_windows.iter().find(|w| w.process_id.0 == exclude_pid.0) {
       Some(overlay_window) => (overlay_window.bounds.x, overlay_window.bounds.y, false),
-      None => {
-        // Overlay not visible - we're likely in a different space/fullscreen app
-        log::trace!(
-          "Overlay window (PID {}) not found - likely in different space, skipping window removal",
-          exclude_pid.0
-        );
-        (0.0, 0.0, true)
-      }
+      None => (0.0, 0.0, true)
     }
   } else {
     (0.0, 0.0, false)
@@ -95,23 +79,17 @@ fn poll_windows(options: &AxioOptions) -> PollWindowsResult {
 
   let (screen_width, screen_height) = CurrentPlatform::fetch_screen_size();
 
-  // Check if ANY window is offscreen (indicates space transition)
+  // Offscreen windows indicate space transition
   let has_offscreen_windows = all_windows.iter().any(|w| {
     let adjusted_x = w.bounds.x - offset_x;
     adjusted_x > screen_width + 1.0
   });
 
-  // Skip window removal if we're in a transitional state
   let skip_removal = overlay_missing || has_offscreen_windows;
-
-  if has_offscreen_windows && !overlay_missing {
-    log::trace!("Offscreen windows detected - likely in space transition, skipping window removal");
-  }
 
   let windows: Vec<Window> = all_windows
     .into_iter()
     .filter(|w| {
-      // Exclude our own window
       if options
         .exclude_pid
         .is_some_and(|pid| w.process_id.0 == pid.0)
@@ -141,27 +119,16 @@ fn poll_windows(options: &AxioOptions) -> PollWindowsResult {
     skip_removal,
   }
 }
-
-/// Configuration options for Axio.
 #[derive(Debug, Clone, Copy)]
-pub struct AxioOptions {
-  /// PID to exclude from tracking. Its window position is used as coordinate offset.
-  /// Typically set to your own app's PID for overlay applications.
-  pub exclude_pid: Option<ProcessId>,
-  /// Filter out fullscreen windows. Default: true.
-  pub filter_fullscreen: bool,
-  /// Filter out offscreen windows. Default: true.
-  pub filter_offscreen: bool,
-  /// Polling interval in milliseconds. Default: 8ms (~120fps).
-  /// Ignored when `use_display_link` is true.
-  pub interval_ms: u64,
-  /// Use `CVDisplayLink` for display-synchronized polling (macOS only, experimental).
-  /// When true, polling fires exactly once per display refresh (60Hz/120Hz).
-  /// Default: false (use fixed interval timer instead).
-  pub use_display_link: bool,
+pub(crate) struct PollingConfig {
+  pub(crate) exclude_pid: Option<ProcessId>,
+  pub(crate) filter_fullscreen: bool,
+  pub(crate) filter_offscreen: bool,
+  pub(crate) interval_ms: u64,
+  pub(crate) use_display_link: bool,
 }
 
-impl Default for AxioOptions {
+impl Default for PollingConfig {
   fn default() -> Self {
     Self {
       exclude_pid: None,
@@ -173,8 +140,7 @@ impl Default for AxioOptions {
   }
 }
 
-/// Start background polling. Internal - called by Axio::new().
-pub(crate) fn start_polling(axio: Axio, config: AxioOptions) -> PollingHandle {
+pub(crate) fn start_polling(axio: Axio, config: PollingConfig) -> PollingHandle {
   #[cfg(target_os = "macos")]
   if config.use_display_link {
     if let Some(handle) = try_start_display_synced_polling(axio.clone(), config) {
@@ -186,8 +152,7 @@ pub(crate) fn start_polling(axio: Axio, config: AxioOptions) -> PollingHandle {
   start_thread_polling(axio, config)
 }
 
-/// Thread-based polling implementation.
-fn start_thread_polling(axio: Axio, config: AxioOptions) -> PollingHandle {
+fn start_thread_polling(axio: Axio, config: PollingConfig) -> PollingHandle {
   let stop_signal = Arc::new(AtomicBool::new(false));
   let stop_signal_clone = Arc::clone(&stop_signal);
 
@@ -213,10 +178,8 @@ fn start_thread_polling(axio: Axio, config: AxioOptions) -> PollingHandle {
   }
 }
 
-/// Try to start display-synchronized polling (macOS only).
-/// Returns None if display link is unavailable.
 #[cfg(target_os = "macos")]
-fn try_start_display_synced_polling(axio: Axio, config: AxioOptions) -> Option<PollingHandle> {
+fn try_start_display_synced_polling(axio: Axio, config: PollingConfig) -> Option<PollingHandle> {
   let handle = CurrentPlatform::start_display_link(move || {
     poll_iteration(&axio, &config);
   })?;
@@ -226,20 +189,13 @@ fn try_start_display_synced_polling(axio: Axio, config: AxioOptions) -> Option<P
   })
 }
 
-/// Shared polling logic for both thread and display-link implementations.
-fn poll_iteration(axio: &Axio, config: &AxioOptions) {
-  // Mouse position polling
+fn poll_iteration(axio: &Axio, config: &PollingConfig) {
   let pos = CurrentPlatform::fetch_mouse_position();
   axio.sync_mouse(pos);
 
   let poll_result = poll_windows(config);
-
-  // Focus tracking (extract before moving windows)
   let focused_window_id = poll_result.windows.iter().find(|w| w.focused).map(|w| w.id);
 
-  // Sync windows (handles add/update/remove + events + process creation)
-  // Skip removal if we're in a transitional state (space switching, etc.)
   axio.sync_windows(poll_result.windows, poll_result.skip_removal);
-
   axio.sync_focused_window(focused_window_id);
 }

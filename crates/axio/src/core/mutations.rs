@@ -9,14 +9,10 @@ Mutation methods for Axio.
 
 use super::registry::ProcessEntry;
 use super::Axio;
-use crate::accessibility::Notification;
+use crate::accessibility::{Action, Notification};
 use crate::platform::{CurrentPlatform, Platform, PlatformHandle, PlatformObserver};
 use crate::types::{AxioError, AxioResult, ElementId, ProcessId, Window, WindowId};
 use std::collections::HashSet;
-
-// ============================================================================
-// Public Mutations (set_*, perform_*)
-// ============================================================================
 
 impl Axio {
   /// Set a typed value on an element.
@@ -33,20 +29,26 @@ impl Axio {
       Ok((e.handle.clone(), e.data.role))
     })?;
 
-    // Step 2: Validate (no lock)
+    // Step 2: Validate role is writable (no lock)
     if !role.is_writable() {
       return Err(AxioError::NotSupported(format!(
         "Element with role '{role:?}' is not writable"
       )));
     }
 
-    // Step 3: Platform call (NO LOCK)
+    // Step 3: Validate value type matches role's expected type
+    let expected = role.value_type();
+    let got = value.value_type();
+    if expected != got {
+      return Err(AxioError::TypeMismatch { expected, got });
+    }
+
+    // Step 4: Platform call (NO LOCK)
     handle.set_value(value)
   }
 
-  /// Perform click action on an element.
-  pub fn perform_click(&self, element_id: ElementId) -> AxioResult<()> {
-    // Step 1: Extract handle (quick read)
+  /// Perform an action on an element.
+  pub fn perform_action(&self, element_id: ElementId, action: Action) -> AxioResult<()> {
     let handle = self.read(|s| {
       let e = s
         .element(element_id)
@@ -54,24 +56,17 @@ impl Axio {
       Ok(e.handle.clone())
     })?;
 
-    // Step 2: Platform call (NO LOCK)
-    handle.perform_action("AXPress")
+    handle.perform_action(action)
   }
 }
 
-// ============================================================================
-// Sync Operations (from polling)
-// ============================================================================
-
 impl Axio {
   /// Sync windows from polling. Handles add/update/remove.
-  ///
-  /// If `skip_removal` is true, windows not present in `new_windows` will NOT be removed.
-  /// This is used during space transitions where window visibility is unreliable.
+  /// `skip_removal=true` during space transitions where window visibility is unreliable.
+  /// TODO: remove skip_removal and just pause sync in this instance ^
   pub(crate) fn sync_windows(&self, new_windows: Vec<Window>, skip_removal: bool) {
     let new_ids: HashSet<WindowId> = new_windows.iter().map(|w| w.id).collect();
 
-    // Step 1: Get existing windows that need handle fetch (new or missing handle)
     let windows_needing_handle: HashSet<WindowId> = self.read(|s| {
       new_ids
         .iter()
@@ -83,7 +78,6 @@ impl Axio {
         .collect()
     });
 
-    // Step 2: Platform calls OUTSIDE lock - only fetch handles when needed
     let windows_with_handles: Vec<_> = new_windows
       .into_iter()
       .map(|w| {
@@ -96,9 +90,8 @@ impl Axio {
       })
       .collect();
 
-    // Step 3: Single write for all state mutations
     let new_process_pids = self.write(|s| {
-      // Remove windows no longer present (unless skip_removal is set)
+      // Remove windows no longer present
       if !skip_removal {
         let to_remove: Vec<WindowId> = s.window_ids().filter(|id| !new_ids.contains(id)).collect();
         for window_id in to_remove {
@@ -128,7 +121,6 @@ impl Axio {
       new_pids
     });
 
-    // Step 4: Process creation OUTSIDE lock (has platform calls)
     for process_id in new_process_pids {
       if let Err(e) = self.ensure_process(process_id.0) {
         log::warn!("Failed to create process for window: {e:?}");
@@ -147,10 +139,6 @@ impl Axio {
   }
 }
 
-// ============================================================================
-// Notification Handlers (called by PlatformCallbacks)
-// ============================================================================
-
 impl Axio {
   /// Handle element destroyed notification.
   pub(crate) fn handle_element_destroyed(&self, element_id: ElementId) {
@@ -158,9 +146,7 @@ impl Axio {
   }
 
   /// Handle focus changed notification.
-  ///
-  /// Takes ElementId, builds Element internally. Only processes if element
-  /// self-identifies as focused (focused == Some(true)).
+  /// Only processes if element self-identifies as focused.
   pub(crate) fn handle_focus_changed(&self, pid: u32, element_id: ElementId) {
     use super::build_element;
 
@@ -175,13 +161,12 @@ impl Axio {
       return;
     }
 
-    // Step 1: Update focus (quick write)
     let Some(previous_id) = self.write(|s| s.set_focused_element(ProcessId(pid), element.clone()))
     else {
-      return; // No change
+      return;
     };
 
-    // Step 2: Auto-unwatch previous (separate read, then unwatch which may have platform calls)
+    // Auto-unwatch previous element
     if let Some(prev_id) = previous_id {
       let should_unwatch = self.read(|s| {
         s.element(prev_id)
@@ -193,7 +178,7 @@ impl Axio {
       }
     }
 
-    // Step 3: Auto-watch new element (may have platform calls)
+    // Auto-watch new element
     if element.role.auto_watch_on_focus() || element.role.is_writable() {
       drop(self.watch(element.id));
     }
@@ -211,43 +196,30 @@ impl Axio {
     self.write(|s| s.set_selection(ProcessId(pid), window_id, element_id, text, range));
   }
 
-  /// Handle element changed notification (value, children, etc).
+  /// Handle element changed notification.
   pub(crate) fn handle_element_changed(&self, element_id: ElementId, _notification: Notification) {
-    // Platform call - already outside any lock
     if let Err(e) = self.refresh_element(element_id) {
       log::debug!("Failed to refresh element {element_id} on change: {e:?}");
     }
   }
 }
 
-// ============================================================================
-// Process Management
-// ============================================================================
-
 impl Axio {
-  /// Ensure process state exists for a PID.
-  ///
-  /// Idempotent - safe to call multiple times. Creates observer and subscribes
-  /// to app-level notifications if process doesn't already exist.
+  /// Ensure process state exists for a PID. Idempotent.
   pub(crate) fn ensure_process(&self, pid: u32) -> AxioResult<ProcessId> {
     let process_id = ProcessId(pid);
 
-    // Fast path: check if exists (quick read)
     if self.read(|s| s.has_process(process_id)) {
       return Ok(process_id);
     }
 
-    // Slow path: platform calls OUTSIDE lock
-
-    // Enable accessibility for this process (needed for Chromium/Electron apps).
-    // This is idempotent and only called once per process (on first registration).
+    // Enable accessibility (needed for Chromium/Electron apps)
     CurrentPlatform::enable_accessibility_for_pid(pid);
 
     let callbacks = std::sync::Arc::new(self.clone());
     let observer = CurrentPlatform::create_observer(pid, callbacks.clone())?;
     let app_handle = CurrentPlatform::app_element(pid);
 
-    // Subscribe to app-level notifications (focus, selection)
     let app_notifications = match observer.subscribe_app_notifications(pid, callbacks.clone()) {
       Ok(handle) => Some(handle),
       Err(e) => {
@@ -256,8 +228,6 @@ impl Axio {
       }
     };
 
-    // Insert process (upsert handles TOCTOU race - if another thread won,
-    // the ProcessEntry is dropped and RAII cleans up observer/notification handles)
     self.write(|s| {
       s.upsert_process(
         process_id,
@@ -275,15 +245,8 @@ impl Axio {
   }
 }
 
-// ============================================================================
-// Element Caching
-// ============================================================================
-
 impl Axio {
-  /// Ensure an element has a destruction watch set up.
-  ///
-  /// This sets up OS notification for when the element is destroyed,
-  /// so we can remove it from the cache. Idempotent - safe to call multiple times.
+  /// Ensure an element has a destruction watch set up. Idempotent.
   pub(crate) fn ensure_watched(&self, element_id: ElementId) {
     // Check if already watched
     let (needs_watch, pid, handle) = self.read(|r| {

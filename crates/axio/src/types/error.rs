@@ -1,6 +1,7 @@
 /*! Error types for AXIO operations. */
 
-use super::{ElementId, WindowId};
+use super::{ElementId, ProcessId, WindowId};
+use crate::accessibility::{Action, ValueType};
 
 /// Errors that can occur during AXIO operations.
 #[derive(Debug, thiserror::Error)]
@@ -14,8 +15,20 @@ pub enum AxioError {
   #[error("Window not found: {0}")]
   WindowNotFound(WindowId),
 
-  #[error("Accessibility operation failed: {0}")]
-  AccessibilityError(String),
+  #[error("Process not found: {0}")]
+  ProcessNotFound(ProcessId),
+
+  #[error("Action '{action:?}' failed: {reason}")]
+  ActionFailed { action: Action, reason: String },
+
+  #[error("Failed to set value: {reason}")]
+  SetValueFailed { reason: String },
+
+  #[error("Type mismatch: expected {expected:?}, got {got:?}")]
+  TypeMismatch { expected: ValueType, got: ValueType },
+
+  #[error("No element at position ({x}, {y})")]
+  NoElementAtPosition { x: f64, y: f64 },
 
   #[error("Observer error: {0}")]
   ObserverError(String),
@@ -29,4 +42,3 @@ pub enum AxioError {
 
 /// Result type for AXIO operations.
 pub type AxioResult<T> = Result<T, AxioError>;
-

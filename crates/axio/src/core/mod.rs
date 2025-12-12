@@ -46,13 +46,10 @@ use async_broadcast::{InactiveReceiver, Sender};
 use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
 
-pub(crate) use crate::polling::AxioOptions;
+use crate::polling::PollingConfig;
+use crate::types::ProcessId;
 
 const EVENT_CHANNEL_CAPACITY: usize = 5000;
-
-// ============================================================================
-// Axio Struct Definition
-// ============================================================================
 
 /// Main axio instance - owns state, event broadcasting, and polling.
 ///
@@ -84,29 +81,96 @@ impl std::fmt::Debug for Axio {
   }
 }
 
-// ============================================================================
-// Construction & Events
-// ============================================================================
+/// Builder for configuring an Axio instance.
+///
+/// # Example
+///
+/// ```ignore
+/// let axio = Axio::builder()
+///     .exclude_pid(std::process::id())
+///     .filter_fullscreen(true)
+///     .use_display_link(true)
+///     .build()?;
+/// ```
+#[derive(Debug, Default, Clone, Copy)]
+pub struct AxioBuilder {
+  config: PollingConfig,
+}
+
+impl AxioBuilder {
+  /// Exclude a process ID from tracking.
+  ///
+  /// Typically set to your own app's PID for overlay applications.
+  /// The excluded window's position can be used as a coordinate offset.
+  pub fn exclude_pid(mut self, pid: u32) -> Self {
+    self.config.exclude_pid = Some(ProcessId(pid));
+    self
+  }
+
+  /// Filter out fullscreen windows. Default: true.
+  pub fn filter_fullscreen(mut self, filter: bool) -> Self {
+    self.config.filter_fullscreen = filter;
+    self
+  }
+
+  /// Filter out offscreen windows. Default: true.
+  pub fn filter_offscreen(mut self, filter: bool) -> Self {
+    self.config.filter_offscreen = filter;
+    self
+  }
+
+  /// Set polling interval in milliseconds. Default: 8ms (~120fps).
+  ///
+  /// Ignored when `use_display_link` is true.
+  pub fn interval_ms(mut self, ms: u64) -> Self {
+    self.config.interval_ms = ms;
+    self
+  }
+
+  /// Use CVDisplayLink for display-synchronized polling (macOS only).
+  ///
+  /// When true, polling fires exactly once per display refresh (60Hz/120Hz).
+  /// Default: false (use fixed interval timer instead).
+  pub fn use_display_link(mut self, use_it: bool) -> Self {
+    self.config.use_display_link = use_it;
+    self
+  }
+
+  /// Build the Axio instance with the configured options.
+  ///
+  /// Returns an error if accessibility permissions are not granted.
+  #[must_use = "Axio instance must be stored to keep polling active"]
+  pub fn build(self) -> AxioResult<Axio> {
+    Axio::create_with_config(self.config)
+  }
+}
 
 impl Axio {
   /// Create a new Axio instance with default options.
   ///
   /// Polling starts automatically and stops when the instance is dropped.
+  ///
+  /// For custom configuration, use [`Axio::builder()`].
+  #[must_use = "Axio instance must be stored to keep polling active"]
   pub fn new() -> AxioResult<Self> {
-    Self::with_options(AxioOptions::default())
+    Self::builder().build()
   }
 
-  /// Create a new Axio instance with custom options.
+  /// Create a builder for configuring a new Axio instance.
   ///
   /// # Example
   ///
   /// ```ignore
-  /// let axio = Axio::with_options(AxioOptions {
-  ///     exclude_pid: Some(ProcessId::from(std::process::id())),
-  ///     ..Default::default()
-  /// })?;
+  /// let axio = Axio::builder()
+  ///     .exclude_pid(std::process::id())
+  ///     .filter_fullscreen(true)
+  ///     .build()?;
   /// ```
-  pub fn with_options(options: AxioOptions) -> AxioResult<Self> {
+  pub fn builder() -> AxioBuilder {
+    AxioBuilder::default()
+  }
+
+  fn create_with_config(config: PollingConfig) -> AxioResult<Self> {
     if !CurrentPlatform::has_permissions() {
       return Err(AxioError::PermissionDenied);
     }
@@ -126,7 +190,7 @@ impl Axio {
     };
 
     // Start polling with a clone (shares state via Arc)
-    let polling_handle = polling::start_polling(axio.clone(), options);
+    let polling_handle = polling::start_polling(axio.clone(), config);
     *axio.polling.lock() = Some(polling_handle);
 
     Ok(axio)
@@ -137,28 +201,18 @@ impl Axio {
     self.events_keepalive.activate_cloned()
   }
 
-  // ==========================================================================
-  // State Access - NEVER do I/O inside these closures
-  // ==========================================================================
-
-  /// Read state. Lock released when closure returns.
-  /// **Never call platform/OS functions inside the closure.**
+  /// Read state. Never call platform/OS functions inside the closure.
   #[inline]
   pub(crate) fn read<R>(&self, f: impl FnOnce(&Registry) -> R) -> R {
     f(&self.state.read())
   }
 
-  /// Write state. Lock released when closure returns.
-  /// **Never call platform/OS functions inside the closure.**
+  /// Write state. Never call platform/OS functions inside the closure.
   #[inline]
   pub(crate) fn write<R>(&self, f: impl FnOnce(&mut Registry) -> R) -> R {
     f(&mut self.state.write())
   }
 }
-
-// ============================================================================
-// PlatformCallbacks Implementation
-// ============================================================================
 
 use crate::platform::{ElementEvent, Handle, PlatformCallbacks, PlatformHandle};
 

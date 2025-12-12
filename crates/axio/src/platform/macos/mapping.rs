@@ -58,8 +58,7 @@ pub(in crate::platform::macos) mod ax_action {
 }
 
 /// Convert our Action to macOS action string.
-#[allow(dead_code)] // TODO: more complete action system
-const fn action_to_macos(a: Action) -> &'static str {
+pub(super) const fn action_to_macos(a: Action) -> &'static str {
   match a {
     Action::Press => ax_action::PRESS,
     Action::ShowMenu => ax_action::SHOW_MENU,
@@ -165,13 +164,6 @@ pub(in crate::platform::macos) mod ax_role {
 }
 
 /// Convert macOS role string to our Role.
-///
-/// Mapping strategy:
-/// - Semantic roles → specific Role variants (Button, `TextField`, etc.)
-/// - Semantic groups → Group (split groups, radio groups, etc.)
-/// - Layout-only groups → Group (then refined to `GenericContainer` if no label/value)
-/// - Known non-semantic chrome → `GenericElement` (scrollbars, handles, etc.)
-/// - Unknown → Unknown (logs warning, indicates gap in mappings)
 pub(in crate::platform) fn role_from_macos(platform_role: &str) -> Role {
   match platform_role {
     // Structural
@@ -216,9 +208,7 @@ pub(in crate::platform) fn role_from_macos(platform_role: &str) -> Role {
     ax_role::IMAGE => Role::Image,
     ax_role::SPLITTER => Role::Separator,
 
-    // Generic elements - known non-semantic chrome
-    // These are explicitly mapped so we don't log warnings for them.
-    // They'll be candidates for pruning in simplified tree views.
+    // Known non-semantic leaf elements → GenericElement
     ax_role::SCROLL_BAR
     | ax_role::VALUE_INDICATOR
     | ax_role::HANDLE
@@ -234,10 +224,8 @@ pub(in crate::platform) fn role_from_macos(platform_role: &str) -> Role {
     | ax_role::LEVEL_INDICATOR
     | ax_role::BUSY_INDICATOR => Role::GenericElement,
 
-    // Explicit unknown
     ax_role::UNKNOWN => Role::Unknown,
 
-    // Unmapped - truly unaccounted for, needs investigation
     _ => {
       log::warn!("Unknown macOS role: {platform_role}");
       Role::Unknown
@@ -245,12 +233,7 @@ pub(in crate::platform) fn role_from_macos(platform_role: &str) -> Role {
   }
 }
 
-/// Convert our Role to macOS role string.
-///
-/// Returns the canonical macOS role string (with "AX" prefix).
 #[allow(dead_code)]
-// TODO: more complete role system. Possible this wont be needed
-// as our mapping is already lossy...
 const fn role_to_macos(r: Role) -> &'static str {
   match r {
     // Structural

@@ -1,12 +1,4 @@
-/*!
-Display-synchronized callbacks using `CVDisplayLink`.
-
-`CVDisplayLink` fires a callback synchronized to the display's actual refresh rate.
-This ensures:
-- No drift (tied to hardware vsync)
-- Auto-adapts to display rate (60Hz, 120Hz, throttled, etc.)
-- Perfect frame alignment
-*/
+/*! Display-synchronized callbacks using CVDisplayLink. */
 
 #![allow(unsafe_code)]
 #![allow(clippy::unwrap_used)] // NonNull::new on stack pointers - never null
@@ -15,21 +7,17 @@ use objc2_core_video::{kCVReturnSuccess, CVDisplayLink, CVOptionFlags, CVReturn,
 use std::ffi::c_void;
 use std::ptr::NonNull;
 
-/// Handle to a running display link.
-/// Stops the link when dropped.
+/// Handle to a running display link. Stops on drop.
 pub(crate) struct DisplayLinkHandle {
   link: NonNull<CVDisplayLink>,
-  // Keep the callback alive - double-boxed for stable pointer
   _callback: Box<Box<dyn Fn() + Send + Sync>>,
 }
 
-// SAFETY: CVDisplayLink is thread-safe according to Apple docs
 unsafe impl Send for DisplayLinkHandle {}
 unsafe impl Sync for DisplayLinkHandle {}
 
 impl DisplayLinkHandle {
-  /// Stop the display link (it will also stop on drop).
-  #[allow(deprecated)] // CVDisplayLink deprecated in macOS 15, but still works
+  #[allow(deprecated)]
   pub(crate) fn stop(&self) {
     unsafe {
       self.link.as_ref().stop();
@@ -46,8 +34,6 @@ impl Drop for DisplayLinkHandle {
   }
 }
 
-/// The actual callback that dispatches to our Rust closure.
-/// Called on a high-priority display link thread.
 unsafe extern "C-unwind" fn display_link_callback(
   _display_link: NonNull<CVDisplayLink>,
   _in_now: NonNull<CVTimeStamp>,
@@ -57,10 +43,7 @@ unsafe extern "C-unwind" fn display_link_callback(
   user_data: *mut c_void,
 ) -> CVReturn {
   if !user_data.is_null() {
-    // SAFETY: We control what we put in user_data (a Box<Box<dyn Fn()>>)
     let callback = &*(user_data as *const Box<dyn Fn() + Send + Sync>);
-
-    // Catch panics to avoid unwinding across FFI boundary
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
       callback();
     }));
@@ -72,23 +55,8 @@ unsafe extern "C-unwind" fn display_link_callback(
   kCVReturnSuccess
 }
 
-/// Start a display link that calls the given callback on each vsync.
-///
-/// The callback is called on a high-priority display link thread.
-/// Keep work minimal and thread-safe.
-///
-/// # Example
-///
-/// ```ignore
-/// let handle = start_display_link(|| {
-///     println!("Vsync!");
-/// })?;
-///
-/// // Link runs until handle is dropped
-/// std::thread::sleep(std::time::Duration::from_secs(1));
-/// // handle.stop(); // or just let it drop
-/// ```
-#[allow(deprecated)] // CVDisplayLink deprecated in macOS 15, but still works
+/// Start a display link that calls the callback on each vsync.
+#[allow(deprecated)]
 pub(crate) fn start_display_link<F>(callback: F) -> Result<DisplayLinkHandle, &'static str>
 where
   F: Fn() + Send + Sync + 'static,
@@ -116,7 +84,6 @@ where
     return Err("Failed to set CVDisplayLink callback");
   }
 
-  // Start the link
   let result = unsafe { link.as_ref().start() };
   if result != kCVReturnSuccess {
     return Err("Failed to start CVDisplayLink");
