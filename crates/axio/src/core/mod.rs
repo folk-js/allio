@@ -93,6 +93,7 @@ impl std::fmt::Debug for Axio {
 ///     .build()?;
 /// ```
 #[derive(Debug, Default, Clone, Copy)]
+#[must_use = "Builder does nothing until .build() is called"]
 pub struct AxioBuilder {
   config: PollingConfig,
 }

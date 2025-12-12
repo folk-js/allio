@@ -65,7 +65,7 @@ impl ElementTree {
   /// Used for orphan resolution when parent is discovered after child.
   pub(super) fn add_child(&mut self, parent: ElementId, child: ElementId) {
     debug_assert!(
-      self.parent_of.get(&child).is_none(),
+      !self.parent_of.contains_key(&child),
       "add_child: child {child} already has parent {:?}",
       self.parent_of.get(&child)
     );

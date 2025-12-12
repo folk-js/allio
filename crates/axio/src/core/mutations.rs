@@ -100,7 +100,7 @@ impl Axio {
       }
 
       // Add/update windows
-      let mut new_pids = Vec::new();
+      let mut fresh_pids = Vec::new();
       for (window_info, handle) in windows_with_handles {
         let window_id = window_info.id;
         let process_id = window_info.process_id;
@@ -108,7 +108,7 @@ impl Axio {
 
         if is_new {
           s.upsert_window(window_id, process_id, window_info.clone(), handle.clone());
-          new_pids.push(process_id);
+          fresh_pids.push(process_id);
         } else {
           // Already existed - update
           s.update_window(window_id, window_info);
@@ -118,7 +118,7 @@ impl Axio {
           }
         }
       }
-      new_pids
+      fresh_pids
     });
 
     for process_id in new_process_pids {
@@ -161,7 +161,8 @@ impl Axio {
       return;
     }
 
-    let Some(previous_id) = self.write(|s| s.set_focused_element(ProcessId(pid), element.clone()))
+    let super::registry::FocusChange::Changed(previous_id) =
+      self.write(|s| s.set_focused_element(ProcessId(pid), element.clone()))
     else {
       return;
     };

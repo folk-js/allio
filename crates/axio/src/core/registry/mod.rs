@@ -31,6 +31,14 @@ use crate::types::{
 };
 use tree::ElementTree;
 
+/// Result of attempting to set focused element.
+pub(crate) enum FocusChange {
+  /// Focus didn't change (process not found or same element already focused).
+  Unchanged,
+  /// Focus changed. Contains the previously focused element ID, if any.
+  Changed(Option<ElementId>),
+}
+
 /// Per-process state.
 pub(crate) struct ProcessEntry {
   pub(crate) observer: Observer,
@@ -250,19 +258,14 @@ impl Registry {
   }
 
   /// Set focused element for a process. Emits `FocusElement` if changed.
-  /// Returns previous element ID if changed (for auto-unwatch).
-  pub(crate) fn set_focused_element(
-    &mut self,
-    pid: ProcessId,
-    element: Element,
-  ) -> Option<Option<ElementId>> {
+  pub(crate) fn set_focused_element(&mut self, pid: ProcessId, element: Element) -> FocusChange {
     let Some(process) = self.processes.get_mut(&pid) else {
-      return None;
+      return FocusChange::Unchanged;
     };
 
     let previous = process.focused_element;
     if previous == Some(element.id) {
-      return None; // No change
+      return FocusChange::Unchanged;
     }
 
     process.focused_element = Some(element.id);
@@ -270,7 +273,7 @@ impl Registry {
       element,
       previous_element_id: previous,
     });
-    Some(previous)
+    FocusChange::Changed(previous)
   }
 
   /// Set selection. Emits `SelectionChanged` if changed.
