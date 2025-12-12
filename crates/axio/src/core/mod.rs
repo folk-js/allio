@@ -3,11 +3,14 @@ Core Axio instance - owns all accessibility state and event broadcasting.
 
 # Module Structure
 
-- `mod.rs` - Axio struct, construction, events, `PlatformCallbacks`
+- `mod.rs` - Axio struct, construction, events, `EventHandler` impl
 - `registry/` - Registry (cache) with private fields + operations + event emission
 - `queries.rs` - `get()` with recency, lookups, discovery
-- `mutations.rs` - set_*, perform_*, sync_*, notification handlers
+- `actions.rs` - `set_value()`, `perform_action()` (write to OS)
+- `sync.rs` - bulk updates from polling loop
+- `handlers.rs` - notification handlers from OS events
 - `subscriptions.rs` - watch/unwatch
+- `adapters.rs` - convert registry data to public API types
 
 # Example
 
@@ -30,14 +33,16 @@ while let Ok(event) = events.recv().await {
 ```
 */
 
-mod builders;
-mod mutations;
+mod actions;
+mod adapters;
+mod handlers;
 mod queries;
 mod registry;
 mod subscriptions;
+mod sync;
 
-pub(crate) use builders::{build_element, build_snapshot};
-pub(crate) use registry::{ElementData, Registry};
+pub(crate) use adapters::{build_element, build_snapshot};
+pub(crate) use registry::Registry;
 
 use crate::platform::{CurrentPlatform, Platform};
 use crate::polling::{self, PollingHandle};
@@ -215,9 +220,9 @@ impl Axio {
   }
 }
 
-use crate::platform::{ElementEvent, Handle, PlatformCallbacks, PlatformHandle};
+use crate::platform::{ElementEvent, EventHandler, Handle, PlatformHandle};
 
-impl PlatformCallbacks for Axio {
+impl EventHandler for Axio {
   type Handle = Handle;
 
   fn on_element_event(&self, event: ElementEvent<Handle>) {
@@ -247,7 +252,7 @@ impl PlatformCallbacks for Axio {
         };
 
         // Cache element from handle and delegate to handler
-        let element_id = self.cache_from_handle(focused_handle, window_id, pid);
+        let element_id = self.upsert_from_handle(focused_handle, window_id, pid);
         self.handle_focus_changed(pid.0, element_id);
       }
 
@@ -265,7 +270,7 @@ impl PlatformCallbacks for Axio {
         };
 
         // Cache element from handle
-        let element_id = self.cache_from_handle(handle, window_id, pid);
+        let element_id = self.upsert_from_handle(handle, window_id, pid);
 
         // Delegate to existing handler
         self.handle_selection_changed(pid.0, window_id, element_id, text, range);

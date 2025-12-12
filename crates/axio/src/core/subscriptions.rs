@@ -15,7 +15,7 @@ impl Axio {
     let (notifs, watch_handle) = self.write(|s| {
       let role = s
         .element(element_id)
-        .map(|e| e.data.role)
+        .map(|e| e.role)
         .ok_or(AxioError::ElementNotFound(element_id))?;
 
       let notifs = Notification::for_watching(role);
@@ -49,7 +49,7 @@ impl Axio {
     let (notifs, watch_handle) = self.write(|s| {
       let role = s
         .element(element_id)
-        .map(|e| e.data.role)
+        .map(|e| e.role)
         .ok_or(AxioError::ElementNotFound(element_id))?;
 
       let notifs = Notification::for_watching(role);

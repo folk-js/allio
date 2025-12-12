@@ -72,7 +72,7 @@ This enables callers to make explicit tradeoffs between latency and recency.
 - Public API for consumers
 - Orchestrates Registry + Platform calls
 - Sets up watches after inserts
-- Implements `PlatformCallbacks` trait for OS notifications
+- Implements `EventHandler` trait for OS notifications
 
 **Registry (Cache + Events)**
 
@@ -88,14 +88,14 @@ This enables callers to make explicit tradeoffs between latency and recency.
 - Trait-based abstraction over OS APIs
 - macOS implementation via Accessibility APIs
 - Handles all FFI and unsafe code
-- Callbacks go through `PlatformCallbacks` trait (implemented by Axio)
+- Callbacks go through `EventHandler` trait (implemented by Axio)
 
 ### Platform/Axio Decoupling
 
-Platform callbacks use the `PlatformCallbacks` trait:
+Platform callbacks use the `EventHandler` trait:
 
 ```rust
-pub(crate) trait PlatformCallbacks: Send + Sync + 'static {
+pub(crate) trait EventHandler: Send + Sync + 'static {
     type Handle: PlatformHandle;
     fn on_element_event(&self, event: ElementEvent<Self::Handle>);
 }
@@ -131,12 +131,12 @@ Registry is the single source of truth for cached data. All mutations emit corre
 ```rust
 impl Registry {
     // === Upsert (insert or update, emit events appropriately) ===
-    fn upsert_element(&mut self, elem: ElementEntry) -> ElementId;
-    fn upsert_window(&mut self, window: WindowEntry) -> WindowId;
-    fn upsert_process(&mut self, process: ProcessEntry) -> ProcessId;
+    fn upsert_element(&mut self, elem: CachedElement) -> ElementId;
+    fn upsert_window(&mut self, window: CachedWindow) -> WindowId;
+    fn upsert_process(&mut self, process: CachedProcess) -> ProcessId;
 
     // === Update (modify existing, emit *Changed if different) ===
-    fn update_element(&mut self, id: ElementId, data: ElementData);
+    fn update_element(&mut self, id: ElementId, data: ElementState);
     fn update_window(&mut self, id: WindowId, info: Window);
 
     // === Remove (cascade + cleanup, emit *Removed events) ===
@@ -145,15 +145,15 @@ impl Registry {
     fn remove_process(&mut self, id: ProcessId);
 
     // === Query (read-only, no events) ===
-    fn element(&self, id: ElementId) -> Option<&ElementEntry>;
-    fn window(&self, id: WindowId) -> Option<&WindowEntry>;
+    fn element(&self, id: ElementId) -> Option<&CachedElement>;
+    fn window(&self, id: WindowId) -> Option<&CachedWindow>;
     fn find_element(&self, handle: &Handle) -> Option<ElementId>;
 }
 ```
 
 ### Key Invariant
 
-**Registry fields are private.** All mutations go through these methods, guaranteeing:
+**Registry fields are private.** All changes go through these methods, guaranteeing:
 
 - Indexes are always updated
 - Events are always emitted
@@ -211,7 +211,7 @@ pub fn all_elements(&self) -> Vec<Element>;
 pub fn snapshot(&self) -> Snapshot;
 ```
 
-### Mutations (write to OS)
+### Actions (write to OS)
 
 ```rust
 pub fn set_value(&self, id: ElementId, value: &Value) -> AxioResult<()>;
@@ -236,7 +236,7 @@ pub(crate) fn sync_mouse(&self, pos: Point);
 pub(crate) fn sync_focused_window(&self, id: Option<WindowId>);
 
 // Element caching helper
-pub(crate) fn cache_from_handle(&self, handle: Handle, window_id: WindowId, pid: ProcessId) -> ElementId;
+pub(crate) fn upsert_from_handle(&self, handle: Handle, window_id: WindowId, pid: ProcessId) -> ElementId;
 
 // Watch setup
 pub(crate) fn ensure_watched(&self, element_id: ElementId);
@@ -277,20 +277,22 @@ Because Registry owns event emission:
 crates/axio/src/
 ├── lib.rs              # Re-exports only
 ├── core/
-│   ├── mod.rs          # Axio struct, construction, PlatformCallbacks impl
+│   ├── mod.rs          # Axio struct, construction, EventHandler impl
 │   ├── queries.rs      # get, children, parent, element_at, etc.
-│   ├── mutations.rs    # set_value, perform_action, sync_*, handlers
+│   ├── actions.rs      # set_value, perform_action (write to OS)
+│   ├── sync.rs         # sync_windows, sync_mouse (bulk updates from polling)
+│   ├── handlers.rs     # handle_* methods (process OS notifications)
 │   ├── subscriptions.rs # watch/unwatch
-│   ├── builders.rs     # build_element, build_snapshot (Registry → public types)
+│   ├── adapters.rs     # build_element, build_snapshot (Registry → public types)
 │   └── registry/
-│       ├── mod.rs      # Registry struct, global state, ElementEntry
+│       ├── mod.rs      # Registry struct, global state, CachedElement/Window/Process
 │       ├── elements.rs # upsert_element, update_element, remove_element
 │       ├── windows.rs  # upsert_window, update_window, remove_window
 │       ├── processes.rs # upsert_process, remove_process
 │       └── tree.rs     # ElementTree for parent/child relationships
 ├── platform/
 │   ├── mod.rs          # Re-exports
-│   ├── traits.rs       # Platform, PlatformHandle, PlatformCallbacks, ElementEvent
+│   ├── traits.rs       # Platform, PlatformHandle, EventHandler, ElementEvent
 │   └── macos/          # macOS implementation
 │       ├── mod.rs      # Platform trait impl
 │       ├── handles.rs  # ElementHandle (with Hash + Eq)
@@ -309,7 +311,7 @@ crates/axio/src/
 | **get(id, recency)**     | Element retrieval with recency control              |
 | **Handle**               | OS reference, used as HashMap key for deduplication |
 | **ElementId**            | Our stable ID given to clients                      |
-| **PlatformCallbacks**    | Trait for OS notifications → Axio                   |
+| **EventHandler**         | Trait for OS notifications → Axio                   |
 | **upsert/update/remove** | Registry mutation operations                        |
 | **watch/unwatch**        | Element change subscriptions                        |
 | **sync\_**               | Bulk updates from polling                           |

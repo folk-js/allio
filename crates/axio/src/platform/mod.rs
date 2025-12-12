@@ -26,7 +26,7 @@ mod traits;
 
 pub(crate) use traits::{
   AppNotificationHandle, DisplayLinkHandle, ElementAttributes, ElementEvent, Platform,
-  PlatformCallbacks, PlatformHandle, PlatformObserver, WatchHandle,
+  EventHandler, PlatformHandle, PlatformObserver, WatchHandle,
 };
 
 // === Platform Implementations ===

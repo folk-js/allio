@@ -65,7 +65,7 @@ pub(crate) struct ElementAttributes {
 }
 
 /// Callbacks from platform to core when OS events fire.
-pub(crate) trait PlatformCallbacks: Send + Sync + 'static {
+pub(crate) trait EventHandler: Send + Sync + 'static {
   /// The handle type for this platform.
   type Handle: PlatformHandle;
 
@@ -96,7 +96,7 @@ pub(crate) trait Platform {
   fn fetch_window_handle(window: &Window) -> Option<Self::Handle>;
 
   /// Create a notification observer for a process.
-  fn create_observer<C: PlatformCallbacks<Handle = Self::Handle>>(
+  fn create_observer<C: EventHandler<Handle = Self::Handle>>(
     pid: u32,
     callbacks: Arc<C>,
   ) -> AxioResult<Self::Observer>;
@@ -143,14 +143,14 @@ pub(crate) trait PlatformObserver: Send + Sync {
   type Handle: PlatformHandle;
 
   /// Subscribe to app-level focus and selection notifications.
-  fn subscribe_app_notifications<C: PlatformCallbacks<Handle = Self::Handle>>(
+  fn subscribe_app_notifications<C: EventHandler<Handle = Self::Handle>>(
     &self,
     pid: u32,
     callbacks: Arc<C>,
   ) -> AxioResult<AppNotificationHandle>;
 
   /// Create a watch handle for an element with initial notifications.
-  fn create_watch<C: PlatformCallbacks<Handle = Self::Handle>>(
+  fn create_watch<C: EventHandler<Handle = Self::Handle>>(
     &self,
     handle: &Self::Handle,
     element_id: ElementId,

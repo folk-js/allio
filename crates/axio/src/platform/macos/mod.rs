@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 use crate::accessibility::{Action, Notification, Value};
 use crate::platform::traits::{
-  AppNotificationHandle, DisplayLinkHandle, ElementAttributes, Platform, PlatformCallbacks,
+  AppNotificationHandle, DisplayLinkHandle, ElementAttributes, EventHandler, Platform,
   PlatformHandle, PlatformObserver, WatchHandle,
 };
 use crate::types::{AxioError, AxioResult, ElementId, Point};
@@ -62,7 +62,7 @@ impl Platform for MacOS {
     window::fetch_window_handle(window)
   }
 
-  fn create_observer<C: PlatformCallbacks<Handle = Self::Handle>>(
+  fn create_observer<C: EventHandler<Handle = Self::Handle>>(
     pid: u32,
     callbacks: Arc<C>,
   ) -> AxioResult<Self::Observer> {
@@ -131,7 +131,7 @@ impl PlatformHandle for ElementHandle {
 impl PlatformObserver for ObserverHandle {
   type Handle = ElementHandle;
 
-  fn subscribe_app_notifications<C: PlatformCallbacks<Handle = Self::Handle>>(
+  fn subscribe_app_notifications<C: EventHandler<Handle = Self::Handle>>(
     &self,
     pid: u32,
     callbacks: Arc<C>,
@@ -140,7 +140,7 @@ impl PlatformObserver for ObserverHandle {
     Ok(AppNotificationHandle { _inner: inner })
   }
 
-  fn create_watch<C: PlatformCallbacks<Handle = Self::Handle>>(
+  fn create_watch<C: EventHandler<Handle = Self::Handle>>(
     &self,
     handle: &Self::Handle,
     element_id: ElementId,

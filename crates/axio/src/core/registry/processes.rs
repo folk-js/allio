@@ -5,12 +5,12 @@ CRUD: `upsert_process`, `remove_process` (no update needed)
 Query: process, `has_process`
 */
 
-use super::{ProcessEntry, Registry};
+use super::{CachedProcess, Registry};
 use crate::types::ProcessId;
 
 impl Registry {
   /// Insert a process if it doesn't exist. Handles TOCTOU race.
-  pub(crate) fn upsert_process(&mut self, id: ProcessId, entry: ProcessEntry) -> ProcessId {
+  pub(crate) fn upsert_process(&mut self, id: ProcessId, entry: CachedProcess) -> ProcessId {
     use std::collections::hash_map::Entry;
     match self.processes.entry(id) {
       Entry::Occupied(_) => {} // Already exists, no-op
@@ -27,7 +27,7 @@ impl Registry {
   }
 
   /// Get process entry by ID.
-  pub(crate) fn process(&self, id: ProcessId) -> Option<&ProcessEntry> {
+  pub(crate) fn process(&self, id: ProcessId) -> Option<&CachedProcess> {
     self.processes.get(&id)
   }
 

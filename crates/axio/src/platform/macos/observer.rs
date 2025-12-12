@@ -15,7 +15,7 @@ use std::sync::{Arc, LazyLock};
 use super::handles::{ElementHandle, ObserverHandle};
 use super::mapping::notification_from_macos;
 use crate::accessibility::Notification;
-use crate::platform::{ElementEvent, PlatformCallbacks};
+use crate::platform::{ElementEvent, EventHandler};
 use crate::types::{AxioError, AxioResult, ElementId};
 
 /// Next available context ID.
@@ -28,9 +28,9 @@ trait CallbacksErased: Send + Sync {
 }
 
 /// Wrapper that erases the generic type parameter.
-struct CallbacksWrapper<C: PlatformCallbacks<Handle = ElementHandle>>(Arc<C>);
+struct CallbacksWrapper<C: EventHandler<Handle = ElementHandle>>(Arc<C>);
 
-impl<C: PlatformCallbacks<Handle = ElementHandle>> CallbacksErased for CallbacksWrapper<C> {
+impl<C: EventHandler<Handle = ElementHandle>> CallbacksErased for CallbacksWrapper<C> {
   fn on_element_event(&self, event: ElementEvent<ElementHandle>) {
     self.0.on_element_event(event);
   }
@@ -63,7 +63,7 @@ static OBSERVER_CONTEXTS: LazyLock<Mutex<HashMap<u64, ObserverContext>>> =
   LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Register an element context and get a raw pointer handle.
-pub(super) fn register_observer_context<C: PlatformCallbacks<Handle = ElementHandle>>(
+pub(super) fn register_observer_context<C: EventHandler<Handle = ElementHandle>>(
   element_id: ElementId,
   callbacks: Arc<C>,
 ) -> *mut ObserverContextHandle {
@@ -71,14 +71,14 @@ pub(super) fn register_observer_context<C: PlatformCallbacks<Handle = ElementHan
 }
 
 /// Register a process context and get a raw pointer handle.
-pub(super) fn register_process_context<C: PlatformCallbacks<Handle = ElementHandle>>(
+pub(super) fn register_process_context<C: EventHandler<Handle = ElementHandle>>(
   pid: u32,
   callbacks: Arc<C>,
 ) -> *mut ObserverContextHandle {
   register_context(ObserverTarget::Process(pid), callbacks)
 }
 
-fn register_context<C: PlatformCallbacks<Handle = ElementHandle>>(
+fn register_context<C: EventHandler<Handle = ElementHandle>>(
   target: ObserverTarget,
   callbacks: Arc<C>,
 ) -> *mut ObserverContextHandle {
@@ -156,7 +156,7 @@ fn create_observer_raw(
 }
 
 /// Create an observer for a process and add it to the main run loop.
-pub(crate) fn create_observer_for_pid<C: PlatformCallbacks<Handle = ElementHandle>>(
+pub(crate) fn create_observer_for_pid<C: EventHandler<Handle = ElementHandle>>(
   pid: u32,
   _callbacks: Arc<C>,
 ) -> AxioResult<ObserverHandle> {

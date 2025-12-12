@@ -1,74 +1,19 @@
-important TODOs:
-
 - currently we have a hardcoded websocket connection. We need to look at this wiring and see how we might do better discovery here. this isn't immediately obvious, partly because the websocket client is running in a web view...
-- we should drop the AX prefix from the crate. For typegen we should either rename to include the prefix or find a different strategy (like importing as namespaced to avoid collisions with browser types)
-- find oppertunities to use more compile-time pure functions. find places where indirection is unnecesary or hurting us (wrapper functions, etc)
+
 - our watch logic is a bit weird, we special case destruction. can we simplify this? Same should be investigated for other notifications and state changes. Should element_watch and destruction_watch be merged? Would it make sense for watch+unwatch to just take a list of notifications, which are added/removed from the watch set (which we'd use to not double-subscribe to notifications)? Would this approach work for macOS, are there any platform-specific idiosyncrasies to consider here?
+
 - for watching, actions, getting/setting values: can we make these both more flexible (watch+unwatch takes a list of notifications, actions takes a list of actions, etc) while also improving type safety? these seem perhaps at odds. E.g. we use specifically the destruction notification for cleaning up our state, but this feels special, and its a pattern that extends beyond just destruction.
 - add mock platform + fuzz for testing
-- suspicious indirection, shouldnt these just call platform code?:
-  fn set_value(&self, value: &Value) -> AxioResult<()> {
-  self
-  .set_typed_value(value)
-  .map_err(|e| AxioError::AccessibilityError(format!("Failed to set value: {e:?}")))
-  }
 
-  fn perform_action(&self, action: &str) -> AxioResult<()> {
-  self
-  .perform_action_internal(action)
-  .map_err(|e| AxioError::AccessibilityError(format!("Action '{action}' failed: {e:?}")))
-  }
-
-  fn fetch_attributes(&self) -> ElementAttributes {
-  self.fetch_attributes_internal(None)
-  }
-
-  - should be consistent with names at different layers of the stack. e.g. verify_permissions calls platform::check_accessibility_permissions() should maybe be the same... could rename both to check_permissions or even `has_permissions()` or something better.
-  - `get_window_handle` in platform/mod.rs is LYING! i wonder what other lies there are... I also wonder if platform/mod should have all of its methods removed? Aside from role_from_raw (which leaks macOS!) they are all just wrappers and can/should be removed. window_handle in our platform trait should be renamed to fetch_window_handle so we dont make the mistake.
-  - is `for window in &raw_windows {
-  platform::enable_accessibility_for_pid(window.process_id.0);
-}` re-firing that on every poll?
-
-- is `self.state.write().set_focused_window(window_id);` sneaking past the state separation? if its just a naming thing, should this be `update` or is `set` correct?
-- should `get_element_by_hash` be removed from public API?
-
-TODOs:
+MISC:
 
 - fix AXColorWell mapping to a ColorPicker role, then wire up reactivity with color values so we can FINALLY do that demo where we use our 'favorite color' picker to input reactively to e.g. a hex field
-- figure out why we cant see table data in the accessibility tree
+- figure out why we cant see table data in the accessibility tree and what to change there
 - figure out future ways to handle table (or other structured) data
 - figure out how to get filepaths from macos finder accessibility elements
-- warn on fallthrough for platform mappings, we want to be comprehensive and not just blindly map everything to a generic container
-- work towards a better watching mechanism, in ts something like .observe(id, [things to watch], callback) would be nice, but before that we need a much more thorough understanding of what can actually be watched, what must be polled, etc.
 
 misc other bits:
 
 - [ ] **CLI tool?** - Use `axio` crate directly for scripting/automation without Tauri
 - [ ] **Query API?** - `axio.query()` for searching elements by predicate
 - [ ] **Select API?** - `axio.select(element_id)` for selecting items in lists/tables
-
-Thinking about 2 new explorations for @axio : queries/pattern matching and structured data. The overarching goal of this project is to hijack accessibility and other OS APIs to break through app walled gardens and make new kinds of interoperability possible and desirable. What if for example you could plug out of your apple reminders app in @src-web/src/ports.ts and 'pattern match' on todo items and propagate that list directly into a markdown todo list or similar, or pipe the computed values of a spreadsheet into a visualisation tool, etc.
-
-notes from crabviz callgraph:
-
-- we only use our config object in one place (WebSocketState) I think we should delete it.
-- the only users of events.rs outside of the registry are start_server in server.rs and poll_iteration in polling.rs I wonder if we can remove this coupling, so the only one emitting events is the registry...
-- Our types are quite spread out. We have our per-file types in accessibility, which is good (vlue, action, notification and role) as this is our cross-platorm abstraction, then we also have many types in a types.rs file, then we have misc types across observer.rs, polling.rs, observer.rs, files in platform, registry.rs...Some in platform are macos specific, some are part of our more generic abstraction... We need to survey our types and use a coherent strategy here. Might also involve changing/removing some types.
-- the macos call graph is messy we can simplify it
-- i wonder about splitting 'ws' into its own crate again... We want 'axio' to be the core thing, and easy to integrate into CLI tools, run on a websocket without tauri, etc, etc. Wonder what the best strategy is here.
-
-note: could be defensive for hash reuse
-
-```rs
-// When registering, if hash already exists, verify it's truly the same element
-if let Some(&existing_id) = self.hash_to_element.get(&hash) {
-    if let Some(existing) = self.elements.get(&existing_id) {
-        // Additional validation: bounds match? window match? role match?
-        if existing.element.bounds != elem.element.bounds {
-            // Likely hash reuse after destruction - remove stale entry
-            self.remove_element(existing_id);
-            // Proceed with registration as new element
-        }
-    }
-}
-```

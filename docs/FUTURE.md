@@ -1,9 +1,3 @@
-# Future Features
-
-High-level ideas for features not yet implemented.
-
----
-
 ## Observation API
 
 ### The Problem
@@ -39,6 +33,25 @@ match recency {
 }
 ```
 
+### Tree Observation Helper
+
+Observing a hierarchy (e.g., TODO list) requires manual subscription management.
+
+```typescript
+const tree = axio.observeTree(todoListId, {
+  depth: 2,
+  attrs: ["value", "label"],
+  recency: { maxAge: 100 },
+});
+
+// tree.children is automatically managed
+tree.on("change", () => {
+  // Any change in tree (structure or content)
+});
+```
+
+Open question: Is there a simpler building block that `observeTree` could be built from?
+
 ### Research Needed
 
 - Systematic testing of which (Role, Attribute) notifications are reliable on macOS
@@ -47,7 +60,7 @@ match recency {
 
 ---
 
-## Tree Views / Simplified Views
+## Registry Tree Views
 
 ### The Problem
 
@@ -57,11 +70,11 @@ Raw accessibility trees are verbose. Clients usually want a pruned/collapsed vie
 
 **Pruning**: Remove generic leaf elements with no semantic value.
 
+- `GenericElement` is pruned
+
 **Contraction**: Collapse single-child generic containers:
 
 - `Group → Group → Button` becomes `Button`
-
-### Key Insight
 
 AX trees follow DOM-like semantics:
 
@@ -86,25 +99,8 @@ When observing a simplified view:
 
 ---
 
-## Tree Observation Helper
+## Pattern Matching / Query API
 
-### The Problem
+... TBD ...
 
-Observing a hierarchy (e.g., TODO list) requires manual subscription management.
-
-### Possible API
-
-```typescript
-const tree = axio.observeTree(todoListId, {
-  depth: 2,
-  attrs: ["value", "label"],
-  recency: { maxAge: 100 },
-});
-
-// tree.children is automatically managed
-tree.on("change", () => {
-  // Any change in tree (structure or content)
-});
-```
-
-Open question: Is there a simpler building block that `observeTree` could be built from?
+Thinking about queries/pattern matching and structured data. The overarching goal of this project is to hijack accessibility and other OS APIs to break through app walled gardens and make new kinds of interoperability possible and desirable. What if for example you could plug out of your apple reminders app in @src-web/src/ports.ts and 'pattern match' on todo items and propagate that list directly into a markdown todo list or similar, or pipe the computed values of a spreadsheet into a visualisation tool, etc.

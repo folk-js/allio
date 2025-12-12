@@ -22,7 +22,7 @@ use super::observer::{
 };
 use super::util::app_element;
 use crate::accessibility::Notification;
-use crate::platform::PlatformCallbacks;
+use crate::platform::EventHandler;
 use crate::types::{AxioError, AxioResult, ElementId};
 
 /// Manages notification subscriptions for an element. Unsubscribes on drop.
@@ -94,7 +94,7 @@ impl Drop for WatchHandleInner {
 }
 
 /// Create a watch handle for an element with initial notifications.
-pub(super) fn create_watch<C: PlatformCallbacks<Handle = ElementHandle>>(
+pub(super) fn create_watch<C: EventHandler<Handle = ElementHandle>>(
   observer: &ObserverHandle,
   handle: &ElementHandle,
   element_id: ElementId,
@@ -144,7 +144,7 @@ impl Drop for AppNotificationHandleInner {
 }
 
 /// Subscribe to app-level notifications (focus, selection).
-pub(super) fn subscribe_app_notifications<C: PlatformCallbacks<Handle = ElementHandle>>(
+pub(super) fn subscribe_app_notifications<C: EventHandler<Handle = ElementHandle>>(
   pid: u32,
   observer: &ObserverHandle,
   callbacks: Arc<C>,

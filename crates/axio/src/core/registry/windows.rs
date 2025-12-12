@@ -6,7 +6,7 @@ Query: window, windows, `window_ids`
 Window-specific: `set_window_handle`, `window_root`, `set_window_root`
 */
 
-use super::{Registry, WindowEntry};
+use super::{CachedWindow, Registry};
 use crate::platform::Handle;
 use crate::types::{ElementId, Event, ProcessId, Window, WindowId};
 
@@ -29,7 +29,7 @@ impl Registry {
 
     self.windows.insert(
       id,
-      WindowEntry {
+      CachedWindow {
         process_id,
         info: info.clone(),
         handle,
@@ -66,7 +66,7 @@ impl Registry {
     let element_ids: Vec<ElementId> = self
       .elements
       .iter()
-      .filter(|(_, e)| e.data.window_id == id)
+      .filter(|(_, e)| e.window_id == id)
       .map(|(eid, _)| *eid)
       .collect();
 
@@ -97,12 +97,12 @@ impl Registry {
   }
 
   /// Get window entry by ID.
-  pub(crate) fn window(&self, id: WindowId) -> Option<&WindowEntry> {
+  pub(crate) fn window(&self, id: WindowId) -> Option<&CachedWindow> {
     self.windows.get(&id)
   }
 
   /// Iterate over all window entries.
-  pub(crate) fn windows(&self) -> impl Iterator<Item = &WindowEntry> {
+  pub(crate) fn windows(&self) -> impl Iterator<Item = &CachedWindow> {
     self.windows.values()
   }
 

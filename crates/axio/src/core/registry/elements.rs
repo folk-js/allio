@@ -11,25 +11,25 @@ Elements are keyed by Handle (implements Hash via cached `CFHash`, Eq via `CFEqu
 This gives O(1) lookups with correct collision resolution - no more O(n) fallbacks.
 */
 
-use super::{ElementData, ElementEntry, Registry};
+use super::{CachedElement, Registry};
 use crate::platform::{Handle, WatchHandle};
 use crate::types::{ElementId, Event};
 
 impl Registry {
   /// Insert or update an element by handle.
-  pub(crate) fn upsert_element(&mut self, elem: ElementEntry) -> ElementId {
+  pub(crate) fn upsert_element(&mut self, elem: CachedElement) -> ElementId {
     let handle = elem.handle.clone();
     let parent_handle = elem.parent_handle.clone();
-    let is_root = elem.data.is_root;
+    let is_root = elem.is_root;
 
     if let Some(&existing_id) = self.handle_to_id.get(&handle) {
-      let mut fresh_data = elem.data;
-      fresh_data.id = existing_id;
-      self.update_element(existing_id, fresh_data);
+      let mut fresh_elem = elem;
+      fresh_elem.id = existing_id;
+      self.update_element(existing_id, fresh_elem);
       return existing_id;
     }
 
-    let element_id = elem.data.id;
+    let element_id = elem.id;
 
     self.handle_to_id.insert(handle.clone(), element_id);
     self.elements.insert(element_id, elem);
@@ -62,36 +62,23 @@ impl Registry {
     element_id
   }
 
-  /// Update element data. Emits `ElementChanged` if data differs.
-  pub(crate) fn update_element(&mut self, id: ElementId, new_data: ElementData) {
-    let Some(elem) = self.elements.get_mut(&id) else {
+  /// Update element data. Preserves handle, watch, and updates `last_refreshed`.
+  /// Emits `ElementChanged` if semantic data differs.
+  pub(crate) fn update_element(&mut self, id: ElementId, mut new_elem: CachedElement) {
+    let Some(old_elem) = self.elements.get_mut(&id) else {
       return;
     };
 
-    let data = &elem.data;
-    let changed = data.role != new_data.role
-      || data.platform_role != new_data.platform_role
-      || data.label != new_data.label
-      || data.description != new_data.description
-      || data.placeholder != new_data.placeholder
-      || data.url != new_data.url
-      || data.value != new_data.value
-      || data.bounds != new_data.bounds
-      || data.focused != new_data.focused
-      || data.disabled != new_data.disabled
-      || data.selected != new_data.selected
-      || data.expanded != new_data.expanded
-      || data.row_index != new_data.row_index
-      || data.column_index != new_data.column_index
-      || data.row_count != new_data.row_count
-      || data.column_count != new_data.column_count
-      || data.actions != new_data.actions
-      || data.is_fallback != new_data.is_fallback;
+    let changed = old_elem != &new_elem;
 
-    elem.mark_refreshed();
+    // Preserve metadata from old entry
+    new_elem.handle = old_elem.handle.clone();
+    new_elem.watch = old_elem.watch.take();
+    new_elem.last_refreshed = std::time::Instant::now();
+
+    *old_elem = new_elem;
 
     if changed {
-      elem.data = new_data;
       self.emit_element_changed(id);
     }
   }
@@ -129,12 +116,12 @@ impl Registry {
   }
 
   /// Get element entry by ID.
-  pub(crate) fn element(&self, id: ElementId) -> Option<&ElementEntry> {
+  pub(crate) fn element(&self, id: ElementId) -> Option<&CachedElement> {
     self.elements.get(&id)
   }
 
   /// Iterate over all element entries.
-  pub(crate) fn elements(&self) -> impl Iterator<Item = (ElementId, &ElementEntry)> {
+  pub(crate) fn elements(&self) -> impl Iterator<Item = (ElementId, &CachedElement)> {
     self.elements.iter().map(|(id, e)| (*id, e))
   }
 

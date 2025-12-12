@@ -1,20 +1,19 @@
 /*!
-Builder functions for derived types.
+Adapter functions that convert between internal and public types.
 
-These transform raw Registry entries into public API types,
-and platform handles into Registry entries.
+These transform raw Registry data into public API types,
+and platform handles into cached registry entries.
 */
 
-use super::registry::{ElementData, ElementEntry, Registry};
+use super::registry::{CachedElement, Registry};
 use crate::accessibility::Role;
 use crate::platform::{Handle, PlatformHandle};
 use crate::types::{Element, ElementId, ProcessId, Snapshot, WindowId};
 
-/// Build an Element from an `ElementEntry` + tree relationships.
+/// Build an Element from a `CachedElement` + tree relationships.
 pub(crate) fn build_element(registry: &Registry, id: ElementId) -> Option<Element> {
   let elem = registry.element(id)?;
-  let data = &elem.data;
-  let parent_id = if data.is_root {
+  let parent_id = if elem.is_root {
     None
   } else {
     registry.tree_parent(id)
@@ -28,29 +27,29 @@ pub(crate) fn build_element(registry: &Registry, id: ElementId) -> Option<Elemen
 
   Some(Element {
     id,
-    window_id: data.window_id,
-    pid: data.pid,
-    is_root: data.is_root,
+    window_id: elem.window_id,
+    pid: elem.pid,
+    is_root: elem.is_root,
     parent_id,
     children,
-    role: data.role,
-    platform_role: data.platform_role.clone(),
-    label: data.label.clone(),
-    description: data.description.clone(),
-    placeholder: data.placeholder.clone(),
-    url: data.url.clone(),
-    value: data.value.clone(),
-    bounds: data.bounds,
-    focused: data.focused,
-    disabled: data.disabled,
-    selected: data.selected,
-    expanded: data.expanded,
-    row_index: data.row_index,
-    column_index: data.column_index,
-    row_count: data.row_count,
-    column_count: data.column_count,
-    actions: data.actions.clone(),
-    is_fallback: data.is_fallback,
+    role: elem.role,
+    platform_role: elem.platform_role.clone(),
+    label: elem.label.clone(),
+    description: elem.description.clone(),
+    placeholder: elem.placeholder.clone(),
+    url: elem.url.clone(),
+    value: elem.value.clone(),
+    bounds: elem.bounds,
+    focused: elem.focused,
+    disabled: elem.disabled,
+    selected: elem.selected,
+    expanded: elem.expanded,
+    row_index: elem.row_index,
+    column_index: elem.column_index,
+    row_count: elem.row_count,
+    column_count: elem.column_count,
+    actions: elem.actions.clone(),
+    is_fallback: elem.is_fallback,
   })
 }
 
@@ -62,12 +61,12 @@ pub(crate) fn build_all_elements(registry: &Registry) -> Vec<Element> {
     .collect()
 }
 
-/// Build an `ElementEntry` from a platform handle.
+/// Build a `CachedElement` from a platform handle.
 pub(crate) fn build_entry_from_handle(
   handle: Handle,
   window_id: WindowId,
   pid: ProcessId,
-) -> ElementEntry {
+) -> CachedElement {
   let attrs = handle.fetch_attributes();
 
   // Fetch parent once and reuse (OS call is expensive)
@@ -81,9 +80,15 @@ pub(crate) fn build_entry_from_handle(
   // For root elements, don't store parent handle
   let parent_for_entry = if is_root { None } else { parent_handle };
 
-  let data = ElementData::from_attributes(ElementId::new(), window_id, pid, is_root, attrs);
-
-  ElementEntry::new(data, handle, parent_for_entry)
+  CachedElement::from_attributes(
+    ElementId::new(),
+    window_id,
+    pid,
+    is_root,
+    handle,
+    parent_for_entry,
+    attrs,
+  )
 }
 
 /// Build a snapshot of current state.

@@ -17,7 +17,7 @@ The `get` method takes a `Recency` parameter that explicitly controls staleness:
 - `Recency::MaxAge(duration)` - fetch if older than duration
 */
 
-use super::builders::build_entry_from_handle;
+use super::adapters::build_entry_from_handle;
 use super::Axio;
 use crate::platform::{CurrentPlatform, Handle, Platform};
 use crate::types::{
@@ -33,7 +33,7 @@ impl Axio {
     if let Some(window_id) = self.read(|r| {
       r.find_element(handle)
         .and_then(|id| r.element(id))
-        .map(|e| e.data.window_id)
+        .map(|e| e.window_id)
     }) {
       return Some(window_id);
     }
@@ -50,7 +50,7 @@ impl Axio {
   }
 
   /// Cache an element from a platform handle.
-  pub(crate) fn cache_from_handle(
+  pub(crate) fn upsert_from_handle(
     &self,
     handle: Handle,
     window_id: WindowId,
@@ -85,10 +85,8 @@ impl Axio {
       }
       Recency::MaxAge(max_age) => {
         // Check if stale, refresh if needed
-        let needs_refresh = self.read(|r| {
-          r.element(element_id)
-            .is_some_and(|e| e.is_stale(max_age))
-        });
+        let needs_refresh =
+          self.read(|r| r.element(element_id).is_some_and(|e| e.is_stale(max_age)));
         if needs_refresh {
           self.refresh_element(element_id)?;
         }
@@ -111,10 +109,8 @@ impl Axio {
       })),
       Recency::Current => self.fetch_children(element_id, usize::MAX),
       Recency::MaxAge(max_age) => {
-        let needs_refresh = self.read(|r| {
-          r.element(element_id)
-            .is_none_or(|e| e.is_stale(max_age))
-        });
+        let needs_refresh =
+          self.read(|r| r.element(element_id).is_none_or(|e| e.is_stale(max_age)));
         if needs_refresh {
           self.fetch_children(element_id, usize::MAX)
         } else {
@@ -136,10 +132,8 @@ impl Axio {
       })),
       Recency::Current => self.fetch_parent(element_id),
       Recency::MaxAge(max_age) => {
-        let needs_refresh = self.read(|r| {
-          r.element(element_id)
-            .is_none_or(|e| e.is_stale(max_age))
-        });
+        let needs_refresh =
+          self.read(|r| r.element(element_id).is_none_or(|e| e.is_stale(max_age)));
         if needs_refresh {
           self.fetch_parent(element_id)
         } else {
@@ -153,11 +147,20 @@ impl Axio {
   pub(crate) fn refresh_element(&self, element_id: ElementId) -> AxioResult<Element> {
     use crate::platform::PlatformHandle;
 
-    let (handle, window_id, pid, is_root) = self.element_handle(element_id)?;
+    let handle = self.read(|r| {
+      r.element(element_id)
+        .map(|e| e.handle.clone())
+        .ok_or(AxioError::ElementNotFound(element_id))
+    })?;
+
     let attrs = handle.fetch_attributes();
-    let updated_data =
-      super::ElementData::from_attributes(element_id, window_id, ProcessId(pid), is_root, attrs);
-    self.write(|r| r.update_element(element_id, updated_data));
+
+    self.write(|r| {
+      if let Some(elem) = r.elements.get_mut(&element_id) {
+        elem.refresh(attrs);
+      }
+    });
+
     self
       .read(|r| super::build_element(r, element_id))
       .ok_or(AxioError::ElementNotFound(element_id))
@@ -185,7 +188,7 @@ impl Axio {
 
   /// Get all elements.
   pub fn all_elements(&self) -> Vec<Element> {
-    self.read(super::builders::build_all_elements)
+    self.read(super::adapters::build_all_elements)
   }
 
   /// Get a snapshot of the current state.
@@ -221,7 +224,7 @@ impl Axio {
       let e = s
         .element(element_id)
         .ok_or(AxioError::ElementNotFound(element_id))?;
-      Ok((e.handle.clone(), e.data.window_id, e.pid(), e.data.is_root))
+      Ok((e.handle.clone(), e.window_id, e.pid.0, e.is_root))
     })
   }
 
@@ -255,7 +258,7 @@ impl Axio {
     let window_bounds = window.bounds;
     let pid = window.process_id.0;
 
-    // Get the app element handle from ProcessEntry
+    // Get the app element handle from cached process
     let app_handle = self
       .app_handle(pid)
       .ok_or(AxioError::ProcessNotFound(ProcessId(pid)))?;
@@ -264,7 +267,7 @@ impl Axio {
       .fetch_element_at_position(x, y)
       .ok_or(AxioError::NoElementAtPosition { x, y })?;
 
-    let element_id = self.cache_from_handle(element_handle, window_id, ProcessId(pid));
+    let element_id = self.upsert_from_handle(element_handle, window_id, ProcessId(pid));
     let mut element = self
       .read(|r| super::build_element(r, element_id))
       .ok_or(AxioError::ElementNotFound(element_id))?;
@@ -302,7 +305,7 @@ impl Axio {
     let mut child_ids = Vec::with_capacity(cap);
 
     for child_handle in child_handles.into_iter().take(max_children) {
-      let child_id = self.cache_from_handle(child_handle, window_id, ProcessId(pid));
+      let child_id = self.upsert_from_handle(child_handle, window_id, ProcessId(pid));
       if let Some(child) = self.read(|r| super::build_element(r, child_id)) {
         child_ids.push(child.id);
         children.push(child);
@@ -322,7 +325,7 @@ impl Axio {
       return Ok(None);
     };
 
-    let parent_id = self.cache_from_handle(parent_handle, window_id, ProcessId(pid));
+    let parent_id = self.upsert_from_handle(parent_handle, window_id, ProcessId(pid));
     Ok(self.read(|r| super::build_element(r, parent_id)))
   }
 
@@ -344,7 +347,7 @@ impl Axio {
     };
 
     let element_id =
-      self.cache_from_handle(window_handle, window_id, ProcessId(window.process_id.0));
+      self.upsert_from_handle(window_handle, window_id, ProcessId(window.process_id.0));
     self.write(|r| r.set_window_root(window_id, element_id));
 
     Ok(self.read(|r| super::build_element(r, element_id)))
