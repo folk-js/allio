@@ -24,7 +24,7 @@ mod windows;
 use async_broadcast::Sender;
 use std::collections::HashMap;
 
-use crate::accessibility::{Action, Role, Value};
+use crate::a11y::{Action, Role, Value};
 use crate::platform::{AppNotificationHandle, Handle, Observer, WatchHandle};
 use crate::types::{
   Bounds, Element, ElementId, Event, Point, ProcessId, TextRange, TextSelection, Window, WindowId,

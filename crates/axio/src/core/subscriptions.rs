@@ -4,19 +4,19 @@ Watch/unwatch subscription methods for Axio.
 Uses take/replace pattern to avoid holding lock during OS calls.
 */
 
-use super::Axio;
-use crate::accessibility::Notification;
-use crate::types::{AxioError, AxioResult, ElementId};
+use super::Allio;
+use crate::a11y::Notification;
+use crate::types::{AllioError, AllioResult, ElementId};
 
-impl Axio {
+impl Allio {
   /// Watch an element for change notifications (value, title, children, etc).
-  pub fn watch(&self, element_id: ElementId) -> AxioResult<()> {
+  pub fn watch(&self, element_id: ElementId) -> AllioResult<()> {
     // Step 1: Get role and take watch handle (quick write, releases lock)
     let (notifs, watch_handle) = self.write(|s| {
       let role = s
         .element(element_id)
         .map(|e| e.role)
-        .ok_or(AxioError::ElementNotFound(element_id))?;
+        .ok_or(AllioError::ElementNotFound(element_id))?;
 
       let notifs = Notification::for_watching(role);
       if notifs.is_empty() {
@@ -44,13 +44,13 @@ impl Axio {
   }
 
   /// Stop watching an element for change notifications.
-  pub fn unwatch(&self, element_id: ElementId) -> AxioResult<()> {
+  pub fn unwatch(&self, element_id: ElementId) -> AllioResult<()> {
     // Step 1: Get role and take watch handle (quick write, releases lock)
     let (notifs, watch_handle) = self.write(|s| {
       let role = s
         .element(element_id)
         .map(|e| e.role)
-        .ok_or(AxioError::ElementNotFound(element_id))?;
+        .ok_or(AllioError::ElementNotFound(element_id))?;
 
       let notifs = Notification::for_watching(role);
       let watch = s.take_element_watch(element_id);

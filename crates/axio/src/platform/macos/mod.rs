@@ -26,12 +26,12 @@ pub(super) use handles::{ElementHandle, ObserverHandle};
 
 use std::sync::Arc;
 
-use crate::accessibility::{Action, Notification, Value};
+use crate::a11y::{Action, Notification, Value};
 use crate::platform::traits::{
   AppNotificationHandle, DisplayLinkHandle, ElementAttributes, EventHandler, Platform,
   PlatformHandle, PlatformObserver, WatchHandle,
 };
-use crate::types::{AxioError, AxioResult, ElementId, Point};
+use crate::types::{AllioError, AllioResult, ElementId, Point};
 use mapping::action_to_macos;
 
 /// macOS platform implementation.
@@ -65,7 +65,7 @@ impl Platform for MacOS {
   fn create_observer<C: EventHandler<Handle = Self::Handle>>(
     pid: u32,
     callbacks: Arc<C>,
-  ) -> AxioResult<Self::Observer> {
+  ) -> AllioResult<Self::Observer> {
     observer::create_observer_for_pid(pid, callbacks)
   }
 
@@ -97,19 +97,19 @@ impl PlatformHandle for ElementHandle {
     self.get_element("AXParent")
   }
 
-  fn set_value(&self, value: &Value) -> AxioResult<()> {
+  fn set_value(&self, value: &Value) -> AllioResult<()> {
     self
       .set_typed_value(value)
-      .map_err(|e| AxioError::SetValueFailed {
+      .map_err(|e| AllioError::SetValueFailed {
         reason: format!("{e:?}"),
       })
   }
 
-  fn perform_action(&self, action: Action) -> AxioResult<()> {
+  fn perform_action(&self, action: Action) -> AllioResult<()> {
     let action_str = action_to_macos(action);
     self
       .perform_action_internal(action_str)
-      .map_err(|e| AxioError::ActionFailed {
+      .map_err(|e| AllioError::ActionFailed {
         action,
         reason: format!("{e:?}"),
       })
@@ -135,7 +135,7 @@ impl PlatformObserver for ObserverHandle {
     &self,
     pid: u32,
     callbacks: Arc<C>,
-  ) -> AxioResult<AppNotificationHandle> {
+  ) -> AllioResult<AppNotificationHandle> {
     let inner = notifications::subscribe_app_notifications(pid, self, callbacks)?;
     Ok(AppNotificationHandle { _inner: inner })
   }
@@ -146,7 +146,7 @@ impl PlatformObserver for ObserverHandle {
     element_id: ElementId,
     initial_notifications: &[Notification],
     callbacks: Arc<C>,
-  ) -> AxioResult<WatchHandle> {
+  ) -> AllioResult<WatchHandle> {
     let inner =
       notifications::create_watch(self, handle, element_id, initial_notifications, callbacks)?;
     Ok(WatchHandle { inner })

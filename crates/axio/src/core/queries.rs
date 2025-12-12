@@ -18,13 +18,13 @@ The `get` method takes a `Recency` parameter that explicitly controls staleness:
 */
 
 use super::adapters::build_entry_from_handle;
-use super::Axio;
+use super::Allio;
 use crate::platform::{CurrentPlatform, Handle, Platform};
 use crate::types::{
-  AxioError, AxioResult, Element, ElementId, ProcessId, Recency, Window, WindowId,
+  AllioError, AllioResult, Element, ElementId, ProcessId, Recency, Window, WindowId,
 };
 
-impl Axio {
+impl Allio {
   /// Find the window ID for a handle.
   pub(crate) fn window_for_handle(&self, handle: &Handle) -> Option<WindowId> {
     use crate::platform::PlatformHandle;
@@ -63,16 +63,16 @@ impl Axio {
   }
 }
 
-impl Axio {
+impl Allio {
   /// Get element with specified recency.
   #[must_use = "this returns a Result that may contain an element"]
-  pub fn get(&self, element_id: ElementId, recency: Recency) -> AxioResult<Element> {
+  pub fn get(&self, element_id: ElementId, recency: Recency) -> AllioResult<Element> {
     match recency {
       Recency::Any => {
         // Fast path: just read from cache
         self
           .read(|r| super::build_element(r, element_id))
-          .ok_or(AxioError::ElementNotFound(element_id))
+          .ok_or(AllioError::ElementNotFound(element_id))
       }
       Recency::Current => {
         // Always refresh from OS
@@ -81,7 +81,7 @@ impl Axio {
         }
         self
           .read(|r| super::build_element(r, element_id))
-          .ok_or(AxioError::ElementNotFound(element_id))
+          .ok_or(AllioError::ElementNotFound(element_id))
       }
       Recency::MaxAge(max_age) => {
         // Check if stale, refresh if needed
@@ -92,14 +92,14 @@ impl Axio {
         }
         self
           .read(|r| super::build_element(r, element_id))
-          .ok_or(AxioError::ElementNotFound(element_id))
+          .ok_or(AllioError::ElementNotFound(element_id))
       }
     }
   }
 
   /// Get children of an element with specified recency.
   #[must_use = "this returns a Result that may contain elements"]
-  pub fn children(&self, element_id: ElementId, recency: Recency) -> AxioResult<Vec<Element>> {
+  pub fn children(&self, element_id: ElementId, recency: Recency) -> AllioResult<Vec<Element>> {
     match recency {
       Recency::Any => Ok(self.read(|r| {
         r.tree_children(element_id)
@@ -123,7 +123,7 @@ impl Axio {
   /// Get parent of an element with specified recency.
   /// Returns `Ok(None)` if element is root.
   #[must_use = "this returns a Result that may contain an element"]
-  pub fn parent(&self, element_id: ElementId, recency: Recency) -> AxioResult<Option<Element>> {
+  pub fn parent(&self, element_id: ElementId, recency: Recency) -> AllioResult<Option<Element>> {
     match recency {
       Recency::Any => Ok(self.read(|r| {
         super::build_element(r, element_id)
@@ -144,13 +144,13 @@ impl Axio {
   }
 
   /// Refresh element data from OS.
-  pub(crate) fn refresh_element(&self, element_id: ElementId) -> AxioResult<Element> {
+  pub(crate) fn refresh_element(&self, element_id: ElementId) -> AllioResult<Element> {
     use crate::platform::PlatformHandle;
 
     let handle = self.read(|r| {
       r.element(element_id)
         .map(|e| e.handle.clone())
-        .ok_or(AxioError::ElementNotFound(element_id))
+        .ok_or(AllioError::ElementNotFound(element_id))
     })?;
 
     let attrs = handle.fetch_attributes();
@@ -163,7 +163,7 @@ impl Axio {
 
     self
       .read(|r| super::build_element(r, element_id))
-      .ok_or(AxioError::ElementNotFound(element_id))
+      .ok_or(AllioError::ElementNotFound(element_id))
   }
 
   /// Get all windows.
@@ -219,11 +219,11 @@ impl Axio {
   pub(crate) fn element_handle(
     &self,
     element_id: ElementId,
-  ) -> AxioResult<(Handle, WindowId, u32, bool)> {
+  ) -> AllioResult<(Handle, WindowId, u32, bool)> {
     self.read(|s| {
       let e = s
         .element(element_id)
-        .ok_or(AxioError::ElementNotFound(element_id))?;
+        .ok_or(AllioError::ElementNotFound(element_id))?;
       Ok((e.handle.clone(), e.window_id, e.pid.0, e.is_root))
     })
   }
@@ -246,8 +246,8 @@ impl Axio {
   /// For Chromium/Electron apps, the first hit test may return a fallback container
   /// while the accessibility tree initializes. Check `is_fallback` and retry if true.
   #[must_use = "this returns a Result that may contain an element"]
-  pub fn element_at(&self, x: f64, y: f64) -> AxioResult<Option<Element>> {
-    use crate::accessibility::Role;
+  pub fn element_at(&self, x: f64, y: f64) -> AllioResult<Option<Element>> {
+    use crate::a11y::Role;
     use crate::platform::PlatformHandle;
 
     // Find which TRACKED window is at this point
@@ -261,16 +261,16 @@ impl Axio {
     // Get the app element handle from cached process
     let app_handle = self
       .app_handle(pid)
-      .ok_or(AxioError::ProcessNotFound(ProcessId(pid)))?;
+      .ok_or(AllioError::ProcessNotFound(ProcessId(pid)))?;
 
     let element_handle = app_handle
       .fetch_element_at_position(x, y)
-      .ok_or(AxioError::NoElementAtPosition { x, y })?;
+      .ok_or(AllioError::NoElementAtPosition { x, y })?;
 
     let element_id = self.upsert_from_handle(element_handle, window_id, ProcessId(pid));
     let mut element = self
       .read(|r| super::build_element(r, element_id))
-      .ok_or(AxioError::ElementNotFound(element_id))?;
+      .ok_or(AllioError::ElementNotFound(element_id))?;
 
     // Detect Chromium/Electron fallback container
     let is_fallback = matches!(element.role, Role::Group | Role::GenericGroup)
@@ -289,7 +289,7 @@ impl Axio {
     &self,
     element_id: ElementId,
     max_children: usize,
-  ) -> AxioResult<Vec<Element>> {
+  ) -> AllioResult<Vec<Element>> {
     use crate::platform::PlatformHandle;
 
     let (handle, window_id, pid, _is_root) = self.element_handle(element_id)?;
@@ -317,7 +317,7 @@ impl Axio {
   }
 
   /// Fetch and register parent of element from OS. Returns None if element is root.
-  pub(crate) fn fetch_parent(&self, element_id: ElementId) -> AxioResult<Option<Element>> {
+  pub(crate) fn fetch_parent(&self, element_id: ElementId) -> AllioResult<Option<Element>> {
     use crate::platform::PlatformHandle;
 
     let (handle, window_id, pid, _is_root) = self.element_handle(element_id)?;
@@ -331,7 +331,7 @@ impl Axio {
 
   /// Get root element for a window. Cached after first fetch.
   #[must_use = "this returns a Result that may contain an element"]
-  pub fn window_root(&self, window_id: WindowId) -> AxioResult<Option<Element>> {
+  pub fn window_root(&self, window_id: WindowId) -> AllioResult<Option<Element>> {
     // Fast path: return cached root if available
     if let Some(element_id) = self.read(|r| r.window_root(window_id)) {
       if let Some(element) = self.read(|r| super::build_element(r, element_id)) {

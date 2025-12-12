@@ -11,8 +11,8 @@ Core code only uses these traits - never platform-specific types directly.
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::accessibility::{Action, Notification, Value};
-use crate::types::{AxioResult, ElementId, Window};
+use crate::a11y::{Action, Notification, Value};
+use crate::types::{AllioResult, ElementId, Window};
 
 /// Event types from platform to core.
 ///
@@ -44,7 +44,7 @@ pub(crate) enum ElementEvent<H> {
 #[derive(Debug, Default)]
 pub(crate) struct ElementAttributes {
   /// Semantic role (mapped from platform-specific role).
-  pub role: crate::accessibility::Role,
+  pub role: crate::a11y::Role,
   /// Platform-specific role string for debugging (e.g., "AXButton/AXMenuItem").
   pub platform_role: String,
   pub title: Option<String>,
@@ -61,7 +61,7 @@ pub(crate) struct ElementAttributes {
   pub column_index: Option<usize>,
   pub row_count: Option<usize>,
   pub column_count: Option<usize>,
-  pub actions: Vec<crate::accessibility::Action>,
+  pub actions: Vec<crate::a11y::Action>,
 }
 
 /// Callbacks from platform to core when OS events fire.
@@ -99,7 +99,7 @@ pub(crate) trait Platform {
   fn create_observer<C: EventHandler<Handle = Self::Handle>>(
     pid: u32,
     callbacks: Arc<C>,
-  ) -> AxioResult<Self::Observer>;
+  ) -> AllioResult<Self::Observer>;
 
   /// Start a display-linked callback (vsync-synchronized).
   fn start_display_link<F: Fn() + Send + Sync + 'static>(callback: F) -> Option<DisplayLinkHandle>;
@@ -123,10 +123,10 @@ pub(crate) trait PlatformHandle: Clone + Send + Sync + Hash + Eq + 'static {
   fn fetch_parent(&self) -> Option<Self>;
 
   /// Set a typed value on this element.
-  fn set_value(&self, value: &Value) -> AxioResult<()>;
+  fn set_value(&self, value: &Value) -> AllioResult<()>;
 
   /// Perform an action on this element.
-  fn perform_action(&self, action: Action) -> AxioResult<()>;
+  fn perform_action(&self, action: Action) -> AllioResult<()>;
 
   /// Fetch current attributes from the platform.
   fn fetch_attributes(&self) -> ElementAttributes;
@@ -147,7 +147,7 @@ pub(crate) trait PlatformObserver: Send + Sync {
     &self,
     pid: u32,
     callbacks: Arc<C>,
-  ) -> AxioResult<AppNotificationHandle>;
+  ) -> AllioResult<AppNotificationHandle>;
 
   /// Create a watch handle for an element with initial notifications.
   fn create_watch<C: EventHandler<Handle = Self::Handle>>(
@@ -156,7 +156,7 @@ pub(crate) trait PlatformObserver: Send + Sync {
     element_id: ElementId,
     initial_notifications: &[Notification],
     callbacks: Arc<C>,
-  ) -> AxioResult<WatchHandle>;
+  ) -> AllioResult<WatchHandle>;
 }
 
 /// Handle to app-level notification subscriptions. Cleans up on drop.

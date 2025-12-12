@@ -1,5 +1,5 @@
 /*!
-AXIO - Accessibility I/O Layer
+ALLIO - Accessibility I/O Layer
 
 ```ignore
 use axio::{Axio, Recency};
@@ -32,9 +32,9 @@ mod core;
 mod platform;
 mod polling;
 
-pub mod accessibility;
+pub mod a11y;
 
 mod types;
 pub use types::*;
 
-pub use crate::core::{Axio, AxioBuilder};
+pub use crate::core::{Allio, AllioBuilder};

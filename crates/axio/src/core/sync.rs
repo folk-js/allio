@@ -5,12 +5,12 @@ These methods update the registry with fresh data from the OS without going
 through individual element queries.
 */
 
-use super::Axio;
+use super::Allio;
 use crate::platform::{CurrentPlatform, Platform};
 use crate::types::{Window, WindowId};
 use std::collections::HashSet;
 
-impl Axio {
+impl Allio {
   /// Sync windows from polling. Handles add/update/remove.
   /// `skip_removal=true` during space transitions where window visibility is unreliable.
   /// TODO: remove `skip_removal` and just pause sync in this instance ^

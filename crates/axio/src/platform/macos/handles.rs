@@ -13,7 +13,7 @@ The rest of the crate can interact with elements using safe methods.
 )]
 
 use super::mapping::{action_from_macos, role_from_macos};
-use crate::accessibility::{Role, Value};
+use crate::a11y::{Role, Value};
 use crate::platform::ElementAttributes;
 use crate::types::Bounds;
 use objc2_application_services::{

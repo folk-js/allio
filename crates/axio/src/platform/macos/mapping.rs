@@ -2,7 +2,7 @@
 Bidirectional mappings between axio accessibility types and macOS AX* strings.
 */
 
-use crate::accessibility::{Action, Notification, Role};
+use crate::a11y::{Action, Notification, Role};
 
 /// macOS notification string constants (kAX*Notification).
 mod ax_notification {

@@ -12,6 +12,8 @@ MISC:
 - figure out future ways to handle table (or other structured) data
 - figure out how to get filepaths from macos finder accessibility elements
 
+- rename AXIO to ALLIO? As in a11y i/o layer? ALL I/O!
+
 misc other bits:
 
 - [ ] **CLI tool?** - Use `axio` crate directly for scripting/automation without Tauri

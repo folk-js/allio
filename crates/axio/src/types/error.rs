@@ -1,11 +1,11 @@
 /*! Error types for AXIO operations. */
 
 use super::{ElementId, ProcessId, WindowId};
-use crate::accessibility::{Action, ValueType};
+use crate::a11y::{Action, ValueType};
 
 /// Errors that can occur during AXIO operations.
 #[derive(Debug, thiserror::Error)]
-pub enum AxioError {
+pub enum AllioError {
   #[error("Accessibility permissions not granted")]
   PermissionDenied,
 
@@ -40,5 +40,5 @@ pub enum AxioError {
   Internal(String),
 }
 
-/// Result type for AXIO operations.
-pub type AxioResult<T> = Result<T, AxioError>;
+/// Result type for ALLIO operations.
+pub type AllioResult<T> = Result<T, AllioError>;

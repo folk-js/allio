@@ -6,12 +6,12 @@ registry accordingly.
 */
 
 use super::registry::CachedProcess;
-use super::Axio;
-use crate::accessibility::Notification;
+use super::Allio;
+use crate::a11y::Notification;
 use crate::platform::{CurrentPlatform, Platform, PlatformObserver};
-use crate::types::{AxioResult, ElementId, ProcessId, WindowId};
+use crate::types::{AllioResult, ElementId, ProcessId, WindowId};
 
-impl Axio {
+impl Allio {
   /// Handle element destroyed notification.
   pub(crate) fn handle_element_destroyed(&self, element_id: ElementId) {
     self.write(|s| s.remove_element(element_id));
@@ -76,9 +76,9 @@ impl Axio {
   }
 }
 
-impl Axio {
+impl Allio {
   /// Ensure process state exists for a PID. Idempotent.
-  pub(crate) fn ensure_process(&self, pid: u32) -> AxioResult<ProcessId> {
+  pub(crate) fn ensure_process(&self, pid: u32) -> AllioResult<ProcessId> {
     let process_id = ProcessId(pid);
 
     if self.read(|s| s.has_process(process_id)) {

@@ -23,7 +23,7 @@ pub struct Element {
   pub is_root: bool,
   pub parent_id: Option<ElementId>,
   pub children: Option<Vec<ElementId>>,
-  pub role: crate::accessibility::Role,
+  pub role: crate::a11y::Role,
   /// Raw platform role string for debugging (e.g., "`AXRadioGroup`", "AXButton/AXCloseButton")
   pub platform_role: String,
 
@@ -35,7 +35,7 @@ pub struct Element {
   pub url: Option<String>,
 
   // === Value ===
-  pub value: Option<crate::accessibility::Value>,
+  pub value: Option<crate::a11y::Value>,
 
   // === Geometry ===
   pub bounds: Option<Bounds>,
@@ -60,7 +60,7 @@ pub struct Element {
   pub column_count: Option<usize>,
 
   // === Actions ===
-  pub actions: Vec<crate::accessibility::Action>,
+  pub actions: Vec<crate::a11y::Action>,
 
   // === Hit Test Status ===
   /// True if this element is a fallback container from Chromium/Electron lazy init.

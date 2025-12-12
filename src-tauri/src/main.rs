@@ -20,7 +20,7 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 #[cfg(target_os = "macos")]
 use tauri_nspanel::{tauri_panel, ManagerExt as _, PanelLevel, StyleMask, WebviewWindowExt as _};
 
-use axio::Axio;
+use axio::Allio;
 use axio_ws::WebSocketState;
 
 #[cfg(target_os = "macos")]
@@ -433,7 +433,7 @@ fn create_rpc_handler(app_handle: AppHandle) -> axio_ws::CustomRpcHandler {
   })
 }
 
-fn setup_main_window(app: &tauri::App, axio: &Axio) -> Result<(), Box<dyn std::error::Error>> {
+fn setup_main_window(app: &tauri::App, axio: &Allio) -> Result<(), Box<dyn std::error::Error>> {
   let (width, height) = axio.screen_size();
   let window = app
     .get_webview_window("main")
@@ -516,7 +516,7 @@ fn main() {
     .manage(AppState::default())
     .setup(|app| {
       // Create Axio instance (polling starts automatically)
-      let axio = match Axio::builder().exclude_pid(std::process::id()).build() {
+      let axio = match Allio::builder().exclude_pid(std::process::id()).build() {
         Ok(a) => a,
         Err(_) => {
           eprintln!("[axio] ⚠️  Accessibility permissions NOT granted!");

@@ -14,7 +14,7 @@ mod recency;
 mod window;
 
 pub use element::Element;
-pub use error::{AxioError, AxioResult};
+pub use error::{AllioError, AllioResult};
 pub use event::{Event, Snapshot, TextRange, TextSelection};
 pub use geometry::{Bounds, Point};
 pub use ids::{ElementId, ProcessId, WindowId};

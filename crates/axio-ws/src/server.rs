@@ -2,7 +2,7 @@
 WebSocket server implementation.
 */
 
-use axio::{Axio, Event};
+use axio::{Allio, Event};
 use axum::{
   extract::{
     ws::{Message, WebSocket, WebSocketUpgrade},
@@ -28,7 +28,7 @@ pub type CustomRpcHandler = Arc<dyn Fn(&str, &Value) -> Option<Value> + Send + S
 /// WebSocket state.
 #[derive(Clone)]
 pub struct WebSocketState {
-  axio: Axio,
+  axio: Allio,
   json_sender: Arc<broadcast::Sender<String>>,
   custom_handler: Option<CustomRpcHandler>,
   port: u16,
@@ -44,12 +44,12 @@ impl std::fmt::Debug for WebSocketState {
 
 impl WebSocketState {
   /// Create with default port.
-  pub fn new(axio: Axio) -> Self {
+  pub fn new(axio: Allio) -> Self {
     Self::with_port(axio, DEFAULT_WS_PORT)
   }
 
   /// Create with custom port.
-  pub fn with_port(axio: Axio, port: u16) -> Self {
+  pub fn with_port(axio: Allio, port: u16) -> Self {
     let (json_tx, _) = broadcast::channel::<String>(DEFAULT_CHANNEL_CAPACITY);
     Self {
       axio,

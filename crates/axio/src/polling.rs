@@ -5,9 +5,9 @@ Handles background polling for windows and mouse position.
 Consumers don't interact with this directly - polling is owned by `Axio`.
 */
 
-use crate::core::Axio;
+use crate::core::Allio;
 use crate::platform::{CurrentPlatform, DisplayLinkHandle, Platform};
-use crate::types::{Window, ProcessId};
+use crate::types::{ProcessId, Window};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -71,7 +71,7 @@ fn poll_windows(options: &PollingConfig) -> PollWindowsResult {
   let (offset_x, offset_y, overlay_missing) = if let Some(exclude_pid) = options.exclude_pid {
     match all_windows.iter().find(|w| w.process_id.0 == exclude_pid.0) {
       Some(overlay_window) => (overlay_window.bounds.x, overlay_window.bounds.y, false),
-      None => (0.0, 0.0, true)
+      None => (0.0, 0.0, true),
     }
   } else {
     (0.0, 0.0, false)
@@ -140,7 +140,7 @@ impl Default for PollingConfig {
   }
 }
 
-pub(crate) fn start_polling(axio: Axio, config: PollingConfig) -> PollingHandle {
+pub(crate) fn start_polling(axio: Allio, config: PollingConfig) -> PollingHandle {
   #[cfg(target_os = "macos")]
   if config.use_display_link {
     if let Some(handle) = try_start_display_synced_polling(axio.clone(), config) {
@@ -152,7 +152,7 @@ pub(crate) fn start_polling(axio: Axio, config: PollingConfig) -> PollingHandle 
   start_thread_polling(axio, config)
 }
 
-fn start_thread_polling(axio: Axio, config: PollingConfig) -> PollingHandle {
+fn start_thread_polling(axio: Allio, config: PollingConfig) -> PollingHandle {
   let stop_signal = Arc::new(AtomicBool::new(false));
   let stop_signal_clone = Arc::clone(&stop_signal);
 
@@ -179,7 +179,7 @@ fn start_thread_polling(axio: Axio, config: PollingConfig) -> PollingHandle {
 }
 
 #[cfg(target_os = "macos")]
-fn try_start_display_synced_polling(axio: Axio, config: PollingConfig) -> Option<PollingHandle> {
+fn try_start_display_synced_polling(axio: Allio, config: PollingConfig) -> Option<PollingHandle> {
   let handle = CurrentPlatform::start_display_link(move || {
     poll_iteration(&axio, &config);
   })?;
@@ -189,7 +189,7 @@ fn try_start_display_synced_polling(axio: Axio, config: PollingConfig) -> Option
   })
 }
 
-fn poll_iteration(axio: &Axio, config: &PollingConfig) {
+fn poll_iteration(axio: &Allio, config: &PollingConfig) {
   let pos = CurrentPlatform::fetch_mouse_position();
   axio.sync_mouse(pos);
 

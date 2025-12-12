@@ -21,9 +21,9 @@ use super::observer::{
   ObserverContextHandle,
 };
 use super::util::app_element;
-use crate::accessibility::Notification;
+use crate::a11y::Notification;
 use crate::platform::EventHandler;
-use crate::types::{AxioError, AxioResult, ElementId};
+use crate::types::{AllioError, AllioResult, ElementId};
 
 /// Manages notification subscriptions for an element. Unsubscribes on drop.
 pub(crate) struct WatchHandleInner {
@@ -100,7 +100,7 @@ pub(super) fn create_watch<C: EventHandler<Handle = ElementHandle>>(
   element_id: ElementId,
   initial_notifications: &[Notification],
   callbacks: Arc<C>,
-) -> AxioResult<WatchHandleInner> {
+) -> AllioResult<WatchHandleInner> {
   let context = register_observer_context(element_id, callbacks);
 
   let mut notifications = HashSet::new();
@@ -119,7 +119,7 @@ pub(super) fn create_watch<C: EventHandler<Handle = ElementHandle>>(
 
   if notifications.is_empty() && !initial_notifications.is_empty() {
     unregister_observer_context(context);
-    return Err(AxioError::ObserverError(format!(
+    return Err(AllioError::ObserverError(format!(
       "Failed to register notifications {initial_notifications:?} for element {element_id}"
     )));
   }
@@ -148,7 +148,7 @@ pub(super) fn subscribe_app_notifications<C: EventHandler<Handle = ElementHandle
   pid: u32,
   observer: &ObserverHandle,
   callbacks: Arc<C>,
-) -> AxioResult<AppNotificationHandleInner> {
+) -> AllioResult<AppNotificationHandleInner> {
   let app_el = app_element(pid);
   let context = register_process_context(pid, callbacks);
 
@@ -171,7 +171,7 @@ pub(super) fn subscribe_app_notifications<C: EventHandler<Handle = ElementHandle
 
   if registered == 0 {
     unregister_observer_context(context);
-    return Err(AxioError::ObserverError(format!(
+    return Err(AllioError::ObserverError(format!(
       "Failed to subscribe to app notifications for PID {pid}"
     )));
   }

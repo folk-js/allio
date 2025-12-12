@@ -1,7 +1,7 @@
-# Accessibility Input/Output (AXIO)
+# Allio
 
-> I suppose you gotta squint at the "X" and see it as one "C" flipped around: ƆC
-> Better name ideas welcome!
+> Accessibility (A11y) I/O Layer
+> Or I/O for ALL the things!
 
 An experimental system to expose accessibility trees as read-write interfaces for all running applications.
 

@@ -6,7 +6,7 @@ and platform handles into cached registry entries.
 */
 
 use super::registry::{CachedElement, Registry};
-use crate::accessibility::Role;
+use crate::a11y::Role;
 use crate::platform::{Handle, PlatformHandle};
 use crate::types::{Element, ElementId, ProcessId, Snapshot, WindowId};
 

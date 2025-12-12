@@ -4,8 +4,8 @@ RPC request/response types and dispatch.
 
 #![allow(missing_docs)]
 
-use axio::accessibility::{Action, Value as AXValue};
-use axio::{Axio, Element, ElementId, Snapshot, WindowId};
+use axio::a11y::{Action, Value as AXValue};
+use axio::{Allio, Element, ElementId, Snapshot, WindowId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use ts_rs::TS;
@@ -70,7 +70,7 @@ pub enum RpcResponse {
   Null,
 }
 
-pub fn dispatch_json(axio: &Axio, method: &str, args: &JsonValue) -> JsonValue {
+pub fn dispatch_json(axio: &Allio, method: &str, args: &JsonValue) -> JsonValue {
   let request_value = json!({ "method": method, "args": args });
 
   match serde_json::from_value::<RpcRequest>(request_value) {
@@ -88,7 +88,7 @@ pub fn dispatch_json(axio: &Axio, method: &str, args: &JsonValue) -> JsonValue {
   }
 }
 
-pub fn dispatch(axio: &Axio, request: RpcRequest) -> Result<RpcResponse, String> {
+pub fn dispatch(axio: &Allio, request: RpcRequest) -> Result<RpcResponse, String> {
   match request {
     RpcRequest::Snapshot => {
       let snapshot = axio.snapshot();

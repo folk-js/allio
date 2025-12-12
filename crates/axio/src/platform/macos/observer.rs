@@ -14,9 +14,9 @@ use std::sync::{Arc, LazyLock};
 
 use super::handles::{ElementHandle, ObserverHandle};
 use super::mapping::notification_from_macos;
-use crate::accessibility::Notification;
+use crate::a11y::Notification;
 use crate::platform::{ElementEvent, EventHandler};
-use crate::types::{AxioError, AxioResult, ElementId};
+use crate::types::{AllioError, AllioResult, ElementId};
 
 /// Next available context ID.
 static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -122,7 +122,7 @@ fn lookup_context(
 fn create_observer_raw(
   pid: u32,
   callback: AXObserverCallback,
-) -> AxioResult<CFRetained<AXObserver>> {
+) -> AllioResult<CFRetained<AXObserver>> {
   let observer = unsafe {
     let mut observer_ptr: *mut AXObserver = std::ptr::null_mut();
     #[allow(clippy::cast_possible_wrap)] // PIDs are always positive and < i32::MAX
@@ -133,14 +133,14 @@ fn create_observer_raw(
     );
 
     if result != AXError::Success {
-      return Err(AxioError::ObserverError(format!(
+      return Err(AllioError::ObserverError(format!(
         "AXObserverCreate failed for PID {pid} with code {result:?}"
       )));
     }
 
     CFRetained::from_raw(
       NonNull::new(observer_ptr)
-        .ok_or_else(|| AxioError::ObserverError("AXObserverCreate returned null".to_string()))?,
+        .ok_or_else(|| AllioError::ObserverError("AXObserverCreate returned null".to_string()))?,
     )
   };
 
@@ -159,7 +159,7 @@ fn create_observer_raw(
 pub(crate) fn create_observer_for_pid<C: EventHandler<Handle = ElementHandle>>(
   pid: u32,
   _callbacks: Arc<C>,
-) -> AxioResult<ObserverHandle> {
+) -> AllioResult<ObserverHandle> {
   let observer = create_observer_raw(pid, Some(unified_observer_callback))?;
   Ok(ObserverHandle::new(observer))
 }

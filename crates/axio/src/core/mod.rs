@@ -46,7 +46,7 @@ pub(crate) use registry::Registry;
 
 use crate::platform::{CurrentPlatform, Platform};
 use crate::polling::{self, PollingHandle};
-use crate::types::{AxioError, AxioResult, Event};
+use crate::types::{AllioError, AllioResult, Event};
 use async_broadcast::{InactiveReceiver, Sender};
 use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
@@ -60,7 +60,7 @@ const EVENT_CHANNEL_CAPACITY: usize = 5000;
 ///
 /// Polling starts automatically when created and stops when dropped.
 /// Clone is cheap (Arc bumps) - share freely across threads.
-pub struct Axio {
+pub struct Allio {
   pub(crate) state: Arc<RwLock<Registry>>,
   events_tx: Sender<Event>,
   events_keepalive: InactiveReceiver<Event>,
@@ -68,7 +68,7 @@ pub struct Axio {
   screen_size: Arc<std::sync::OnceLock<(f64, f64)>>,
 }
 
-impl Clone for Axio {
+impl Clone for Allio {
   fn clone(&self) -> Self {
     Self {
       state: Arc::clone(&self.state),
@@ -80,7 +80,7 @@ impl Clone for Axio {
   }
 }
 
-impl std::fmt::Debug for Axio {
+impl std::fmt::Debug for Allio {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("Axio").finish_non_exhaustive()
   }
@@ -99,11 +99,11 @@ impl std::fmt::Debug for Axio {
 /// ```
 #[derive(Debug, Default, Clone, Copy)]
 #[must_use = "Builder does nothing until .build() is called"]
-pub struct AxioBuilder {
+pub struct AllioBuilder {
   config: PollingConfig,
 }
 
-impl AxioBuilder {
+impl AllioBuilder {
   /// Exclude a process ID from tracking.
   ///
   /// Typically set to your own app's PID for overlay applications.
@@ -146,19 +146,19 @@ impl AxioBuilder {
   ///
   /// Returns an error if accessibility permissions are not granted.
   #[must_use = "Axio instance must be stored to keep polling active"]
-  pub fn build(self) -> AxioResult<Axio> {
-    Axio::create_with_config(self.config)
+  pub fn build(self) -> AllioResult<Allio> {
+    Allio::create_with_config(self.config)
   }
 }
 
-impl Axio {
+impl Allio {
   /// Create a new Axio instance with default options.
   ///
   /// Polling starts automatically and stops when the instance is dropped.
   ///
   /// For custom configuration, use [`Axio::builder()`].
   #[must_use = "Axio instance must be stored to keep polling active"]
-  pub fn new() -> AxioResult<Self> {
+  pub fn new() -> AllioResult<Self> {
     Self::builder().build()
   }
 
@@ -172,13 +172,13 @@ impl Axio {
   ///     .filter_fullscreen(true)
   ///     .build()?;
   /// ```
-  pub fn builder() -> AxioBuilder {
-    AxioBuilder::default()
+  pub fn builder() -> AllioBuilder {
+    AllioBuilder::default()
   }
 
-  fn create_with_config(config: PollingConfig) -> AxioResult<Self> {
+  fn create_with_config(config: PollingConfig) -> AllioResult<Self> {
     if !CurrentPlatform::has_permissions() {
-      return Err(AxioError::PermissionDenied);
+      return Err(AllioError::PermissionDenied);
     }
 
     let (mut tx, rx) = async_broadcast::broadcast(EVENT_CHANNEL_CAPACITY);
@@ -187,7 +187,7 @@ impl Axio {
     // State owns a clone of the sender for event emission
     let state = Registry::new(tx.clone());
 
-    let axio = Axio {
+    let axio = Allio {
       state: Arc::new(RwLock::new(state)),
       events_tx: tx,
       events_keepalive: rx.deactivate(),
@@ -222,7 +222,7 @@ impl Axio {
 
 use crate::platform::{ElementEvent, EventHandler, Handle, PlatformHandle};
 
-impl EventHandler for Axio {
+impl EventHandler for Allio {
   type Handle = Handle;
 
   fn on_element_event(&self, event: ElementEvent<Handle>) {
