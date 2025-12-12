@@ -87,8 +87,7 @@ impl Axio {
         // Check if stale, refresh if needed
         let needs_refresh = self.read(|r| {
           r.element(element_id)
-            .map(|e| e.is_stale(max_age))
-            .unwrap_or(false)
+            .is_some_and(|e| e.is_stale(max_age))
         });
         if needs_refresh {
           self.refresh_element(element_id)?;
@@ -114,8 +113,7 @@ impl Axio {
       Recency::MaxAge(max_age) => {
         let needs_refresh = self.read(|r| {
           r.element(element_id)
-            .map(|e| e.is_stale(max_age))
-            .unwrap_or(true)
+            .is_none_or(|e| e.is_stale(max_age))
         });
         if needs_refresh {
           self.fetch_children(element_id, usize::MAX)
@@ -140,8 +138,7 @@ impl Axio {
       Recency::MaxAge(max_age) => {
         let needs_refresh = self.read(|r| {
           r.element(element_id)
-            .map(|e| e.is_stale(max_age))
-            .unwrap_or(true)
+            .is_none_or(|e| e.is_stale(max_age))
         });
         if needs_refresh {
           self.fetch_parent(element_id)
@@ -178,7 +175,7 @@ impl Axio {
 
   /// Get the focused window ID.
   pub fn focused_window(&self) -> Option<WindowId> {
-    self.read(|s| s.focused_window())
+    self.read(super::registry::Registry::focused_window)
   }
 
   /// Get window z-order (front to back).
@@ -188,12 +185,12 @@ impl Axio {
 
   /// Get all elements.
   pub fn all_elements(&self) -> Vec<Element> {
-    self.read(|s| super::builders::build_all_elements(s))
+    self.read(super::builders::build_all_elements)
   }
 
   /// Get a snapshot of the current state.
   pub fn snapshot(&self) -> crate::types::Snapshot {
-    self.read(|s| super::build_snapshot(s))
+    self.read(super::build_snapshot)
   }
 
   /// Find window at a point.
@@ -237,7 +234,7 @@ impl Axio {
   pub fn screen_size(&self) -> (f64, f64) {
     *self
       .screen_size
-      .get_or_init(|| CurrentPlatform::fetch_screen_size())
+      .get_or_init(CurrentPlatform::fetch_screen_size)
   }
 
   /// Get element at screen coordinates (always fresh from OS).

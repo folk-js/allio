@@ -40,12 +40,12 @@ impl ElementTree {
     self
       .children_of
       .get(&id)
-      .map_or(false, |children| !children.is_empty())
+      .is_some_and(|children| !children.is_empty())
   }
 
   /// Set children for a parent, replacing any existing children.
-  /// Updates parent_of for all new children and clears for old children.
-  /// Used by fetch_children to set children in OS order.
+  /// Updates `parent_of` for all new children and clears for old children.
+  /// Used by `fetch_children` to set children in OS order.
   pub(super) fn set_children(&mut self, parent: ElementId, children: Vec<ElementId>) {
     // Clear old children's parent refs
     if let Some(old_children) = self.children_of.get(&parent) {

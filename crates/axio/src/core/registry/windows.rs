@@ -1,9 +1,9 @@
 /*!
 Window operations for the Registry.
 
-CRUD: upsert_window, update_window, remove_window
-Query: window, windows, window_ids
-Window-specific: set_window_handle, window_root, set_window_root
+CRUD: `upsert_window`, `update_window`, `remove_window`
+Query: window, windows, `window_ids`
+Window-specific: `set_window_handle`, `window_root`, `set_window_root`
 */
 
 use super::{Registry, WindowEntry};
@@ -11,7 +11,7 @@ use crate::platform::Handle;
 use crate::types::{ElementId, Event, ProcessId, Window, WindowId};
 
 impl Registry {
-  /// Insert a window if it doesn't exist. Emits WindowAdded.
+  /// Insert a window if it doesn't exist. Emits `WindowAdded`.
   pub(crate) fn upsert_window(
     &mut self,
     id: WindowId,
@@ -41,7 +41,7 @@ impl Registry {
     id
   }
 
-  /// Update window info. Emits WindowChanged if different.
+  /// Update window info. Emits `WindowChanged` if different.
   pub(crate) fn update_window(&mut self, id: WindowId, info: Window) {
     let Some(window) = self.windows.get_mut(&id) else {
       return;

@@ -10,7 +10,7 @@ use crate::accessibility::Role;
 use crate::platform::{Handle, PlatformHandle};
 use crate::types::{Element, ElementId, ProcessId, Snapshot, WindowId};
 
-/// Build an Element from an ElementEntry + tree relationships.
+/// Build an Element from an `ElementEntry` + tree relationships.
 pub(crate) fn build_element(registry: &Registry, id: ElementId) -> Option<Element> {
   let elem = registry.element(id)?;
   let data = &elem.data;
@@ -62,7 +62,7 @@ pub(crate) fn build_all_elements(registry: &Registry) -> Vec<Element> {
     .collect()
 }
 
-/// Build an ElementEntry from a platform handle.
+/// Build an `ElementEntry` from a platform handle.
 pub(crate) fn build_entry_from_handle(
   handle: Handle,
   window_id: WindowId,
@@ -76,8 +76,7 @@ pub(crate) fn build_entry_from_handle(
   // Determine if this is a root element (parent is Application)
   let is_root = parent_handle
     .as_ref()
-    .map(|p| p.fetch_attributes().role == Role::Application)
-    .unwrap_or(false);
+    .is_some_and(|p| p.fetch_attributes().role == Role::Application);
 
   // For root elements, don't store parent handle
   let parent_for_entry = if is_root { None } else { parent_handle };

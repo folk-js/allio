@@ -36,7 +36,7 @@ extern "C" {
 #[derive(Clone)]
 pub(crate) struct ElementHandle {
   inner: CFRetained<AXUIElement>,
-  /// Cached CFHash for fast HashMap operations (computed once at construction)
+  /// Cached `CFHash` for fast `HashMap` operations (computed once at construction)
   cached_hash: u64,
   /// Cached PID (extracted once at construction)
   pub(in crate::platform) cached_pid: u32,
@@ -47,7 +47,7 @@ impl ElementHandle {
     let cached_hash = CFHash(Some(&*element)) as u64;
     let cached_pid = unsafe {
       let mut pid: i32 = 0;
-      let result = element.pid(NonNull::new_unchecked(&mut pid));
+      let result = element.pid(NonNull::new_unchecked(&raw mut pid));
       if result == AXError::Success {
         pid as u32
       } else {
@@ -66,12 +66,12 @@ impl ElementHandle {
     &self.inner
   }
 
-  /// Compare with another handle using CFEqual (local, no IPC).
+  /// Compare with another handle using `CFEqual` (local, no IPC).
   pub(crate) fn cf_equal(&self, other: &Self) -> bool {
     unsafe {
       CFEqual(
-        self.inner() as *const AXUIElement as *const c_void,
-        other.inner() as *const AXUIElement as *const c_void,
+        (self.inner() as *const AXUIElement).cast::<c_void>(),
+        (other.inner() as *const AXUIElement).cast::<c_void>(),
       ) != 0
     }
   }
@@ -147,7 +147,7 @@ impl ElementHandle {
     }
   }
 
-  /// Perform an action on this element (internal - returns AXError).
+  /// Perform an action on this element (internal - returns `AXError`).
   pub(in crate::platform) fn perform_action_internal(&self, action: &str) -> Result<(), AXError> {
     let action_name = CFString::from_str(action);
     unsafe {

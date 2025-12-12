@@ -1,4 +1,4 @@
-/*! Display-synchronized callbacks using CVDisplayLink. */
+/*! Display-synchronized callbacks using `CVDisplayLink`. */
 
 #![allow(unsafe_code)]
 #![allow(clippy::unwrap_used)] // NonNull::new on stack pointers - never null

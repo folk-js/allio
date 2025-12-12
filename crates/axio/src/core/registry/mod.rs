@@ -13,7 +13,7 @@ and emit events. This guarantees:
 - `elements.rs` - Element CRUD, queries, element-specific ops, indexes
 - `windows.rs` - Window CRUD, queries, window-specific ops
 - `processes.rs` - Process CRUD, queries
-- `tree.rs` - ElementTree for parent/child relationships
+- `tree.rs` - `ElementTree` for parent/child relationships
 */
 
 mod elements;
@@ -46,7 +46,7 @@ pub(crate) struct WindowEntry {
   pub(crate) process_id: ProcessId,
   pub(crate) info: Window,
   pub(crate) handle: Option<Handle>,
-  /// Cached root element ID. Set on first window_root call.
+  /// Cached root element ID. Set on first `window_root` call.
   pub(crate) root_element: Option<ElementId>,
 }
 
@@ -78,7 +78,7 @@ pub(crate) struct ElementData {
 }
 
 impl ElementData {
-  /// Create ElementData from platform attributes.
+  /// Create `ElementData` from platform attributes.
   pub(crate) fn from_attributes(
     id: ElementId,
     window_id: WindowId,
@@ -135,7 +135,7 @@ impl ElementEntry {
     }
   }
 
-  pub(crate) fn pid(&self) -> u32 {
+  pub(crate) const fn pid(&self) -> u32 {
     self.data.pid.0
   }
 
@@ -166,7 +166,7 @@ pub(crate) struct Registry {
   // Indexes - Handle implements Hash (cached CFHash) + Eq (CFEqual on collision)
   pub(super) handle_to_id: HashMap<Handle, ElementId>,
   pub(super) waiting_for_parent: HashMap<Handle, Vec<ElementId>>,
-  /// Window handle → WindowId index for O(1) lookup from element's AXWindow handle.
+  /// Window handle → `WindowId` index for O(1) lookup from element's `AXWindow` handle.
   pub(super) window_handle_to_id: HashMap<Handle, WindowId>,
 
   // Focus/UI state
@@ -204,14 +204,14 @@ impl Registry {
     }
   }
 
-  /// Emit ElementAdded event (used by elements.rs).
+  /// Emit `ElementAdded` event (used by elements.rs).
   pub(super) fn emit_element_added(&self, id: ElementId) {
     if let Some(element) = super::builders::build_element(self, id) {
       self.emit(Event::ElementAdded { element });
     }
   }
 
-  /// Emit ElementChanged event (used by elements.rs).
+  /// Emit `ElementChanged` event (used by elements.rs).
   pub(super) fn emit_element_changed(&self, id: ElementId) {
     if let Some(element) = super::builders::build_element(self, id) {
       self.emit(Event::ElementChanged { element });
@@ -235,7 +235,7 @@ impl Registry {
 }
 
 impl Registry {
-  /// Set focused window. Emits FocusWindow if changed.
+  /// Set focused window. Emits `FocusWindow` if changed.
   pub(crate) fn set_focused_window(&mut self, id: Option<WindowId>) {
     if self.focused_window == id {
       return;
@@ -245,11 +245,11 @@ impl Registry {
   }
 
   /// Get focused window.
-  pub(crate) fn focused_window(&self) -> Option<WindowId> {
+  pub(crate) const fn focused_window(&self) -> Option<WindowId> {
     self.focused_window
   }
 
-  /// Set focused element for a process. Emits FocusElement if changed.
+  /// Set focused element for a process. Emits `FocusElement` if changed.
   /// Returns previous element ID if changed (for auto-unwatch).
   pub(crate) fn set_focused_element(
     &mut self,
@@ -273,7 +273,7 @@ impl Registry {
     Some(previous)
   }
 
-  /// Set selection. Emits SelectionChanged if changed.
+  /// Set selection. Emits `SelectionChanged` if changed.
   pub(crate) fn set_selection(
     &mut self,
     pid: ProcessId,
@@ -305,7 +305,7 @@ impl Registry {
     });
   }
 
-  /// Update mouse position. Emits MousePosition if changed significantly.
+  /// Update mouse position. Emits `MousePosition` if changed significantly.
   pub(crate) fn set_mouse_position(&mut self, pos: Point) {
     let changed = self
       .mouse_position
@@ -318,7 +318,7 @@ impl Registry {
   }
 
   /// Get mouse position.
-  pub(crate) fn mouse_position(&self) -> Option<Point> {
+  pub(crate) const fn mouse_position(&self) -> Option<Point> {
     self.mouse_position
   }
 

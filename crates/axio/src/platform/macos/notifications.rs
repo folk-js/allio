@@ -2,7 +2,7 @@
 Notification subscription management for macOS accessibility.
 
 Handles:
-- Subscribing/unsubscribing to element notifications via WatchHandle RAII
+- Subscribing/unsubscribing to element notifications via `WatchHandle` RAII
 - Subscribing to app-level notifications (focus, selection)
 */
 
@@ -120,8 +120,7 @@ pub(super) fn create_watch<C: PlatformCallbacks<Handle = ElementHandle>>(
   if notifications.is_empty() && !initial_notifications.is_empty() {
     unregister_observer_context(context);
     return Err(AxioError::ObserverError(format!(
-      "Failed to register notifications {:?} for element {}",
-      initial_notifications, element_id
+      "Failed to register notifications {initial_notifications:?} for element {element_id}"
     )));
   }
 

@@ -1,8 +1,8 @@
 /*!
 Process operations for the Registry.
 
-CRUD: upsert_process, remove_process (no update needed)
-Query: process, has_process
+CRUD: `upsert_process`, `remove_process` (no update needed)
+Query: process, `has_process`
 */
 
 use super::{ProcessEntry, Registry};

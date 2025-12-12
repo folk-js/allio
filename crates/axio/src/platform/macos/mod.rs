@@ -2,7 +2,7 @@
 macOS platform implementation.
 
 Implements the platform traits defined in `platform/mod.rs`.
-All macOS-specific code (AXUIElement, CoreFoundation, etc.) stays within this module.
+All macOS-specific code (`AXUIElement`, CoreFoundation, etc.) stays within this module.
 */
 
 // === Internal modules ===

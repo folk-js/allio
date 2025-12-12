@@ -3,9 +3,9 @@ Core Axio instance - owns all accessibility state and event broadcasting.
 
 # Module Structure
 
-- `mod.rs` - Axio struct, construction, events, PlatformCallbacks
+- `mod.rs` - Axio struct, construction, events, `PlatformCallbacks`
 - `registry/` - Registry (cache) with private fields + operations + event emission
-- `queries.rs` - get() with recency, lookups, discovery
+- `queries.rs` - `get()` with recency, lookups, discovery
 - `mutations.rs` - set_*, perform_*, sync_*, notification handlers
 - `subscriptions.rs` - watch/unwatch
 
@@ -102,19 +102,19 @@ impl AxioBuilder {
   ///
   /// Typically set to your own app's PID for overlay applications.
   /// The excluded window's position can be used as a coordinate offset.
-  pub fn exclude_pid(mut self, pid: u32) -> Self {
+  pub const fn exclude_pid(mut self, pid: u32) -> Self {
     self.config.exclude_pid = Some(ProcessId(pid));
     self
   }
 
   /// Filter out fullscreen windows. Default: true.
-  pub fn filter_fullscreen(mut self, filter: bool) -> Self {
+  pub const fn filter_fullscreen(mut self, filter: bool) -> Self {
     self.config.filter_fullscreen = filter;
     self
   }
 
   /// Filter out offscreen windows. Default: true.
-  pub fn filter_offscreen(mut self, filter: bool) -> Self {
+  pub const fn filter_offscreen(mut self, filter: bool) -> Self {
     self.config.filter_offscreen = filter;
     self
   }
@@ -122,16 +122,16 @@ impl AxioBuilder {
   /// Set polling interval in milliseconds. Default: 8ms (~120fps).
   ///
   /// Ignored when `use_display_link` is true.
-  pub fn interval_ms(mut self, ms: u64) -> Self {
+  pub const fn interval_ms(mut self, ms: u64) -> Self {
     self.config.interval_ms = ms;
     self
   }
 
-  /// Use CVDisplayLink for display-synchronized polling (macOS only).
+  /// Use `CVDisplayLink` for display-synchronized polling (macOS only).
   ///
   /// When true, polling fires exactly once per display refresh (60Hz/120Hz).
   /// Default: false (use fixed interval timer instead).
-  pub fn use_display_link(mut self, use_it: bool) -> Self {
+  pub const fn use_display_link(mut self, use_it: bool) -> Self {
     self.config.use_display_link = use_it;
     self
   }

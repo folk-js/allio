@@ -1,13 +1,13 @@
 /*!
 Element operations for the Registry.
 
-CRUD: upsert_element, update_element, remove_element
-Query: element, elements, find_element
-Element-specific: set_children, set_element_watch, take_element_watch
+CRUD: `upsert_element`, `update_element`, `remove_element`
+Query: element, elements, `find_element`
+Element-specific: `set_children`, `set_element_watch`, `take_element_watch`
 
 ## Handle-Based Identity
 
-Elements are keyed by Handle (implements Hash via cached CFHash, Eq via CFEqual).
+Elements are keyed by Handle (implements Hash via cached `CFHash`, Eq via `CFEqual`).
 This gives O(1) lookups with correct collision resolution - no more O(n) fallbacks.
 */
 
@@ -62,7 +62,7 @@ impl Registry {
     element_id
   }
 
-  /// Update element data. Emits ElementChanged if data differs.
+  /// Update element data. Emits `ElementChanged` if data differs.
   pub(crate) fn update_element(&mut self, id: ElementId, new_data: ElementData) {
     let Some(elem) = self.elements.get_mut(&id) else {
       return;
@@ -143,7 +143,7 @@ impl Registry {
     self.handle_to_id.get(handle).copied()
   }
 
-  /// Set children for an element. Emits ElementChanged if different.
+  /// Set children for an element. Emits `ElementChanged` if different.
   pub(crate) fn set_children(&mut self, id: ElementId, children: Vec<ElementId>) {
     if !self.elements.contains_key(&id) {
       return;

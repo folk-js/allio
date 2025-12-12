@@ -63,7 +63,7 @@ impl Axio {
 impl Axio {
   /// Sync windows from polling. Handles add/update/remove.
   /// `skip_removal=true` during space transitions where window visibility is unreliable.
-  /// TODO: remove skip_removal and just pause sync in this instance ^
+  /// TODO: remove `skip_removal` and just pause sync in this instance ^
   pub(crate) fn sync_windows(&self, new_windows: Vec<Window>, skip_removal: bool) {
     let new_ids: HashSet<WindowId> = new_windows.iter().map(|w| w.id).collect();
 
@@ -170,8 +170,7 @@ impl Axio {
     if let Some(prev_id) = previous_id {
       let should_unwatch = self.read(|s| {
         s.element(prev_id)
-          .map(|e| e.data.role.auto_watch_on_focus() || e.data.role.is_writable())
-          .unwrap_or(false)
+          .is_some_and(|e| e.data.role.auto_watch_on_focus() || e.data.role.is_writable())
       });
       if should_unwatch {
         drop(self.unwatch(prev_id));

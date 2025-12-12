@@ -13,7 +13,7 @@ Core code should only import from this module - never from platform-specific sub
 - `Handle`/`Observer` type aliases: opaque handles for core code
 
 Core code uses `CurrentPlatform::method()` for platform operations.
-All platform-specific details (CFType, AXUIElement, etc.) stay hidden.
+All platform-specific details (`CFType`, `AXUIElement`, etc.) stay hidden.
 
 # Adding a New Platform
 
