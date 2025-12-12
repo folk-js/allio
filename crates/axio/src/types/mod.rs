@@ -8,15 +8,15 @@ Regenerate TypeScript types: `npm run typegen`
 mod element;
 mod error;
 mod event;
-mod freshness;
 mod geometry;
 mod ids;
+mod recency;
 mod window;
 
 pub use element::Element;
 pub use error::{AxioError, AxioResult};
 pub use event::{Event, Snapshot, TextRange, TextSelection};
-pub use freshness::Recency;
 pub use geometry::{Bounds, Point};
 pub use ids::{ElementId, ProcessId, WindowId};
+pub use recency::Recency;
 pub use window::Window;

@@ -5,7 +5,7 @@ Core Axio instance - owns all accessibility state and event broadcasting.
 
 - `mod.rs` - Axio struct, construction, events, PlatformCallbacks
 - `registry/` - Registry (cache) with private fields + operations + event emission
-- `queries.rs` - get() with freshness, lookups, discovery
+- `queries.rs` - get() with recency, lookups, discovery
 - `mutations.rs` - set_*, perform_*, sync_*, notification handlers
 - `subscriptions.rs` - watch/unwatch
 
@@ -16,11 +16,11 @@ use axio::Recency;
 
 let axio = Axio::new()?;
 
-// Get element with explicit freshness
+// Get element with explicit recency
 let element = axio.get(element_id, Recency::Any)?;  // From cache
 let element = axio.get(element_id, Recency::Current)?;   // From OS
 
-// Traversal with freshness
+// Traversal with recency
 let children = axio.children(element.id, Recency::Current)?;
 
 let mut events = axio.subscribe();

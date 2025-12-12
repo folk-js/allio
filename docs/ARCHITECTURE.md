@@ -42,7 +42,7 @@ pub enum Recency {
 }
 ```
 
-This enables callers to make explicit tradeoffs between latency and freshness.
+This enables callers to make explicit tradeoffs between latency and recency.
 
 ## Architecture Layers
 
@@ -172,19 +172,19 @@ pub fn subscribe(&self) -> Receiver<Event>;
 
 ### Element Retrieval
 
-The unified `get` method with freshness:
+The unified `get` method with recency:
 
 ```rust
-/// Get element by ID with specified freshness.
+/// Get element by ID with specified recency.
 /// Returns Err(ElementNotFound) if element doesn't exist.
-pub fn get(&self, id: ElementId, freshness: Recency) -> AxioResult<Element>;
+pub fn get(&self, id: ElementId, recency: Recency) -> AxioResult<Element>;
 
-/// Get children with freshness control.
-pub fn children(&self, id: ElementId, freshness: Recency) -> AxioResult<Vec<Element>>;
+/// Get children with recency control.
+pub fn children(&self, id: ElementId, recency: Recency) -> AxioResult<Vec<Element>>;
 
-/// Get parent with freshness control.
+/// Get parent with recency control.
 /// Returns Ok(None) if element is root (has no parent).
-pub fn parent(&self, id: ElementId, freshness: Recency) -> AxioResult<Option<Element>>;
+pub fn parent(&self, id: ElementId, recency: Recency) -> AxioResult<Option<Element>>;
 ```
 
 ### Discovery (always fresh from OS)
@@ -306,7 +306,7 @@ crates/axio/src/
 | ------------------------ | --------------------------------------------------- |
 | **Registry**             | Cache with automatic event emission                 |
 | **Recency**              | How up-to-date data should be (Any/Current/MaxAge)  |
-| **get(id, freshness)**   | Element retrieval with freshness control            |
+| **get(id, recency)**     | Element retrieval with recency control              |
 | **Handle**               | OS reference, used as HashMap key for deduplication |
 | **ElementId**            | Our stable ID given to clients                      |
 | **PlatformCallbacks**    | Trait for OS notifications → Axio                   |

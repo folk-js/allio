@@ -26,13 +26,13 @@ obs.dispose(); // Stop observing
 
 1. **Strategy lookup**: For each (role, attribute) pair, determine if macOS notifications work reliably or if polling is needed (need more research here, this matrix may be insufficient, some way to reliably fallback from notifications to polling would be the ideal)
 2. **Set up notifications** where they work
-3. **Set up polling** where they don't (at interval meeting freshness requirement)
+3. **Set up polling** where they don't (at interval meeting recency requirement)
 4. **Emit unified change events** - client doesn't care about the source
 
 ### Recency to Polling Interval
 
 ```rust
-match freshness {
+match recency {
     Recency::Current => poll_every_frame(), // Maybe this is actually INSTANT and we need a separate Recency::MaxFrameCount(n) option? Separate from age driven by polling loop?
     Recency::Any => no_polling(),
     Recency::MaxAge(d) => poll_at_interval(d),
@@ -98,7 +98,7 @@ Observing a hierarchy (e.g., TODO list) requires manual subscription management.
 const tree = axio.observeTree(todoListId, {
   depth: 2,
   attrs: ["value", "label"],
-  freshness: { maxAge: 100 },
+  recency: { maxAge: 100 },
 });
 
 // tree.children is automatically managed

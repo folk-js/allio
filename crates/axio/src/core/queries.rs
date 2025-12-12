@@ -3,9 +3,9 @@ Query methods for Axio.
 
 ## Naming Conventions
 
-- `get(id, freshness)` = unified element access with explicit freshness
-- `children(id, freshness)` = get children with freshness control
-- `parent(id, freshness)` = get parent with freshness control
+- `get(id, recency)` = unified element access with explicit recency
+- `children(id, recency)` = get children with recency control
+- `parent(id, recency)` = get parent with recency control
 - `get_*` = internal registry/state lookups (fast, no OS calls)
 - `fetch_*` = internal OS calls (deprecated in public API)
 
@@ -64,10 +64,10 @@ impl Axio {
 }
 
 impl Axio {
-  /// Get element with specified freshness.
+  /// Get element with specified recency.
   #[must_use = "this returns a Result that may contain an element"]
-  pub fn get(&self, element_id: ElementId, freshness: Recency) -> AxioResult<Element> {
-    match freshness {
+  pub fn get(&self, element_id: ElementId, recency: Recency) -> AxioResult<Element> {
+    match recency {
       Recency::Any => {
         // Fast path: just read from cache
         self
@@ -100,10 +100,10 @@ impl Axio {
     }
   }
 
-  /// Get children of an element with specified freshness.
+  /// Get children of an element with specified recency.
   #[must_use = "this returns a Result that may contain elements"]
-  pub fn children(&self, element_id: ElementId, freshness: Recency) -> AxioResult<Vec<Element>> {
-    match freshness {
+  pub fn children(&self, element_id: ElementId, recency: Recency) -> AxioResult<Vec<Element>> {
+    match recency {
       Recency::Any => Ok(self.read(|r| {
         r.tree_children(element_id)
           .iter()
@@ -126,11 +126,11 @@ impl Axio {
     }
   }
 
-  /// Get parent of an element with specified freshness.
+  /// Get parent of an element with specified recency.
   /// Returns `Ok(None)` if element is root.
   #[must_use = "this returns a Result that may contain an element"]
-  pub fn parent(&self, element_id: ElementId, freshness: Recency) -> AxioResult<Option<Element>> {
-    match freshness {
+  pub fn parent(&self, element_id: ElementId, recency: Recency) -> AxioResult<Option<Element>> {
+    match recency {
       Recency::Any => Ok(self.read(|r| {
         super::build_element(r, element_id)
           .and_then(|e| e.parent_id)

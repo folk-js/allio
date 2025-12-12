@@ -52,7 +52,7 @@ impl Recency {
     Self::MaxAge(Duration::from_secs(secs))
   }
 
-  /// Check if a value with the given age satisfies this freshness requirement.
+  /// Check if a value with the given age satisfies this recency requirement.
   ///
   /// Returns `true` if the value is fresh enough, `false` if it needs refresh.
   #[inline]
@@ -64,13 +64,13 @@ impl Recency {
     }
   }
 
-  /// Whether this freshness level requires an OS call.
+  /// Whether this recency level requires an OS call.
   #[inline]
   pub const fn requires_fetch(&self) -> bool {
     matches!(self, Recency::Current)
   }
 
-  /// Whether this freshness level might require an OS call (depends on age).
+  /// Whether this recency level might require an OS call (depends on age).
   #[inline]
   pub const fn might_require_fetch(&self) -> bool {
     !matches!(self, Recency::Any)
@@ -78,7 +78,7 @@ impl Recency {
 }
 
 impl Default for Recency {
-  /// Default freshness is `Cached` - fast, might be stale.
+  /// Default recency is `Cached` - fast, might be stale.
   fn default() -> Self {
     Self::Any
   }
@@ -90,24 +90,24 @@ mod tests {
 
   #[test]
   fn cached_accepts_any_age() {
-    let freshness = Recency::Any;
-    assert!(freshness.is_satisfied_by(Duration::ZERO));
-    assert!(freshness.is_satisfied_by(Duration::from_secs(1000)));
+    let recency = Recency::Any;
+    assert!(recency.is_satisfied_by(Duration::ZERO));
+    assert!(recency.is_satisfied_by(Duration::from_secs(1000)));
   }
 
   #[test]
   fn fresh_rejects_any_age() {
-    let freshness = Recency::Current;
-    assert!(!freshness.is_satisfied_by(Duration::ZERO));
-    assert!(!freshness.is_satisfied_by(Duration::from_secs(1)));
+    let recency = Recency::Current;
+    assert!(!recency.is_satisfied_by(Duration::ZERO));
+    assert!(!recency.is_satisfied_by(Duration::from_secs(1)));
   }
 
   #[test]
   fn max_age_checks_duration() {
-    let freshness = Recency::max_age_ms(100);
-    assert!(freshness.is_satisfied_by(Duration::from_millis(50)));
-    assert!(freshness.is_satisfied_by(Duration::from_millis(100)));
-    assert!(!freshness.is_satisfied_by(Duration::from_millis(101)));
+    let recency = Recency::max_age_ms(100);
+    assert!(recency.is_satisfied_by(Duration::from_millis(50)));
+    assert!(recency.is_satisfied_by(Duration::from_millis(100)));
+    assert!(!recency.is_satisfied_by(Duration::from_millis(101)));
   }
 
   #[test]
