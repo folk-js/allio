@@ -3,7 +3,7 @@
 
 // === AX Namespace ===
 // Use this to avoid collisions with browser's Window/Element types
-// Example: import { AX } from '@axio/client'; then use AX.Element, AX.Window
+// Example: import { AX } from 'allio'; then use AX.Element, AX.Window
 export * as AX from "./ax";
 
 // RPC types (no collision risk, used internally)

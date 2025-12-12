@@ -28,7 +28,7 @@ pub type CustomRpcHandler = Arc<dyn Fn(&str, &Value) -> Option<Value> + Send + S
 /// WebSocket state.
 #[derive(Clone)]
 pub struct WebSocketState {
-  axio: Allio,
+  allio: Allio,
   json_sender: Arc<broadcast::Sender<String>>,
   custom_handler: Option<CustomRpcHandler>,
   port: u16,
@@ -44,15 +44,15 @@ impl std::fmt::Debug for WebSocketState {
 
 impl WebSocketState {
   /// Create with default port.
-  pub fn new(axio: Allio) -> Self {
-    Self::with_port(axio, DEFAULT_WS_PORT)
+  pub fn new(allio: Allio) -> Self {
+    Self::with_port(allio, DEFAULT_WS_PORT)
   }
 
   /// Create with custom port.
-  pub fn with_port(axio: Allio, port: u16) -> Self {
+  pub fn with_port(allio: Allio, port: u16) -> Self {
     let (json_tx, _) = broadcast::channel::<String>(DEFAULT_CHANNEL_CAPACITY);
     Self {
-      axio,
+      allio,
       json_sender: Arc::new(json_tx),
       custom_handler: None,
       port,
@@ -71,7 +71,7 @@ impl WebSocketState {
 pub async fn start_server(ws_state: WebSocketState) {
   let port = ws_state.port;
   let sender = ws_state.json_sender.clone();
-  let mut rx = ws_state.axio.subscribe();
+  let mut rx = ws_state.allio.subscribe();
   tokio::spawn(async move {
     while let Ok(event) = rx.recv().await {
       if let Ok(json) = serde_json::to_string(&event) {
@@ -116,7 +116,7 @@ async fn websocket_handler(
 
 async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
   let mut rx = ws_state.json_sender.subscribe();
-  let allio_for_init = ws_state.axio.clone();
+  let allio_for_init = ws_state.allio.clone();
   let init_result = tokio::task::spawn_blocking(move || allio_for_init.snapshot()).await;
 
   let Ok(init) = init_result else {
@@ -199,7 +199,7 @@ async fn handle_request_async(request: &str, ws_state: &WebSocketState) -> Strin
     }
   }
 
-  let allio = ws_state.axio.clone();
+  let allio = ws_state.allio.clone();
   let dispatch_result =
     tokio::task::spawn_blocking(move || crate::rpc::dispatch_json(&allio, &method, &args)).await;
 

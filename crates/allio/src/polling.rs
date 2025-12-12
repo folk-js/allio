@@ -2,7 +2,7 @@
 Internal polling implementation.
 
 Handles background polling for windows and mouse position.
-Consumers don't interact with this directly - polling is owned by `Axio`.
+Consumers don't interact with this directly - polling is owned by `Allio`.
 */
 
 use crate::core::Allio;
@@ -140,19 +140,19 @@ impl Default for PollingConfig {
   }
 }
 
-pub(crate) fn start_polling(axio: Allio, config: PollingConfig) -> PollingHandle {
+pub(crate) fn start_polling(allio: Allio, config: PollingConfig) -> PollingHandle {
   #[cfg(target_os = "macos")]
   if config.use_display_link {
-    if let Some(handle) = try_start_display_synced_polling(axio.clone(), config) {
+    if let Some(handle) = try_start_display_synced_polling(allio.clone(), config) {
       return handle;
     }
     log::warn!("Display link unavailable, falling back to thread-based polling");
   }
 
-  start_thread_polling(axio, config)
+  start_thread_polling(allio, config)
 }
 
-fn start_thread_polling(axio: Allio, config: PollingConfig) -> PollingHandle {
+fn start_thread_polling(allio: Allio, config: PollingConfig) -> PollingHandle {
   let stop_signal = Arc::new(AtomicBool::new(false));
   let stop_signal_clone = Arc::clone(&stop_signal);
 
@@ -160,7 +160,7 @@ fn start_thread_polling(axio: Allio, config: PollingConfig) -> PollingHandle {
     while !stop_signal_clone.load(Ordering::SeqCst) {
       let loop_start = Instant::now();
 
-      poll_iteration(&axio, &config);
+      poll_iteration(&allio, &config);
 
       let elapsed = loop_start.elapsed();
       let target = Duration::from_millis(config.interval_ms);
@@ -179,9 +179,9 @@ fn start_thread_polling(axio: Allio, config: PollingConfig) -> PollingHandle {
 }
 
 #[cfg(target_os = "macos")]
-fn try_start_display_synced_polling(axio: Allio, config: PollingConfig) -> Option<PollingHandle> {
+fn try_start_display_synced_polling(allio: Allio, config: PollingConfig) -> Option<PollingHandle> {
   let handle = CurrentPlatform::start_display_link(move || {
-    poll_iteration(&axio, &config);
+    poll_iteration(&allio, &config);
   })?;
 
   Some(PollingHandle {
@@ -189,13 +189,13 @@ fn try_start_display_synced_polling(axio: Allio, config: PollingConfig) -> Optio
   })
 }
 
-fn poll_iteration(axio: &Allio, config: &PollingConfig) {
+fn poll_iteration(allio: &Allio, config: &PollingConfig) {
   let pos = CurrentPlatform::fetch_mouse_position();
-  axio.sync_mouse(pos);
+  allio.sync_mouse(pos);
 
   let poll_result = poll_windows(config);
   let focused_window_id = poll_result.windows.iter().find(|w| w.focused).map(|w| w.id);
 
-  axio.sync_windows(poll_result.windows, poll_result.skip_removal);
-  axio.sync_focused_window(focused_window_id);
+  allio.sync_windows(poll_result.windows, poll_result.skip_removal);
+  allio.sync_focused_window(focused_window_id);
 }

@@ -177,24 +177,24 @@ The unified `get` method with recency:
 ```rust
 /// Get element by ID with specified recency.
 /// Returns Err(ElementNotFound) if element doesn't exist.
-pub fn get(&self, id: ElementId, recency: Recency) -> AxioResult<Element>;
+pub fn get(&self, id: ElementId, recency: Recency) -> AllioResult<Element>;
 
 /// Get children with recency control.
-pub fn children(&self, id: ElementId, recency: Recency) -> AxioResult<Vec<Element>>;
+pub fn children(&self, id: ElementId, recency: Recency) -> AllioResult<Vec<Element>>;
 
 /// Get parent with recency control.
 /// Returns Ok(None) if element is root (has no parent).
-pub fn parent(&self, id: ElementId, recency: Recency) -> AxioResult<Option<Element>>;
+pub fn parent(&self, id: ElementId, recency: Recency) -> AllioResult<Option<Element>>;
 ```
 
 ### Discovery (always fresh from OS)
 
 ```rust
 /// Get element at screen position.
-pub fn element_at(&self, x: f64, y: f64) -> AxioResult<Option<Element>>;
+pub fn element_at(&self, x: f64, y: f64) -> AllioResult<Option<Element>>;
 
 /// Get root element for a window.
-pub fn window_root(&self, window_id: WindowId) -> AxioResult<Option<Element>>;
+pub fn window_root(&self, window_id: WindowId) -> AllioResult<Option<Element>>;
 
 /// Get screen dimensions (cached after first call).
 pub fn screen_size(&self) -> (f64, f64);
@@ -214,15 +214,15 @@ pub fn snapshot(&self) -> Snapshot;
 ### Actions (write to OS)
 
 ```rust
-pub fn set_value(&self, id: ElementId, value: &Value) -> AxioResult<()>;
-pub fn perform_action(&self, id: ElementId, action: Action) -> AxioResult<()>;
+pub fn set_value(&self, id: ElementId, value: &Value) -> AllioResult<()>;
+pub fn perform_action(&self, id: ElementId, action: Action) -> AllioResult<()>;
 ```
 
 ### Subscriptions
 
 ```rust
-pub fn watch(&self, id: ElementId) -> AxioResult<()>;
-pub fn unwatch(&self, id: ElementId) -> AxioResult<()>;
+pub fn watch(&self, id: ElementId) -> AllioResult<()>;
+pub fn unwatch(&self, id: ElementId) -> AllioResult<()>;
 ```
 
 ## Internal API
@@ -254,10 +254,10 @@ Two kinds of watching:
 fn ensure_watched(&self, id: ElementId);
 
 // Public: add change notifications
-pub fn watch(&self, id: ElementId) -> AxioResult<()>;
+pub fn watch(&self, id: ElementId) -> AllioResult<()>;
 
 // Public: remove change notifications (keeps destruction)
-pub fn unwatch(&self, id: ElementId) -> AxioResult<()>;
+pub fn unwatch(&self, id: ElementId) -> AllioResult<()>;
 ```
 
 ## Event Guarantees

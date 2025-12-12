@@ -1,5 +1,5 @@
 /*!
-Bidirectional mappings between axio accessibility types and macOS AX* strings.
+Bidirectional mappings between Allio accessibility types and macOS AX* strings.
 */
 
 use crate::a11y::{Action, Notification, Role};

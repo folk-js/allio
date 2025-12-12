@@ -72,7 +72,7 @@ class AXTreeOverlay {
     ).forEach((e) => this.allio.on(e, render));
 
     // Clickthrough is now handled declaratively by PointerPassthroughManager
-    // (tree element is marked with axio-opaque attribute)
+    // (tree element is marked with allio-opaque attribute)
 
     await this.allio.connect();
   }

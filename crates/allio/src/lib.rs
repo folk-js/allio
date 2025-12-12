@@ -1,30 +1,30 @@
 /*!
-ALLIO - Accessibility I/O Layer
+Allio - Accessibility (A11y) I/O Layer
 
 ```ignore
-use axio::{Axio, Recency};
+use allio::{Allio, Recency};
 
 // Create instance (polling starts automatically)
-let axio = Axio::new()?;
+let allio = Allio::new()?;
 
 // Query state with explicit recency
-let windows = axio.all_windows();
-let element = axio.get(element_id, Recency::Any)?;      // From cache (fast)
-let element = axio.get(element_id, Recency::Current)?;       // From OS (slow)
-let element = axio.get(element_id, Recency::max_age_ms(100))?; // Refresh if stale
+let windows = allio.all_windows();
+let element = allio.get(element_id, Recency::Any)?;      // From cache (fast)
+let element = allio.get(element_id, Recency::Current)?;       // From OS (slow)
+let element = allio.get(element_id, Recency::max_age_ms(100))?; // Refresh if stale
 
 // Traversal with recency
-let children = axio.children(element.id, Recency::Current)?;
-let parent = axio.parent(element.id, Recency::Any)?;
+let children = allio.children(element.id, Recency::Current)?;
+let parent = allio.parent(element.id, Recency::Any)?;
 
 // Subscribe to events
-let mut events = axio.subscribe();
+let mut events = allio.subscribe();
 while let Ok(event) = events.recv().await {
     // handle event
 }
 
-// Polling stops when axio is dropped
-drop(axio);
+// Polling stops when allio is dropped
+drop(allio);
 ```
 */
 

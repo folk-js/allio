@@ -146,9 +146,9 @@ export class AllioPassthrough {
 
     for (const element of elements) {
       // Find closest ancestor with ax-io attribute
-      const axioElement = element.closest("[ax-io]");
-      if (axioElement) {
-        const value = axioElement.getAttribute("ax-io");
+      const allioElement = element.closest("[ax-io]");
+      if (allioElement) {
+        const value = allioElement.getAttribute("ax-io");
         if (value === "opaque") return false; // Capture
         if (value === "transparent") return true; // Pass through
       }

@@ -134,7 +134,7 @@ class AXGraph {
   }
 
   private async init() {
-    // Connect to AXIO
+    // Connect to Allio
     await this.allio.connect();
 
     // Listen for element events

@@ -25,8 +25,8 @@ All platform-specific details (`CFType`, `AXUIElement`, etc.) stay hidden.
 mod traits;
 
 pub(crate) use traits::{
-  AppNotificationHandle, DisplayLinkHandle, ElementAttributes, ElementEvent, Platform,
-  EventHandler, PlatformHandle, PlatformObserver, WatchHandle,
+  AppNotificationHandle, DisplayLinkHandle, ElementAttributes, ElementEvent, EventHandler,
+  Platform, PlatformHandle, PlatformObserver, WatchHandle,
 };
 
 // === Platform Implementations ===
@@ -41,7 +41,7 @@ compile_error!("Windows support is not yet implemented");
 compile_error!("Linux support is not yet implemented");
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-compile_error!("Unsupported platform - AXIO only supports macOS currently");
+compile_error!("Unsupported platform - Allio only supports macOS currently");
 
 // === Type Aliases for Current Platform ===
 

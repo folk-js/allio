@@ -54,7 +54,7 @@ impl Notification {
   ///
   /// # Example
   /// ```
-  /// use axio::accessibility::{Notification, Role};
+  /// use allio::a11y::{Notification, Role};
   ///
   /// let notifs = Notification::for_watching(Role::TextField);
   /// assert!(notifs.contains(&Notification::ValueChanged));

@@ -1,5 +1,5 @@
-// AX namespace - groups all Axio types to avoid collisions with browser types
-// Usage: import { AX } from '@axio/client'; then AX.Element, AX.Window, etc.
+// AX namespace - groups all Allio types to avoid collisions with browser types
+// Usage: import { AX } from 'allio'; then AX.Element, AX.Window, etc.
 
 export type { Element } from "./generated/Element";
 export type { Window } from "./generated/Window";

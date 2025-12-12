@@ -7,7 +7,7 @@ Clients want reactive updates without managing notification/polling details.
 ### Core Idea
 
 ```typescript
-const obs = axio.observe(elementId, ["value", "bounds"], { maxAge: 100 });
+const obs = allio.observe(elementId, ["value", "bounds"], { maxAge: 100 });
 
 obs.on("change", (element, changedAttrs) => {
   // Fires regardless of whether change came from notification or polling
@@ -38,7 +38,7 @@ match recency {
 Observing a hierarchy (e.g., TODO list) requires manual subscription management.
 
 ```typescript
-const tree = axio.observeTree(todoListId, {
+const tree = allio.observeTree(todoListId, {
   depth: 2,
   attrs: ["value", "label"],
   recency: { maxAge: 100 },

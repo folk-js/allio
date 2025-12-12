@@ -1,5 +1,5 @@
 /*!
-Watch/unwatch subscription methods for Axio.
+Watch/unwatch subscription methods for Allio.
 
 Uses take/replace pattern to avoid holding lock during OS calls.
 */

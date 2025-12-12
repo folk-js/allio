@@ -1,5 +1,5 @@
 /*!
-Query methods for Axio.
+Query methods for Allio.
 
 ## Naming Conventions
 

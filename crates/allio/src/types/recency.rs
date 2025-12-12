@@ -13,13 +13,13 @@ use std::time::Duration;
 ///
 /// ```ignore
 /// // Get from cache, might be stale
-/// let elem = axio.get(id, Recency::Any)?;
+/// let elem = allio.get(id, Recency::Any)?;
 ///
 /// // Always fetch from OS
-/// let elem = axio.get(id, Recency::Current)?;
+/// let elem = allio.get(id, Recency::Current)?;
 ///
 /// // Fetch if older than 100ms
-/// let elem = axio.get(id, Recency::max_age_ms(100))?;
+/// let elem = allio.get(id, Recency::max_age_ms(100))?;
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Recency {

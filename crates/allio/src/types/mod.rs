@@ -1,4 +1,4 @@
-/*! Core types for AXIO.
+/*! Core types for Allio.
 
 Regenerate TypeScript types: `npm run typegen`
 */

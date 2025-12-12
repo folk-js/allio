@@ -1,9 +1,9 @@
 /*!
-Core Axio instance - owns all accessibility state and event broadcasting.
+Core Allio instance - owns all accessibility state and event broadcasting.
 
 # Module Structure
 
-- `mod.rs` - Axio struct, construction, events, `EventHandler` impl
+- `mod.rs` - Allio struct, construction, events, `EventHandler` impl
 - `registry/` - Registry (cache) with private fields + operations + event emission
 - `queries.rs` - `get()` with recency, lookups, discovery
 - `actions.rs` - `set_value()`, `perform_action()` (write to OS)
@@ -15,18 +15,18 @@ Core Axio instance - owns all accessibility state and event broadcasting.
 # Example
 
 ```ignore
-use axio::Recency;
+use allio::Recency;
 
-let axio = Axio::new()?;
+let allio = Allio::new()?;
 
 // Get element with explicit recency
-let element = axio.get(element_id, Recency::Any)?;  // From cache
-let element = axio.get(element_id, Recency::Current)?;   // From OS
+let element = allio.get(element_id, Recency::Any)?;  // From cache
+let element = allio.get(element_id, Recency::Current)?;   // From OS
 
 // Traversal with recency
-let children = axio.children(element.id, Recency::Current)?;
+let children = allio.children(element.id, Recency::Current)?;
 
-let mut events = axio.subscribe();
+let mut events = allio.subscribe();
 while let Ok(event) = events.recv().await {
     // handle event
 }
@@ -56,7 +56,7 @@ use crate::types::ProcessId;
 
 const EVENT_CHANNEL_CAPACITY: usize = 5000;
 
-/// Main axio instance - owns state, event broadcasting, and polling.
+/// Main Allio instance - owns state, event broadcasting, and polling.
 ///
 /// Polling starts automatically when created and stops when dropped.
 /// Clone is cheap (Arc bumps) - share freely across threads.
@@ -82,16 +82,16 @@ impl Clone for Allio {
 
 impl std::fmt::Debug for Allio {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    f.debug_struct("Axio").finish_non_exhaustive()
+    f.debug_struct("Allio").finish_non_exhaustive()
   }
 }
 
-/// Builder for configuring an Axio instance.
+/// Builder for configuring an Allio instance.
 ///
 /// # Example
 ///
 /// ```ignore
-/// let axio = Axio::builder()
+/// let allio = Allio::builder()
 ///     .exclude_pid(std::process::id())
 ///     .filter_fullscreen(true)
 ///     .use_display_link(true)
@@ -142,32 +142,32 @@ impl AllioBuilder {
     self
   }
 
-  /// Build the Axio instance with the configured options.
+  /// Build the Allio instance with the configured options.
   ///
   /// Returns an error if accessibility permissions are not granted.
-  #[must_use = "Axio instance must be stored to keep polling active"]
+  #[must_use = "Allio instance must be stored to keep polling active"]
   pub fn build(self) -> AllioResult<Allio> {
     Allio::create_with_config(self.config)
   }
 }
 
 impl Allio {
-  /// Create a new Axio instance with default options.
+  /// Create a new Allio instance with default options.
   ///
   /// Polling starts automatically and stops when the instance is dropped.
   ///
-  /// For custom configuration, use [`Axio::builder()`].
-  #[must_use = "Axio instance must be stored to keep polling active"]
+  /// For custom configuration, use [`Allio::builder()`].
+  #[must_use = "Allio instance must be stored to keep polling active"]
   pub fn new() -> AllioResult<Self> {
     Self::builder().build()
   }
 
-  /// Create a builder for configuring a new Axio instance.
+  /// Create a builder for configuring a new Allio instance.
   ///
   /// # Example
   ///
   /// ```ignore
-  /// let axio = Axio::builder()
+  /// let allio = Allio::builder()
   ///     .exclude_pid(std::process::id())
   ///     .filter_fullscreen(true)
   ///     .build()?;
@@ -187,7 +187,7 @@ impl Allio {
     // State owns a clone of the sender for event emission
     let state = Registry::new(tx.clone());
 
-    let axio = Allio {
+    let allio = Allio {
       state: Arc::new(RwLock::new(state)),
       events_tx: tx,
       events_keepalive: rx.deactivate(),
@@ -196,10 +196,10 @@ impl Allio {
     };
 
     // Start polling with a clone (shares state via Arc)
-    let polling_handle = polling::start_polling(axio.clone(), config);
-    *axio.polling.lock() = Some(polling_handle);
+    let polling_handle = polling::start_polling(allio.clone(), config);
+    *allio.polling.lock() = Some(polling_handle);
 
-    Ok(axio)
+    Ok(allio)
   }
 
   /// Subscribe to events from this instance.
