@@ -21,25 +21,80 @@ use objc2_application_services::{
   AXValueType,
 };
 use objc2_core_foundation::{
-  kCFNull, CFArray, CFBoolean, CFNumber, CFRetained, CFString, CFType, CGPoint, CGSize,
+  kCFNull, CFArray, CFBoolean, CFHash, CFNumber, CFRetained, CFString, CFType, CGPoint, CGSize,
 };
 use std::ffi::c_void;
+use std::hash::{Hash, Hasher};
 use std::ptr::NonNull;
+
+// FFI binding for CFEqual (not exposed by objc2-core-foundation)
+extern "C" {
+  fn CFEqual(cf1: *const c_void, cf2: *const c_void) -> u8;
+}
 
 /// Opaque handle to a UI element.
 ///
-/// On macOS this wraps an `AXUIElement` reference.
+/// On macOS this wraps an `AXUIElement` reference with cached hash and PID
+/// for efficient operations without repeated FFI calls.
+///
+/// ## Identity Semantics
+///
+/// - Hash is computed once via CFHash at construction (~5-15ns FFI)
+/// - PID is extracted once via AXUIElementGetPid at construction
+/// - HashMap lookups use cached hash (pure Rust, ~2-5ns)
+/// - Collision resolution uses CFEqual (rare, local comparison, no IPC)
+///
+/// CFEqual compares the (pid, internal_token) data stored locally in the
+/// AXUIElement struct - it does NOT make IPC calls to the target app.
+///
 /// Clone is cheap (reference counted via `CFRetained`).
 #[derive(Clone)]
-pub(crate) struct ElementHandle(pub(in crate::platform) CFRetained<AXUIElement>);
+pub(crate) struct ElementHandle {
+  inner: CFRetained<AXUIElement>,
+  /// Cached CFHash for fast HashMap operations (computed once at construction)
+  cached_hash: u64,
+  /// Cached PID (extracted once at construction)
+  pub(in crate::platform) cached_pid: u32,
+}
 
 impl ElementHandle {
-  pub(in crate::platform) const fn new(element: CFRetained<AXUIElement>) -> Self {
-    Self(element)
+  pub(in crate::platform) fn new(element: CFRetained<AXUIElement>) -> Self {
+    // One-time FFI calls to get hash and PID (~5-15ns each)
+    let cached_hash = CFHash(Some(&*element)) as u64;
+
+    // Extract PID from the element (pid_t is i32 on macOS)
+    let cached_pid = unsafe {
+      let mut pid: i32 = 0;
+      let result = element.pid(NonNull::new_unchecked(&mut pid));
+      if result == AXError::Success {
+        pid as u32
+      } else {
+        0 // Fallback for invalid elements (rare)
+      }
+    };
+
+    Self {
+      inner: element,
+      cached_hash,
+      cached_pid,
+    }
   }
 
   pub(in crate::platform) fn inner(&self) -> &AXUIElement {
-    &self.0
+    &self.inner
+  }
+
+  /// Compare with another handle using CFEqual.
+  ///
+  /// This is LOCAL computation (no IPC) - it compares the (pid, token)
+  /// fields stored in the struct, not by querying the remote application.
+  pub(crate) fn cf_equal(&self, other: &Self) -> bool {
+    unsafe {
+      CFEqual(
+        self.inner() as *const AXUIElement as *const c_void,
+        other.inner() as *const AXUIElement as *const c_void,
+      ) != 0
+    }
   }
 
   /// Get string attribute by name.
@@ -93,7 +148,7 @@ impl ElementHandle {
   pub(crate) fn get_actions(&self) -> Vec<String> {
     unsafe {
       let mut actions_ref: *const CFArray<CFString> = std::ptr::null();
-      let result = self.0.copy_action_names(
+      let result = self.inner.copy_action_names(
         NonNull::new((&raw mut actions_ref).cast::<*const CFArray>()).expect("actions ptr"),
       );
       if result != AXError::Success || actions_ref.is_null() {
@@ -116,7 +171,7 @@ impl ElementHandle {
   pub(in crate::platform) fn perform_action_internal(&self, action: &str) -> Result<(), AXError> {
     let action_name = CFString::from_str(action);
     unsafe {
-      let result = self.0.perform_action(&action_name);
+      let result = self.inner.perform_action(&action_name);
       if result == AXError::Success {
         Ok(())
       } else {
@@ -132,16 +187,16 @@ impl ElementHandle {
       let result = match value {
         Value::String(s) => {
           let cf_value = CFString::from_str(s);
-          self.0.set_attribute_value(&attr, &cf_value)
+          self.inner.set_attribute_value(&attr, &cf_value)
         }
         Value::Boolean(b) => {
           // macOS checkboxes use CFNumber 0/1, not CFBoolean
           let cf_value = CFNumber::new_i32(i32::from(*b));
-          self.0.set_attribute_value(&attr, &cf_value)
+          self.inner.set_attribute_value(&attr, &cf_value)
         }
         Value::Number(n) => {
           let cf_value = CFNumber::new_f64(*n);
-          self.0.set_attribute_value(&attr, &cf_value)
+          self.inner.set_attribute_value(&attr, &cf_value)
         }
       };
       if result == AXError::Success {
@@ -156,10 +211,11 @@ impl ElementHandle {
   pub(crate) fn element_at_position(&self, x: f64, y: f64) -> Option<ElementHandle> {
     unsafe {
       let mut element_ptr: *const AXUIElement = std::ptr::null();
-      let result =
-        self
-          .0
-          .copy_element_at_position(x as f32, y as f32, NonNull::new(&raw mut element_ptr)?);
+      let result = self.inner.copy_element_at_position(
+        x as f32,
+        y as f32,
+        NonNull::new(&raw mut element_ptr)?,
+      );
       if result != AXError::Success || element_ptr.is_null() {
         return None;
       }
@@ -217,7 +273,7 @@ impl ElementHandle {
 
     let values = unsafe {
       let mut values_ptr: *const CFArray<CFType> = std::ptr::null();
-      let result = self.0.copy_multiple_attribute_values(
+      let result = self.inner.copy_multiple_attribute_values(
         // Cast to untyped CFArray for the API
         &*(CFRetained::as_ptr(&attrs).as_ptr() as *const CFArray),
         AXCopyMultipleAttributeOptions::empty(),
@@ -340,7 +396,7 @@ impl ElementHandle {
     unsafe {
       let mut value: *const CFType = std::ptr::null();
       let result = self
-        .0
+        .inner
         .copy_attribute_value(attr, NonNull::new(&raw mut value)?);
       if result != AXError::Success || value.is_null() {
         return None;
@@ -424,6 +480,27 @@ impl ElementHandle {
     }
   }
 }
+
+impl Hash for ElementHandle {
+  fn hash<H: Hasher>(&self, state: &mut H) {
+    // Pure Rust - uses cached value, no FFI in hot path
+    self.cached_hash.hash(state);
+  }
+}
+
+impl PartialEq for ElementHandle {
+  fn eq(&self, other: &Self) -> bool {
+    // Fast path: different hashes = definitely not equal
+    if self.cached_hash != other.cached_hash {
+      return false;
+    }
+    // Same hash: use CFEqual to resolve potential collision (rare, ~0.001%)
+    // This is local computation - no IPC
+    self.cf_equal(other)
+  }
+}
+
+impl Eq for ElementHandle {}
 
 unsafe impl Send for ElementHandle {}
 unsafe impl Sync for ElementHandle {}

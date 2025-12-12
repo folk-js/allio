@@ -1,5 +1,5 @@
 /*!
-Freshness specifies how up-to-date a value should be when retrieved.
+Recency specifies how up-to-date a value should be when retrieved.
 
 This is the core concept for the "honest API" - making staleness explicit
 rather than hiding it behind get/fetch naming conventions.
@@ -13,25 +13,25 @@ use std::time::Duration;
 ///
 /// ```ignore
 /// // Get from cache, might be stale
-/// let elem = axio.get(id, Freshness::Cached)?;
+/// let elem = axio.get(id, Recency::Any)?;
 ///
 /// // Always fetch from OS
-/// let elem = axio.get(id, Freshness::Fresh)?;
+/// let elem = axio.get(id, Recency::Current)?;
 ///
 /// // Fetch if older than 100ms
-/// let elem = axio.get(id, Freshness::max_age_ms(100))?;
+/// let elem = axio.get(id, Recency::max_age_ms(100))?;
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Freshness {
+pub enum Recency {
   /// Use cached value. No OS calls. Might be arbitrarily stale.
   ///
   /// Use for: bulk reads, non-critical data, when you know the cache is fresh.
-  Cached,
+  Any,
 
   /// Always fetch from OS. Guaranteed current.
   ///
   /// Use for: hit testing, discovery, when you need current truth.
-  Fresh,
+  Current,
 
   /// Value must be at most this old. Fetch from OS if stale.
   ///
@@ -39,7 +39,7 @@ pub enum Freshness {
   MaxAge(Duration),
 }
 
-impl Freshness {
+impl Recency {
   /// Convenience constructor for max age in milliseconds.
   #[inline]
   pub const fn max_age_ms(ms: u64) -> Self {
@@ -58,29 +58,29 @@ impl Freshness {
   #[inline]
   pub fn is_satisfied_by(&self, age: Duration) -> bool {
     match self {
-      Freshness::Cached => true, // Any age is fine
-      Freshness::Fresh => false, // Always needs refresh
-      Freshness::MaxAge(max) => age <= *max,
+      Recency::Any => true,      // Any age is fine
+      Recency::Current => false, // Always needs refresh
+      Recency::MaxAge(max) => age <= *max,
     }
   }
 
   /// Whether this freshness level requires an OS call.
   #[inline]
   pub const fn requires_fetch(&self) -> bool {
-    matches!(self, Freshness::Fresh)
+    matches!(self, Recency::Current)
   }
 
   /// Whether this freshness level might require an OS call (depends on age).
   #[inline]
   pub const fn might_require_fetch(&self) -> bool {
-    !matches!(self, Freshness::Cached)
+    !matches!(self, Recency::Any)
   }
 }
 
-impl Default for Freshness {
+impl Default for Recency {
   /// Default freshness is `Cached` - fast, might be stale.
   fn default() -> Self {
-    Self::Cached
+    Self::Any
   }
 }
 
@@ -90,21 +90,21 @@ mod tests {
 
   #[test]
   fn cached_accepts_any_age() {
-    let freshness = Freshness::Cached;
+    let freshness = Recency::Any;
     assert!(freshness.is_satisfied_by(Duration::ZERO));
     assert!(freshness.is_satisfied_by(Duration::from_secs(1000)));
   }
 
   #[test]
   fn fresh_rejects_any_age() {
-    let freshness = Freshness::Fresh;
+    let freshness = Recency::Current;
     assert!(!freshness.is_satisfied_by(Duration::ZERO));
     assert!(!freshness.is_satisfied_by(Duration::from_secs(1)));
   }
 
   #[test]
   fn max_age_checks_duration() {
-    let freshness = Freshness::max_age_ms(100);
+    let freshness = Recency::max_age_ms(100);
     assert!(freshness.is_satisfied_by(Duration::from_millis(50)));
     assert!(freshness.is_satisfied_by(Duration::from_millis(100)));
     assert!(!freshness.is_satisfied_by(Duration::from_millis(101)));
@@ -112,6 +112,6 @@ mod tests {
 
   #[test]
   fn default_is_cached() {
-    assert_eq!(Freshness::default(), Freshness::Cached);
+    assert_eq!(Recency::default(), Recency::Any);
   }
 }

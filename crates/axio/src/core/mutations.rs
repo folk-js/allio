@@ -11,7 +11,7 @@ use super::registry::ProcessEntry;
 use super::Axio;
 use crate::accessibility::Notification;
 use crate::platform::{CurrentPlatform, Platform, PlatformHandle, PlatformObserver};
-use crate::types::{AxioError, AxioResult, Element, ElementId, ProcessId, Window, WindowId};
+use crate::types::{AxioError, AxioResult, ElementId, ProcessId, Window, WindowId};
 use std::collections::HashSet;
 
 // ============================================================================
@@ -111,12 +111,10 @@ impl Axio {
       for (window_info, handle) in windows_with_handles {
         let window_id = window_info.id;
         let process_id = window_info.process_id;
+        let is_new = s.window(window_id).is_none();
 
-        if s
-          .upsert_window(window_id, process_id, window_info.clone(), handle.clone())
-          .is_some()
-        {
-          // Newly inserted
+        if is_new {
+          s.upsert_window(window_id, process_id, window_info.clone(), handle.clone());
           new_pids.push(process_id);
         } else {
           // Already existed - update
@@ -132,7 +130,7 @@ impl Axio {
 
     // Step 4: Process creation OUTSIDE lock (has platform calls)
     for process_id in new_process_pids {
-      if let Err(e) = self.get_or_create_process(process_id.0) {
+      if let Err(e) = self.ensure_process(process_id.0) {
         log::warn!("Failed to create process for window: {e:?}");
       }
     }
@@ -160,7 +158,23 @@ impl Axio {
   }
 
   /// Handle focus changed notification.
-  pub(crate) fn handle_focus_changed(&self, pid: u32, element: Element) {
+  ///
+  /// Takes ElementId, builds Element internally. Only processes if element
+  /// self-identifies as focused (focused == Some(true)).
+  pub(crate) fn handle_focus_changed(&self, pid: u32, element_id: ElementId) {
+    use super::build_element;
+
+    // Build element from cache
+    let Some(element) = self.read(|r| build_element(r, element_id)) else {
+      log::debug!("handle_focus_changed: element {element_id} not in cache");
+      return;
+    };
+
+    // Only process focus for elements that self-identify as focused
+    if element.focused != Some(true) {
+      return;
+    }
+
     // Step 1: Update focus (quick write)
     let Some(previous_id) = self.write(|s| s.set_focused_element(ProcessId(pid), element.clone()))
     else {
@@ -211,8 +225,11 @@ impl Axio {
 // ============================================================================
 
 impl Axio {
-  /// Get or create process state for a PID.
-  pub(crate) fn get_or_create_process(&self, pid: u32) -> AxioResult<ProcessId> {
+  /// Ensure process state exists for a PID.
+  ///
+  /// Idempotent - safe to call multiple times. Creates observer and subscribes
+  /// to app-level notifications if process doesn't already exist.
+  pub(crate) fn ensure_process(&self, pid: u32) -> AxioResult<ProcessId> {
     let process_id = ProcessId(pid);
 
     // Fast path: check if exists (quick read)
@@ -239,8 +256,9 @@ impl Axio {
       }
     };
 
-    // Try to insert - another thread may have won the race
-    let inserted = self.write(|s| {
+    // Insert process (upsert handles TOCTOU race - if another thread won,
+    // the ProcessEntry is dropped and RAII cleans up observer/notification handles)
+    self.write(|s| {
       s.upsert_process(
         process_id,
         ProcessEntry {
@@ -252,12 +270,6 @@ impl Axio {
         },
       )
     });
-
-    if !inserted {
-      // Another thread inserted first - our ProcessEntry will be dropped,
-      // cleaning up the observer and notification handles via RAII
-      log::debug!("Process {pid} already registered by another thread");
-    }
 
     Ok(process_id)
   }

@@ -13,17 +13,19 @@ use crate::types::ProcessId;
 // ============================================================================
 
 impl Registry {
-  /// Try to insert a process. Returns false if process already exists (no-op).
+  /// Insert a process if it doesn't exist.
+  ///
+  /// Returns the process ID (whether newly inserted or already present).
   /// This handles the TOCTOU race where another thread may have inserted first.
-  pub(crate) fn upsert_process(&mut self, id: ProcessId, entry: ProcessEntry) -> bool {
+  pub(crate) fn upsert_process(&mut self, id: ProcessId, entry: ProcessEntry) -> ProcessId {
     use std::collections::hash_map::Entry;
     match self.processes.entry(id) {
-      Entry::Occupied(_) => false, // Another thread won the race
+      Entry::Occupied(_) => {} // Already exists, no-op
       Entry::Vacant(e) => {
         e.insert(entry);
-        true
       }
     }
+    id
   }
 
   /// Remove a process.
@@ -47,4 +49,3 @@ impl Registry {
     self.processes.contains_key(&id)
   }
 }
-

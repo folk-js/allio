@@ -9,63 +9,59 @@ Query methods for Axio.
 - `get_*` = internal registry/state lookups (fast, no OS calls)
 - `fetch_*` = internal OS calls (deprecated in public API)
 
-## Freshness Model
+## Recency Model
 
-The `get` method takes a `Freshness` parameter that explicitly controls staleness:
-- `Freshness::Cached` - use cached value, might be stale
-- `Freshness::Fresh` - always fetch from OS
-- `Freshness::MaxAge(duration)` - fetch if older than duration
+The `get` method takes a `Recency` parameter that explicitly controls staleness:
+- `Recency::Any` - use cached value, might be stale
+- `Recency::Current` - always fetch from OS
+- `Recency::MaxAge(duration)` - fetch if older than duration
 */
 
-use super::{Axio, ElementData, ElementEntry};
-use crate::accessibility::Role;
-use crate::platform::{CurrentPlatform, Handle, Platform, PlatformHandle};
+use super::builders::build_entry_from_handle;
+use super::Axio;
+use crate::platform::{CurrentPlatform, Handle, Platform};
 use crate::types::{
-  AxioError, AxioResult, Element, ElementId, Freshness, ProcessId, TextSelection, Window, WindowId,
+  AxioError, AxioResult, Element, ElementId, ProcessId, Recency, TextSelection, Window, WindowId,
 };
 
 // ============================================================================
-// Element Building (free function)
-// ============================================================================
-
-/// Build an `ElementEntry` from a platform handle.
-///
-/// This is the boundary between Platform data and Core data.
-/// Makes OS calls via the handle but doesn't touch Axio or Registry.
-///
-/// # Arguments
-/// * `handle` - Platform element handle
-/// * `window_id` - Window this element belongs to
-/// * `pid` - Process ID
-pub(crate) fn build_entry(handle: Handle, window_id: WindowId, pid: ProcessId) -> ElementEntry {
-  let attrs = handle.fetch_attributes();
-
-  // Fetch parent once and reuse (OS call is expensive)
-  let parent_handle = handle.fetch_parent();
-
-  // Determine if this is a root element (parent is Application)
-  let is_root = parent_handle
-    .as_ref()
-    .map(|p| p.fetch_attributes().role == Role::Application)
-    .unwrap_or(false);
-
-  let hash = handle.element_hash();
-  let parent_hash = if is_root {
-    None
-  } else {
-    parent_handle.as_ref().map(|p| p.element_hash())
-  };
-
-  let data = ElementData::from_attributes(ElementId::new(), window_id, pid, is_root, attrs);
-
-  ElementEntry::new(data, handle, hash, parent_hash)
-}
-
-// ============================================================================
-// Cache from Handle
+// Handle Helpers
 // ============================================================================
 
 impl Axio {
+  /// Find the window ID for a handle.
+  ///
+  /// Uses a hybrid approach:
+  /// 1. Fast path: Check if element is already cached, get window_id from it
+  /// 2. Slow path: Query AXWindow attribute (1 FFI call), lookup window by handle
+  ///
+  /// Returns None if element has no window (menu bar, system tray, etc.) - this
+  /// should not happen in our system as we only track elements in windows.
+  pub(crate) fn window_for_handle(&self, handle: &Handle) -> Option<WindowId> {
+    use crate::platform::PlatformHandle;
+
+    // Fast path: element already cached
+    if let Some(window_id) = self.read(|r| {
+      r.find_element(handle)
+        .and_then(|id| r.element(id))
+        .map(|e| e.data.window_id)
+    }) {
+      return Some(window_id);
+    }
+
+    // Slow path: derive from handle's AXWindow attribute (1 FFI call)
+    let window_handle = handle.window().or_else(|| {
+      log::error!(
+        "Element has no window (AXWindow returned None). \
+         This should not happen - we only track elements in windows. PID: {}",
+        handle.pid()
+      );
+      None
+    })?;
+
+    self.read(|r| r.find_window_by_handle(&window_handle))
+  }
+
   /// Cache an element from a platform handle.
   ///
   /// This is the common pattern: build entry → upsert → ensure watched → return ID.
@@ -76,7 +72,7 @@ impl Axio {
     window_id: WindowId,
     pid: ProcessId,
   ) -> ElementId {
-    let entry = build_entry(handle, window_id, pid);
+    let entry = build_entry_from_handle(handle, window_id, pid);
     let element_id = self.write(|r| r.upsert_element(entry));
     self.ensure_watched(element_id);
     element_id
@@ -101,28 +97,28 @@ impl Axio {
   ///
   /// ```ignore
   /// // Get from cache (fast, might be stale)
-  /// let elem = axio.get(id, Freshness::Cached)?;
+  /// let elem = axio.get(id, Recency::Any)?;
   ///
   /// // Always fetch from OS (slow, guaranteed fresh)
-  /// let elem = axio.get(id, Freshness::Fresh)?;
+  /// let elem = axio.get(id, Recency::Current)?;
   ///
   /// // Fetch if older than 100ms
-  /// let elem = axio.get(id, Freshness::max_age_ms(100))?;
+  /// let elem = axio.get(id, Recency::max_age_ms(100))?;
   /// ```
-  pub fn get(&self, element_id: ElementId, freshness: Freshness) -> AxioResult<Option<Element>> {
+  pub fn get(&self, element_id: ElementId, freshness: Recency) -> AxioResult<Option<Element>> {
     match freshness {
-      Freshness::Cached => {
+      Recency::Any => {
         // Fast path: just read from cache
         Ok(self.read(|r| super::build_element(r, element_id)))
       }
-      Freshness::Fresh => {
+      Recency::Current => {
         // Always refresh from OS
         if self.read(|r| r.element(element_id).is_some()) {
           self.refresh_element(element_id)?;
         }
         Ok(self.read(|r| super::build_element(r, element_id)))
       }
-      Freshness::MaxAge(max_age) => {
+      Recency::MaxAge(max_age) => {
         // Check if stale, refresh if needed
         let needs_refresh = self.read(|r| {
           r.element(element_id)
@@ -139,14 +135,14 @@ impl Axio {
 
   /// Get children of an element with specified freshness.
   ///
-  /// - `Freshness::Cached` - return known children (might be incomplete if never fetched)
-  /// - `Freshness::Fresh` - fetch from OS, register new children
-  /// - `Freshness::MaxAge(d)` - fetch if children list is older than d
+  /// - `Recency::Any` - return known children (might be incomplete if never fetched)
+  /// - `Recency::Current` - fetch from OS, register new children
+  /// - `Recency::MaxAge(d)` - fetch if children list is older than d
   ///
   /// Note: For Cached, if children have never been fetched, returns an empty vec.
-  pub fn children(&self, element_id: ElementId, freshness: Freshness) -> AxioResult<Vec<Element>> {
+  pub fn children(&self, element_id: ElementId, freshness: Recency) -> AxioResult<Vec<Element>> {
     match freshness {
-      Freshness::Cached => {
+      Recency::Any => {
         // Return cached children
         Ok(
           self
@@ -163,11 +159,11 @@ impl Axio {
             .unwrap_or_default(),
         )
       }
-      Freshness::Fresh => {
+      Recency::Current => {
         // Always fetch from OS
         self.fetch_children(element_id, usize::MAX)
       }
-      Freshness::MaxAge(max_age) => {
+      Recency::MaxAge(max_age) => {
         // Check if children are stale
         // For now, treat children staleness same as element staleness
         let needs_refresh = self.read(|r| {
@@ -178,7 +174,7 @@ impl Axio {
         if needs_refresh {
           self.fetch_children(element_id, usize::MAX)
         } else {
-          self.children(element_id, Freshness::Cached)
+          self.children(element_id, Recency::Any)
         }
       }
     }
@@ -186,14 +182,14 @@ impl Axio {
 
   /// Get parent of an element with specified freshness.
   ///
-  /// - `Freshness::Cached` - return known parent (None if never fetched)
-  /// - `Freshness::Fresh` - fetch from OS
-  /// - `Freshness::MaxAge(d)` - fetch if parent link is older than d
+  /// - `Recency::Any` - return known parent (None if never fetched)
+  /// - `Recency::Current` - fetch from OS
+  /// - `Recency::MaxAge(d)` - fetch if parent link is older than d
   ///
   /// Returns `Ok(None)` if element is root (has no parent).
-  pub fn parent(&self, element_id: ElementId, freshness: Freshness) -> AxioResult<Option<Element>> {
+  pub fn parent(&self, element_id: ElementId, freshness: Recency) -> AxioResult<Option<Element>> {
     match freshness {
-      Freshness::Cached => {
+      Recency::Any => {
         // Return cached parent
         Ok(self.read(|r| {
           super::build_element(r, element_id)
@@ -201,11 +197,11 @@ impl Axio {
             .and_then(|pid| super::build_element(r, pid))
         }))
       }
-      Freshness::Fresh => {
+      Recency::Current => {
         // Always fetch from OS
         self.fetch_parent(element_id)
       }
-      Freshness::MaxAge(max_age) => {
+      Recency::MaxAge(max_age) => {
         // Check if stale
         let needs_refresh = self.read(|r| {
           r.element(element_id)
@@ -215,7 +211,7 @@ impl Axio {
         if needs_refresh {
           self.fetch_parent(element_id)
         } else {
-          self.parent(element_id, Freshness::Cached)
+          self.parent(element_id, Recency::Any)
         }
       }
     }
@@ -226,12 +222,12 @@ impl Axio {
   /// Updates the cached element with fresh data from the platform.
   /// Returns the refreshed element.
   ///
-  /// Use `get(id, Freshness::Fresh)` for public API.
+  /// Use `get(id, Recency::Current)` for public API.
   pub(crate) fn refresh_element(&self, element_id: ElementId) -> AxioResult<Element> {
     use crate::platform::PlatformHandle;
 
     // Step 1: Extract handle and metadata (quick read, lock released)
-    let (handle, window_id, pid, is_root) = self.get_element_handle(element_id)?;
+    let (handle, window_id, pid, is_root) = self.element_handle(element_id)?;
 
     // Step 2: Platform call (NO LOCK)
     let attrs = handle.fetch_attributes();
@@ -282,16 +278,13 @@ impl Axio {
     self.read(|s| super::build_snapshot(s))
   }
 
-  /// Get window at a point from registry.
-  pub(crate) fn get_window_at_point(&self, x: f64, y: f64) -> Option<Window> {
+  /// Find window at a point from registry.
+  pub(crate) fn window_at_point(&self, x: f64, y: f64) -> Option<Window> {
     self.read(|s| s.window_at_point(x, y).map(|w| w.info.clone()))
   }
 
   /// Get window info with handle from registry.
-  pub(crate) fn get_window_with_handle(
-    &self,
-    window_id: WindowId,
-  ) -> Option<(Window, Option<Handle>)> {
+  pub(crate) fn window_with_handle(&self, window_id: WindowId) -> Option<(Window, Option<Handle>)> {
     self.read(|s| {
       let window = s.window(window_id)?;
       let handle = window.handle.clone();
@@ -300,13 +293,13 @@ impl Axio {
   }
 
   /// Get the app element handle for a process from registry.
-  pub(crate) fn get_app_handle(&self, pid: u32) -> Option<Handle> {
+  pub(crate) fn app_handle(&self, pid: u32) -> Option<Handle> {
     self.read(|s| s.process(ProcessId(pid)).map(|p| p.app_handle.clone()))
   }
 
   /// Get element handle and metadata. Use this to extract data before platform calls.
   /// Returns (handle, window_id, pid, is_root).
-  pub(crate) fn get_element_handle(
+  pub(crate) fn element_handle(
     &self,
     element_id: ElementId,
   ) -> AxioResult<(Handle, WindowId, u32, bool)> {
@@ -330,8 +323,15 @@ impl Axio {
   }
 
   /// Get screen dimensions (width, height).
+  ///
+  /// Cached on first access for the lifetime of this Axio instance.
+  ///
+  /// TODO: Detect display configuration changes and update the cache.
+  /// For now, assumes screen size is constant.
   pub fn screen_size(&self) -> (f64, f64) {
-    CurrentPlatform::fetch_screen_size()
+    *self
+      .screen_size
+      .get_or_init(|| CurrentPlatform::fetch_screen_size())
   }
 
   /// Get element at screen coordinates (always fresh from OS).
@@ -351,7 +351,7 @@ impl Axio {
     use crate::platform::PlatformHandle;
 
     // Find which TRACKED window is at this point
-    let Some(window) = self.get_window_at_point(x, y) else {
+    let Some(window) = self.window_at_point(x, y) else {
       return Ok(None);
     };
     let window_id = window.id;
@@ -360,7 +360,7 @@ impl Axio {
 
     // Get the app element handle from ProcessEntry
     let app_handle = self
-      .get_app_handle(pid)
+      .app_handle(pid)
       .ok_or_else(|| AxioError::Internal(format!("Process {pid} not registered")))?;
 
     // Step 1: Platform call - get handle at position
@@ -392,7 +392,7 @@ impl Axio {
 
   /// Fetch and register children of element from OS (internal).
   ///
-  /// Prefer using `children(id, Freshness::Fresh)` in public API.
+  /// Prefer using `children(id, Recency::Current)` in public API.
   pub(crate) fn fetch_children(
     &self,
     element_id: ElementId,
@@ -401,7 +401,7 @@ impl Axio {
     use crate::platform::PlatformHandle;
 
     // Step 1: Extract handle (quick read, lock released)
-    let (handle, window_id, pid, _is_root) = self.get_element_handle(element_id)?;
+    let (handle, window_id, pid, _is_root) = self.element_handle(element_id)?;
 
     // Step 2: Platform call (NO LOCK)
     let child_handles = handle.fetch_children();
@@ -430,13 +430,13 @@ impl Axio {
 
   /// Fetch and register parent of element from OS (internal).
   ///
-  /// Prefer using `parent(id, Freshness::Fresh)` in public API.
+  /// Prefer using `parent(id, Recency::Current)` in public API.
   /// Returns None if element is root.
   pub(crate) fn fetch_parent(&self, element_id: ElementId) -> AxioResult<Option<Element>> {
     use crate::platform::PlatformHandle;
 
     // Step 1: Extract handle (quick read, lock released)
-    let (handle, window_id, pid, _is_root) = self.get_element_handle(element_id)?;
+    let (handle, window_id, pid, _is_root) = self.element_handle(element_id)?;
 
     // Step 2: Platform call (NO LOCK)
     let Some(parent_handle) = handle.fetch_parent() else {
@@ -450,25 +450,27 @@ impl Axio {
 
   /// Get root element for a window.
   ///
+  /// Returns `Ok(None)` if the window doesn't exist or has no accessibility element.
   /// The root element is constant for the lifetime of a window, so this only
   /// hits the OS on the first call for each window. Subsequent calls return
   /// the cached element.
-  pub fn window_root(&self, window_id: WindowId) -> AxioResult<Element> {
+  pub fn window_root(&self, window_id: WindowId) -> AxioResult<Option<Element>> {
     // Fast path: return cached root if available
     if let Some(element_id) = self.read(|r| r.window_root(window_id)) {
       if let Some(element) = self.read(|r| super::build_element(r, element_id)) {
-        return Ok(element);
+        return Ok(Some(element));
       }
       // Element was removed but window still exists - fall through to re-fetch
     }
 
     // Slow path: fetch from OS
-    let (window, handle) = self
-      .get_window_with_handle(window_id)
-      .ok_or(AxioError::WindowNotFound(window_id))?;
+    let Some((window, handle)) = self.window_with_handle(window_id) else {
+      return Ok(None); // Window doesn't exist
+    };
 
-    let window_handle =
-      handle.ok_or_else(|| AxioError::Internal(format!("Window {window_id} has no AX element")))?;
+    let Some(window_handle) = handle else {
+      return Ok(None); // Window has no accessibility element
+    };
 
     // Cache element from handle
     let element_id =
@@ -477,11 +479,7 @@ impl Axio {
     // Store in window for future calls
     self.write(|r| r.set_window_root(window_id, element_id));
 
-    self
-      .read(|r| super::build_element(r, element_id))
-      .ok_or_else(|| {
-        AxioError::Internal("Window root element was previously destroyed".to_string())
-      })
+    Ok(self.read(|r| super::build_element(r, element_id)))
   }
 
   /// Get currently focused element and text selection for a window (always fresh from OS).
@@ -498,7 +496,7 @@ impl Axio {
 
     // Get app handle from ProcessEntry
     let app_handle = self
-      .get_app_handle(pid)
+      .app_handle(pid)
       .ok_or_else(|| AxioError::Internal(format!("Process {pid} not registered")))?;
 
     // No focused element is a legitimate state, not an error
@@ -509,8 +507,7 @@ impl Axio {
     // Try to get window ID from existing element or fall back to requested window
     let focus_window_id = self
       .read(|r| {
-        let hash = focused_handle.element_hash();
-        r.find_by_hash(hash, Some(ProcessId(pid)))
+        r.find_element(&focused_handle)
           .and_then(|id| r.element(id))
           .map(|e| e.data.window_id)
       })

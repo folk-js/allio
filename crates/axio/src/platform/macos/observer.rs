@@ -33,7 +33,7 @@ use std::sync::{Arc, LazyLock};
 use super::handles::{ElementHandle, ObserverHandle};
 use super::mapping::notification_from_macos;
 use crate::accessibility::Notification;
-use crate::platform::PlatformCallbacks;
+use crate::platform::{ElementEvent, PlatformCallbacks};
 use crate::types::{AxioError, AxioResult, ElementId};
 
 /// Next available context ID.
@@ -42,43 +42,15 @@ static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
 /// Type-erased callbacks for storing in the global context map.
 /// We use a boxed trait object to avoid generic type parameters in the global map.
 trait CallbacksErased: Send + Sync {
-  fn on_element_destroyed(&self, element_id: ElementId);
-  fn on_element_changed(&self, element_id: ElementId, notification: Notification);
-  fn on_children_changed(&self, element_id: ElementId);
-  fn on_focus_changed(&self, pid: u32, handle: ElementHandle);
-  fn on_selection_changed(
-    &self,
-    pid: u32,
-    handle: ElementHandle,
-    text: String,
-    range: Option<(u32, u32)>,
-  );
+  fn on_element_event(&self, event: ElementEvent<ElementHandle>);
 }
 
 /// Wrapper that erases the generic type parameter.
 struct CallbacksWrapper<C: PlatformCallbacks<Handle = ElementHandle>>(Arc<C>);
 
 impl<C: PlatformCallbacks<Handle = ElementHandle>> CallbacksErased for CallbacksWrapper<C> {
-  fn on_element_destroyed(&self, element_id: ElementId) {
-    self.0.on_element_destroyed(element_id);
-  }
-  fn on_element_changed(&self, element_id: ElementId, notification: Notification) {
-    self.0.on_element_changed(element_id, notification);
-  }
-  fn on_children_changed(&self, element_id: ElementId) {
-    self.0.on_children_changed(element_id);
-  }
-  fn on_focus_changed(&self, pid: u32, handle: ElementHandle) {
-    self.0.on_focus_changed(pid, handle);
-  }
-  fn on_selection_changed(
-    &self,
-    pid: u32,
-    handle: ElementHandle,
-    text: String,
-    range: Option<(u32, u32)>,
-  ) {
-    self.0.on_selection_changed(pid, handle, text, range);
+  fn on_element_event(&self, event: ElementEvent<ElementHandle>) {
+    self.0.on_element_event(event);
   }
 }
 
@@ -245,8 +217,8 @@ unsafe extern "C-unwind" fn unified_observer_callback(
       ObserverTarget::Element(element_id) => {
         handle_element_notification(callbacks.as_ref(), element_id, notif);
       }
-      ObserverTarget::Process(pid) => {
-        handle_process_notification(callbacks.as_ref(), pid, notif, element_ref.clone());
+      ObserverTarget::Process(_pid) => {
+        handle_process_notification(callbacks.as_ref(), notif, element_ref.clone());
       }
     }
   }));
@@ -262,46 +234,49 @@ fn handle_element_notification(
   element_id: ElementId,
   notif: Notification,
 ) {
-  match notif {
+  let event = match notif {
     Notification::ValueChanged | Notification::TitleChanged => {
-      callbacks.on_element_changed(element_id, notif);
+      ElementEvent::Changed(element_id, notif)
     }
 
-    Notification::Destroyed => {
-      callbacks.on_element_destroyed(element_id);
-    }
+    Notification::Destroyed => ElementEvent::Destroyed(element_id),
 
-    Notification::ChildrenChanged => {
-      callbacks.on_children_changed(element_id);
-    }
+    Notification::ChildrenChanged => ElementEvent::ChildrenChanged(element_id),
 
     // Element-level handler doesn't process these app-level notifications
-    Notification::FocusChanged | Notification::SelectionChanged | Notification::BoundsChanged => {}
-  }
+    Notification::FocusChanged | Notification::SelectionChanged | Notification::BoundsChanged => {
+      return;
+    }
+  };
+
+  callbacks.on_element_event(event);
 }
 
 /// Handle app/process-level notifications (focus change, selection change).
 fn handle_process_notification(
   callbacks: &dyn CallbacksErased,
-  pid: u32,
   notif: Notification,
   ax_element: CFRetained<AXUIElement>,
 ) {
-  match notif {
+  let event = match notif {
     Notification::FocusChanged => {
       let handle = ElementHandle::new(ax_element);
-      callbacks.on_focus_changed(pid, handle);
+      ElementEvent::FocusChanged(handle)
     }
     Notification::SelectionChanged => {
       let handle = ElementHandle::new(ax_element.clone());
       let (text, range) = super::focus::get_selection_from_handle(&handle).unwrap_or_default();
-      callbacks.on_selection_changed(pid, handle, text, range);
+      ElementEvent::SelectionChanged { handle, text, range }
     }
     // Process-level handler doesn't process these element-level notifications
     Notification::Destroyed
     | Notification::ValueChanged
     | Notification::TitleChanged
     | Notification::BoundsChanged
-    | Notification::ChildrenChanged => {}
-  }
+    | Notification::ChildrenChanged => {
+      return;
+    }
+  };
+
+  callbacks.on_element_event(event);
 }

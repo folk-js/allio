@@ -100,14 +100,17 @@ pub fn dispatch(axio: &Axio, request: RpcRequest) -> Result<RpcResponse, String>
 
     RpcRequest::Get { element_id } => {
       let element = axio
-        .get(element_id, axio::Freshness::Cached)
+        .get(element_id, axio::Recency::Any)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Element not found: {element_id}"))?;
       Ok(RpcResponse::Element(Box::new(element)))
     }
 
     RpcRequest::WindowRoot { window_id } => {
-      let element = axio.window_root(window_id).map_err(|e| e.to_string())?;
+      let element = axio
+        .window_root(window_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Window not found or has no accessibility: {window_id}"))?;
       Ok(RpcResponse::Element(Box::new(element)))
     }
 
@@ -117,21 +120,21 @@ pub fn dispatch(axio: &Axio, request: RpcRequest) -> Result<RpcResponse, String>
     } => {
       // TODO: Support max_children in the public API if needed
       let children = axio
-        .children(element_id, axio::Freshness::Fresh)
+        .children(element_id, axio::Recency::Current)
         .map_err(|e| e.to_string())?;
       Ok(RpcResponse::Elements(children))
     }
 
     RpcRequest::Parent { element_id } => {
       let parent = axio
-        .parent(element_id, axio::Freshness::Fresh)
+        .parent(element_id, axio::Recency::Current)
         .map_err(|e| e.to_string())?;
       Ok(RpcResponse::OptionalElement(parent.map(Box::new)))
     }
 
     RpcRequest::Refresh { element_id } => {
       let element = axio
-        .get(element_id, axio::Freshness::Fresh)
+        .get(element_id, axio::Recency::Current)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Element not found: {element_id}"))?;
       Ok(RpcResponse::Element(Box::new(element)))

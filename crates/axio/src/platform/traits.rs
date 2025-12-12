@@ -8,10 +8,37 @@ Core code only uses these traits - never platform-specific types directly.
 
 #![allow(unsafe_code)]
 
+use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::accessibility::{Notification, Value};
 use crate::types::{AxioResult, ElementId, Window};
+
+/// Event types from platform to core.
+///
+/// Generic over handle type to work with the trait system.
+/// PID can be derived from handles via `handle.pid()`.
+#[derive(Debug)]
+pub(crate) enum ElementEvent<H> {
+  /// Element was destroyed by the OS.
+  Destroyed(ElementId),
+
+  /// Element's value/title/bounds changed.
+  Changed(ElementId, Notification),
+
+  /// Element's children structure changed.
+  ChildrenChanged(ElementId),
+
+  /// App focus changed to this element.
+  FocusChanged(H),
+
+  /// Text selection changed.
+  SelectionChanged {
+    handle: H,
+    text: String,
+    range: Option<(u32, u32)>,
+  },
+}
 
 /// Attributes fetched from a platform element.
 /// This is the cross-platform interface for element data.
@@ -56,28 +83,13 @@ pub(crate) trait PlatformCallbacks: Send + Sync + 'static {
   /// The handle type for this platform.
   type Handle: PlatformHandle;
 
-  /// Called when an element is destroyed by the OS.
-  fn on_element_destroyed(&self, element_id: ElementId);
-
-  /// Called when an element's value/title/bounds changed.
-  fn on_element_changed(&self, element_id: ElementId, notification: Notification);
-
-  /// Called when an element's children structure changed.
-  fn on_children_changed(&self, element_id: ElementId);
-
-  /// Called when app focus changes to a new element.
-  /// The callback implementation is responsible for registering the element.
-  fn on_focus_changed(&self, pid: u32, focused_handle: Self::Handle);
-
-  /// Called when text selection changes.
-  /// The callback implementation is responsible for registering the element.
-  fn on_selection_changed(
-    &self,
-    pid: u32,
-    element_handle: Self::Handle,
-    text: String,
-    range: Option<(u32, u32)>,
-  );
+  /// Called when a platform event occurs.
+  ///
+  /// Events include element changes (for tracked elements by ID) and
+  /// handle-based events (for potentially new elements like focus changes).
+  ///
+  /// For handle-based events, use `handle.pid()` to get the process ID.
+  fn on_element_event(&self, event: ElementEvent<Self::Handle>);
 }
 
 // ============================================================================
@@ -146,16 +158,29 @@ pub(crate) trait Platform {
 /// This is the opaque handle that core code holds onto.
 /// Clone is cheap (reference-counted on macOS).
 /// All methods hit the OS (no caching) - that's why they use `fetch_` prefix.
-pub(crate) trait PlatformHandle: Clone + Send + Sync + 'static {
+///
+/// ## Identity Semantics
+///
+/// Handles implement `Hash` and `Eq` for use as HashMap keys:
+/// - `Hash`: Returns a stable hash (cached from platform, e.g., CFHash on macOS)
+/// - `Eq`: Compares by identity, not pointer (e.g., CFEqual on macOS)
+///
+/// This gives O(1) lookups with correct collision resolution.
+///
+/// ## Cached Properties
+///
+/// - `pid()`: Process ID is cached at construction (no FFI in hot path)
+pub(crate) trait PlatformHandle: Clone + Send + Sync + Hash + Eq + 'static {
+  /// Get the process ID this element belongs to.
+  ///
+  /// This is cached at construction - no FFI call in hot path.
+  fn pid(&self) -> u32;
+
   /// Fetch child element handles from OS. Returns empty vec if no children.
   fn fetch_children(&self) -> Vec<Self>;
 
   /// Fetch parent element handle from OS. Returns None for root elements.
   fn fetch_parent(&self) -> Option<Self>;
-
-  /// Compute a unique hash for this element (for deduplication).
-  /// On macOS: uses `CFHash()` on the underlying `AXUIElement`.
-  fn element_hash(&self) -> u64;
 
   /// Set a typed value on this element (string, number, or boolean).
   /// Fails if element doesn't support value setting.
@@ -175,6 +200,11 @@ pub(crate) trait PlatformHandle: Clone + Send + Sync + 'static {
   /// Fetch selected text and optional range (start, end) for text elements.
   /// Returns None if element has no selection or isn't a text element.
   fn fetch_selection(&self) -> Option<(String, Option<(u32, u32)>)>;
+
+  /// Fetch the containing window element.
+  /// Returns None for elements that aren't in a window (menu bar, system tray, etc.).
+  /// On macOS: queries `AXWindow` attribute.
+  fn window(&self) -> Option<Self>;
 }
 
 /// Observer for element notifications.

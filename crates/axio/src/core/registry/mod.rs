@@ -125,25 +125,19 @@ impl ElementData {
 pub(crate) struct ElementEntry {
   pub(crate) data: ElementData,
   pub(crate) handle: Handle,
-  pub(crate) hash: u64,
-  pub(crate) parent_hash: Option<u64>,
+  /// Parent handle for tree linkage. None for root elements.
+  pub(crate) parent_handle: Option<Handle>,
   pub(crate) watch: Option<WatchHandle>,
   /// When this element was last refreshed from the OS.
   pub(crate) last_refreshed: std::time::Instant,
 }
 
 impl ElementEntry {
-  pub(crate) fn new(
-    data: ElementData,
-    handle: Handle,
-    hash: u64,
-    parent_hash: Option<u64>,
-  ) -> Self {
+  pub(crate) fn new(data: ElementData, handle: Handle, parent_handle: Option<Handle>) -> Self {
     Self {
       data,
       handle,
-      hash,
-      parent_hash,
+      parent_handle,
       watch: None,
       last_refreshed: std::time::Instant::now(),
     }
@@ -181,9 +175,11 @@ pub(crate) struct Registry {
   // Tree structure - single source of truth for relationships
   pub(super) tree: ElementTree,
 
-  // Indexes
-  pub(super) hash_to_element: HashMap<u64, ElementId>,
-  pub(super) waiting_for_parent: HashMap<u64, Vec<ElementId>>,
+  // Indexes - Handle implements Hash (cached CFHash) + Eq (CFEqual on collision)
+  pub(super) handle_to_id: HashMap<Handle, ElementId>,
+  pub(super) waiting_for_parent: HashMap<Handle, Vec<ElementId>>,
+  /// Window handle → WindowId index for O(1) lookup from element's AXWindow handle.
+  pub(super) window_handle_to_id: HashMap<Handle, WindowId>,
 
   // Focus/UI state
   focused_window: Option<WindowId>,
@@ -199,8 +195,9 @@ impl Registry {
       windows: HashMap::new(),
       elements: HashMap::new(),
       tree: ElementTree::new(),
-      hash_to_element: HashMap::new(),
+      handle_to_id: HashMap::new(),
       waiting_for_parent: HashMap::new(),
+      window_handle_to_id: HashMap::new(),
       focused_window: None,
       z_order: Vec::new(),
       mouse_position: None,
@@ -277,8 +274,9 @@ impl Registry {
   /// Set focused element for a process. Emits FocusElement if changed.
   ///
   /// Returns:
-  /// - `None` - no change (same element or process not found)
-  /// - `Some(previous)` - focus changed, `previous` is the old element ID to unwatch
+  /// - `None` - no change (same element or process not found), skip unwatch AND auto-watch
+  /// - `Some(None)` - focus changed, no previous element to unwatch, DO auto-watch
+  /// - `Some(Some(id))` - focus changed, unwatch `id`, DO auto-watch
   pub(crate) fn set_focused_element(
     &mut self,
     pid: ProcessId,
@@ -367,16 +365,5 @@ impl Registry {
       }
     }
     None
-  }
-
-  /// Get focused window for a specific PID.
-  pub(crate) fn focused_window_for_pid(&self, pid: u32) -> Option<WindowId> {
-    let window_id = self.focused_window?;
-    let window = self.windows.get(&window_id)?;
-    if window.process_id.0 == pid {
-      Some(window_id)
-    } else {
-      None
-    }
   }
 }

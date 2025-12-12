@@ -2,34 +2,41 @@
 Element operations for the Registry.
 
 CRUD: upsert_element, update_element, remove_element
-Query: element, elements
+Query: element, elements, find_element
 Element-specific: set_children, set_element_watch, take_element_watch
-Indexes: find_by_hash, find_by_hash_in_window
+
+## Handle-Based Identity
+
+Elements are keyed by Handle (implements Hash via cached CFHash, Eq via CFEqual).
+This gives O(1) lookups with correct collision resolution - no more O(n) fallbacks.
 */
 
 use super::{ElementData, ElementEntry, Registry};
-use crate::platform::WatchHandle;
-use crate::types::{ElementId, Event, ProcessId, WindowId};
+use crate::platform::{Handle, WatchHandle};
+use crate::types::{ElementId, Event};
 
 // ============================================================================
 // Element CRUD
 // ============================================================================
 
 impl Registry {
-  /// Insert or update an element by hash.
+  /// Insert or update an element by handle.
   ///
-  /// - If hash exists in same window: updates data, returns existing ElementId
+  /// - If handle matches existing element: updates data, returns existing ElementId
   /// - If new: inserts, maintains indexes, resolves orphans, emits ElementAdded
+  ///
+  /// Handle identity (via CFEqual) ensures the same AXUIElement always maps to the
+  /// same ElementId. An element's parent is always in the same window by construction
+  /// (accessibility trees are window-scoped).
   ///
   /// This is a pure data operation. Call `Axio::ensure_watched` after to set up OS sync.
   pub(crate) fn upsert_element(&mut self, elem: ElementEntry) -> ElementId {
-    let hash = elem.hash;
-    let parent_hash = elem.parent_hash;
+    let handle = elem.handle.clone();
+    let parent_handle = elem.parent_handle.clone();
     let is_root = elem.data.is_root;
-    let window_id = elem.data.window_id;
 
-    // Element already exists in this window - update data from fresh fetch
-    if let Some(existing_id) = self.find_by_hash_in_window(hash, window_id) {
+    // Element already exists - update data from fresh fetch
+    if let Some(&existing_id) = self.handle_to_id.get(&handle) {
       // Update the element data with fresh values (preserves ID)
       let mut fresh_data = elem.data;
       fresh_data.id = existing_id; // Keep the existing ID
@@ -39,64 +46,35 @@ impl Registry {
 
     let element_id = elem.data.id;
 
-    // Insert element data into primary collection and hash index
-    self.elements.insert(element_id, elem);
-    // Note: This overwrites the hash_to_element entry. For cross-window hash sharing,
-    // the most recently registered element "wins" the hash lookup. find_by_hash
-    // handles this by searching when the fast-path element doesn't match the pid filter.
-    self.hash_to_element.insert(hash, element_id);
+    // Insert into handle index
+    self.handle_to_id.insert(handle.clone(), element_id);
 
-    // Link to parent via tree if parent exists AND is in same window
+    // Insert element data into primary collection
+    self.elements.insert(element_id, elem);
+
+    // Link to parent via tree if parent handle exists in cache
     if !is_root {
-      if let Some(ref ph) = parent_hash {
-        if let Some(&parent_id) = self.hash_to_element.get(ph) {
-          // Check parent is in same window before linking
-          if self
-            .elements
-            .get(&parent_id)
-            .map_or(false, |p| p.data.window_id == window_id)
-          {
-            self.tree.add_child(parent_id, element_id);
-            self.emit_element_changed(parent_id);
-          } else {
-            // Parent hash exists but in different window - treat as orphan
-            self
-              .waiting_for_parent
-              .entry(*ph)
-              .or_default()
-              .push(element_id);
-          }
+      if let Some(ref ph) = parent_handle {
+        if let Some(&parent_id) = self.handle_to_id.get(ph) {
+          // Parent exists - link immediately
+          self.tree.add_child(parent_id, element_id);
+          self.emit_element_changed(parent_id);
         } else {
           // Orphan: parent not loaded yet, queue for later
           self
             .waiting_for_parent
-            .entry(*ph)
+            .entry(ph.clone())
             .or_default()
             .push(element_id);
         }
       }
     }
 
-    // Resolve any orphans waiting for this element (only from same window)
-    if let Some(orphans) = self.waiting_for_parent.remove(&hash) {
+    // Resolve any orphans waiting for this element
+    if let Some(orphans) = self.waiting_for_parent.remove(&handle) {
       for orphan_id in orphans {
-        // Only link orphans from the same window
-        let orphan_window = self.elements.get(&orphan_id).map(|e| e.data.window_id);
-        if orphan_window == Some(window_id) {
-          self.tree.add_child(element_id, orphan_id);
-          self.emit_element_changed(orphan_id);
-        } else {
-          // Orphan is from a different window - re-queue it
-          if let Some(orphan_elem) = self.elements.get(&orphan_id) {
-            if let Some(ref ph) = orphan_elem.parent_hash {
-              self
-                .waiting_for_parent
-                .entry(*ph)
-                .or_default()
-                .push(orphan_id);
-            }
-          }
-        }
+        self.tree.add_child(element_id, orphan_id);
+        self.emit_element_changed(orphan_id);
       }
     }
 
@@ -158,11 +136,11 @@ impl Registry {
       return;
     };
 
-    // Clean hash index
-    self.hash_to_element.remove(&elem.hash);
+    // Clean handle index
+    self.handle_to_id.remove(&elem.handle);
 
     // Clean waiting_for_parent
-    if let Some(ref ph) = elem.parent_hash {
+    if let Some(ref ph) = elem.parent_handle {
       if let Some(waiting) = self.waiting_for_parent.get_mut(ph) {
         waiting.retain(|&wid| wid != id);
         if waiting.is_empty() {
@@ -170,7 +148,7 @@ impl Registry {
         }
       }
     }
-    self.waiting_for_parent.remove(&elem.hash);
+    self.waiting_for_parent.remove(&elem.handle);
 
     // Drop watch (RAII cleanup)
     elem.watch.take();
@@ -192,6 +170,11 @@ impl Registry {
   /// Iterate over all element entries.
   pub(crate) fn elements(&self) -> impl Iterator<Item = (ElementId, &ElementEntry)> {
     self.elements.iter().map(|(id, e)| (*id, e))
+  }
+
+  /// Find element by handle. O(1) with correct collision resolution via CFEqual.
+  pub(crate) fn find_element(&self, handle: &Handle) -> Option<ElementId> {
+    self.handle_to_id.get(handle).copied()
   }
 }
 
@@ -234,60 +217,5 @@ impl Registry {
   /// Take watch handle from element (for operations that need to release the lock).
   pub(crate) fn take_element_watch(&mut self, id: ElementId) -> Option<WatchHandle> {
     self.elements.get_mut(&id).and_then(|e| e.watch.take())
-  }
-}
-
-// ============================================================================
-// Element Hash Indexes
-// ============================================================================
-
-impl Registry {
-  /// Find element by hash, optionally filtering by process ID.
-  ///
-  /// When `pid` is provided, ensures the returned element belongs to that process.
-  /// This handles hash collisions across windows/processes where the hash_to_element
-  /// fast-path might point to the wrong element.
-  pub(crate) fn find_by_hash(&self, hash: u64, pid: Option<ProcessId>) -> Option<ElementId> {
-    // Fast path: direct lookup
-    if let Some(&element_id) = self.hash_to_element.get(&hash) {
-      if let Some(elem) = self.elements.get(&element_id) {
-        // If no pid filter, or pid matches, return it
-        if pid.map_or(true, |p| elem.data.pid == p) {
-          return Some(element_id);
-        }
-      }
-    }
-
-    // Slow path: pid filter didn't match (hash collision), search all elements
-    if pid.is_some() {
-      return self
-        .elements
-        .iter()
-        .find(|(_, e)| e.hash == hash && Some(e.data.pid) == pid)
-        .map(|(id, _)| *id);
-    }
-
-    None
-  }
-
-  /// Find element by hash within a specific window.
-  ///
-  /// Used for deduplication: same hash in different windows = different elements.
-  pub(crate) fn find_by_hash_in_window(&self, hash: u64, window_id: WindowId) -> Option<ElementId> {
-    // Fast path: direct lookup
-    if let Some(&element_id) = self.hash_to_element.get(&hash) {
-      if let Some(elem) = self.elements.get(&element_id) {
-        if elem.data.window_id == window_id {
-          return Some(element_id);
-        }
-      }
-    }
-
-    // Slow path: hash collision, search all elements in this window
-    self
-      .elements
-      .iter()
-      .find(|(_, e)| e.hash == hash && e.data.window_id == window_id)
-      .map(|(id, _)| *id)
   }
 }

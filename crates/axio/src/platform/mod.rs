@@ -25,8 +25,8 @@ All platform-specific details (CFType, AXUIElement, etc.) stay hidden.
 mod traits;
 
 pub(crate) use traits::{
-  AppNotificationHandle, DisplayLinkHandle, ElementAttributes, Platform, PlatformCallbacks,
-  PlatformHandle, PlatformObserver, WatchHandle,
+  AppNotificationHandle, DisplayLinkHandle, ElementAttributes, ElementEvent, Platform,
+  PlatformCallbacks, PlatformHandle, PlatformObserver, WatchHandle,
 };
 
 // === Platform Implementations ===

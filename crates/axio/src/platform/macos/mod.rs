@@ -9,7 +9,6 @@ All macOS-specific code (AXUIElement, CoreFoundation, etc.) stays within this mo
 mod cf_utils;
 mod display;
 mod display_link;
-mod element;
 mod focus;
 mod handles;
 pub(crate) mod mapping;
@@ -89,16 +88,16 @@ impl Platform for MacOS {
 }
 
 impl PlatformHandle for ElementHandle {
+  fn pid(&self) -> u32 {
+    self.cached_pid
+  }
+
   fn fetch_children(&self) -> Vec<Self> {
     self.get_children()
   }
 
   fn fetch_parent(&self) -> Option<Self> {
     self.get_element("AXParent")
-  }
-
-  fn element_hash(&self) -> u64 {
-    element::element_hash(self)
   }
 
   fn set_value(&self, value: &Value) -> AxioResult<()> {
@@ -123,6 +122,10 @@ impl PlatformHandle for ElementHandle {
 
   fn fetch_selection(&self) -> Option<(String, Option<(u32, u32)>)> {
     focus::get_selection_from_handle(self)
+  }
+
+  fn window(&self) -> Option<Self> {
+    self.get_element("AXWindow")
   }
 }
 

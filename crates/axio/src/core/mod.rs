@@ -12,16 +12,16 @@ Core Axio instance - owns all accessibility state and event broadcasting.
 # Example
 
 ```ignore
-use axio::Freshness;
+use axio::Recency;
 
 let axio = Axio::new()?;
 
 // Get element with explicit freshness
-let element = axio.get(element_id, Freshness::Cached)?;  // From cache
-let element = axio.get(element_id, Freshness::Fresh)?;   // From OS
+let element = axio.get(element_id, Recency::Any)?;  // From cache
+let element = axio.get(element_id, Recency::Current)?;   // From OS
 
 // Traversal with freshness
-let children = axio.children(element.id, Freshness::Fresh)?;
+let children = axio.children(element.id, Recency::Current)?;
 
 let mut events = axio.subscribe();
 while let Ok(event) = events.recv().await {
@@ -37,7 +37,7 @@ mod registry;
 mod subscriptions;
 
 pub(crate) use builders::{build_element, build_snapshot};
-pub(crate) use registry::{ElementData, ElementEntry, Registry};
+pub(crate) use registry::{ElementData, Registry};
 
 use crate::platform::{CurrentPlatform, Platform};
 use crate::polling::{self, PollingHandle};
@@ -63,6 +63,7 @@ pub struct Axio {
   events_tx: Sender<Event>,
   events_keepalive: InactiveReceiver<Event>,
   polling: Arc<Mutex<Option<PollingHandle>>>,
+  screen_size: Arc<std::sync::OnceLock<(f64, f64)>>,
 }
 
 impl Clone for Axio {
@@ -72,6 +73,7 @@ impl Clone for Axio {
       events_tx: self.events_tx.clone(),
       events_keepalive: self.events_keepalive.clone(),
       polling: Arc::clone(&self.polling),
+      screen_size: Arc::clone(&self.screen_size),
     }
   }
 }
@@ -120,6 +122,7 @@ impl Axio {
       events_tx: tx,
       events_keepalive: rx.deactivate(),
       polling: Arc::new(Mutex::new(None)),
+      screen_size: Arc::new(std::sync::OnceLock::new()),
     };
 
     // Start polling with a clone (shares state via Arc)
@@ -157,91 +160,61 @@ impl Axio {
 // PlatformCallbacks Implementation
 // ============================================================================
 
-use crate::accessibility::Notification;
-use crate::platform::{Handle, PlatformCallbacks};
+use crate::platform::{ElementEvent, Handle, PlatformCallbacks, PlatformHandle};
 
 impl PlatformCallbacks for Axio {
   type Handle = Handle;
 
-  fn on_element_destroyed(&self, element_id: crate::types::ElementId) {
-    // Delegate to existing handler
-    self.handle_element_destroyed(element_id);
-  }
-
-  fn on_element_changed(&self, element_id: crate::types::ElementId, notification: Notification) {
-    // Delegate to existing handler
-    self.handle_element_changed(element_id, notification);
-  }
-
-  fn on_children_changed(&self, element_id: crate::types::ElementId) {
-    // Re-fetch children
-    drop(self.fetch_children(element_id, 1000));
-  }
-
-  fn on_focus_changed(&self, pid: u32, focused_handle: Handle) {
-    use crate::platform::PlatformHandle;
+  fn on_element_event(&self, event: ElementEvent<Handle>) {
     use crate::types::ProcessId;
 
-    // Find window for this element: check if element exists, else use focused window
-    let window_id = self.read(|r| {
-      let hash = focused_handle.element_hash();
-      r.find_by_hash(hash, Some(ProcessId(pid)))
-        .and_then(|id| r.element(id))
-        .map(|e| e.data.window_id)
-        .or_else(|| r.focused_window_for_pid(pid))
-    });
+    match event {
+      ElementEvent::Destroyed(element_id) => {
+        self.handle_element_destroyed(element_id);
+      }
 
-    let Some(window_id) = window_id else {
-      log::debug!("FocusChanged: no window_id found for PID {pid}, skipping");
-      return;
-    };
+      ElementEvent::Changed(element_id, notification) => {
+        self.handle_element_changed(element_id, notification);
+      }
 
-    // Cache element from handle
-    let element_id = self.cache_from_handle(focused_handle, window_id, ProcessId(pid));
+      ElementEvent::ChildrenChanged(element_id) => {
+        // Re-fetch children
+        drop(self.fetch_children(element_id, 1000));
+      }
 
-    // Build element
-    let Some(element) = self.read(|r| build_element(r, element_id)) else {
-      log::warn!("FocusChanged: element build failed for PID {pid}");
-      return;
-    };
+      ElementEvent::FocusChanged(focused_handle) => {
+        let pid = ProcessId(focused_handle.pid());
 
-    // Only process focus for elements that self-identify as focused
-    if element.focused != Some(true) {
-      return;
+        // Find window for this element
+        let Some(window_id) = self.window_for_handle(&focused_handle) else {
+          log::debug!("FocusChanged: no window_id found for PID {pid:?}, skipping");
+          return;
+        };
+
+        // Cache element from handle and delegate to handler
+        let element_id = self.cache_from_handle(focused_handle, window_id, pid);
+        self.handle_focus_changed(pid.0, element_id);
+      }
+
+      ElementEvent::SelectionChanged {
+        handle,
+        text,
+        range,
+      } => {
+        let pid = ProcessId(handle.pid());
+
+        // Find window for this element
+        let Some(window_id) = self.window_for_handle(&handle) else {
+          log::debug!("SelectionChanged: no window_id found for PID {pid:?}, skipping");
+          return;
+        };
+
+        // Cache element from handle
+        let element_id = self.cache_from_handle(handle, window_id, pid);
+
+        // Delegate to existing handler
+        self.handle_selection_changed(pid.0, window_id, element_id, text, range);
+      }
     }
-
-    // Delegate to existing handler (includes auto-watch logic)
-    self.handle_focus_changed(pid, element);
-  }
-
-  fn on_selection_changed(
-    &self,
-    pid: u32,
-    element_handle: Handle,
-    text: String,
-    range: Option<(u32, u32)>,
-  ) {
-    use crate::platform::PlatformHandle;
-    use crate::types::ProcessId;
-
-    // Find window for this element: check if element exists, else use focused window
-    let window_id = self.read(|r| {
-      let hash = element_handle.element_hash();
-      r.find_by_hash(hash, Some(ProcessId(pid)))
-        .and_then(|id| r.element(id))
-        .map(|e| e.data.window_id)
-        .or_else(|| r.focused_window_for_pid(pid))
-    });
-
-    let Some(window_id) = window_id else {
-      log::debug!("SelectionChanged: no window_id found for PID {pid}, skipping");
-      return;
-    };
-
-    // Cache element from handle
-    let element_id = self.cache_from_handle(element_handle, window_id, ProcessId(pid));
-
-    // Delegate to existing handler
-    self.handle_selection_changed(pid, window_id, element_id, text, range);
   }
 }

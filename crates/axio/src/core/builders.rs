@@ -1,13 +1,17 @@
 /*!
 Builder functions for derived types.
 
-These transform raw Registry entries into public API types.
+These transform raw Registry entries into public API types,
+and platform handles into Registry entries.
+
 Kept separate from Registry to emphasize that these are
 derived views, not core data operations.
 */
 
-use super::registry::Registry;
-use crate::types::{Element, ElementId, Snapshot};
+use super::registry::{ElementData, ElementEntry, Registry};
+use crate::accessibility::Role;
+use crate::platform::{Handle, PlatformHandle};
+use crate::types::{Element, ElementId, ProcessId, Snapshot, WindowId};
 
 /// Build an Element from an ElementEntry + tree relationships.
 ///
@@ -68,6 +72,47 @@ pub(crate) fn build_all_elements(registry: &Registry) -> Vec<Element> {
     .filter_map(|(id, _)| build_element(registry, id))
     .collect()
 }
+
+// ============================================================================
+// Handle → Entry (Platform → Core boundary)
+// ============================================================================
+
+/// Build an ElementEntry from a platform handle.
+///
+/// This is the Platform → Core boundary: converts an OS accessibility element
+/// into our internal representation. Makes OS calls to fetch attributes.
+///
+/// # Arguments
+/// * `handle` - Platform element handle
+/// * `window_id` - Window this element belongs to
+/// * `pid` - Process ID
+pub(crate) fn build_entry_from_handle(
+  handle: Handle,
+  window_id: WindowId,
+  pid: ProcessId,
+) -> ElementEntry {
+  let attrs = handle.fetch_attributes();
+
+  // Fetch parent once and reuse (OS call is expensive)
+  let parent_handle = handle.fetch_parent();
+
+  // Determine if this is a root element (parent is Application)
+  let is_root = parent_handle
+    .as_ref()
+    .map(|p| p.fetch_attributes().role == Role::Application)
+    .unwrap_or(false);
+
+  // For root elements, don't store parent handle
+  let parent_for_entry = if is_root { None } else { parent_handle };
+
+  let data = ElementData::from_attributes(ElementId::new(), window_id, pid, is_root, attrs);
+
+  ElementEntry::new(data, handle, parent_for_entry)
+}
+
+// ============================================================================
+// Entry → Public API (Core → Public boundary)
+// ============================================================================
 
 /// Build a snapshot of current state.
 pub(crate) fn build_snapshot(registry: &Registry) -> Snapshot {

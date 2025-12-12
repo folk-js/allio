@@ -17,17 +17,22 @@ use crate::types::{ElementId, Event, ProcessId, Window, WindowId};
 impl Registry {
   /// Insert a window if it doesn't exist.
   ///
-  /// - If window ID exists: returns None (no-op)
-  /// - If new: inserts, updates z-order, emits WindowAdded, returns Some(id)
+  /// Returns the window ID (whether newly inserted or already present).
+  /// If new: inserts, updates z-order, emits WindowAdded.
   pub(crate) fn upsert_window(
     &mut self,
     id: WindowId,
     process_id: ProcessId,
     info: Window,
     handle: Option<Handle>,
-  ) -> Option<WindowId> {
+  ) -> WindowId {
     if self.windows.contains_key(&id) {
-      return None;
+      return id;
+    }
+
+    // Maintain window handle index
+    if let Some(ref h) = handle {
+      self.window_handle_to_id.insert(h.clone(), id);
     }
 
     self.windows.insert(
@@ -41,7 +46,7 @@ impl Registry {
     );
     self.update_z_order();
     self.emit(Event::WindowAdded { window: info });
-    Some(id)
+    id
   }
 
   /// Update window info. Emits WindowChanged if different.
@@ -80,6 +85,11 @@ impl Registry {
 
     // Then remove window
     if let Some(window) = self.windows.remove(&id) {
+      // Clean up window handle index
+      if let Some(ref handle) = window.handle {
+        self.window_handle_to_id.remove(handle);
+      }
+
       self.update_z_order();
       self.emit(Event::WindowRemoved { window_id: id });
 
@@ -119,6 +129,11 @@ impl Registry {
   pub(crate) fn window_ids(&self) -> impl Iterator<Item = WindowId> + '_ {
     self.windows.keys().copied()
   }
+
+  /// Find window ID by its accessibility handle. O(1) lookup.
+  pub(crate) fn find_window_by_handle(&self, handle: &Handle) -> Option<WindowId> {
+    self.window_handle_to_id.get(handle).copied()
+  }
 }
 
 // ============================================================================
@@ -129,6 +144,8 @@ impl Registry {
   /// Set window handle (may be obtained lazily after initial insertion).
   pub(crate) fn set_window_handle(&mut self, id: WindowId, handle: Handle) {
     if let Some(window) = self.windows.get_mut(&id) {
+      // Maintain window handle index
+      self.window_handle_to_id.insert(handle.clone(), id);
       window.handle = Some(handle);
     }
   }
@@ -145,4 +162,3 @@ impl Registry {
     }
   }
 }
-
