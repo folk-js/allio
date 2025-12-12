@@ -20,12 +20,12 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 #[cfg(target_os = "macos")]
 use tauri_nspanel::{tauri_panel, ManagerExt as _, PanelLevel, StyleMask, WebviewWindowExt as _};
 
-use axio::Allio;
-use axio_ws::WebSocketState;
+use allio::Allio;
+use allio_ws::WebSocketState;
 
 #[cfg(target_os = "macos")]
 tauri_panel! {
-    panel!(AxioPanel {
+    panel!(AllioPanel {
         config: {
             can_become_key_window: true,
             is_floating_panel: true
@@ -370,7 +370,7 @@ fn load_file(app: &AppHandle, path: &Path) -> Result<(), Box<dyn std::error::Err
   Ok(())
 }
 
-fn create_rpc_handler(app_handle: AppHandle) -> axio_ws::CustomRpcHandler {
+fn create_rpc_handler(app_handle: AppHandle) -> allio_ws::CustomRpcHandler {
   let last_state = std::sync::Arc::new(AtomicBool::new(true));
 
   std::sync::Arc::new(move |method, args| {
@@ -433,8 +433,8 @@ fn create_rpc_handler(app_handle: AppHandle) -> axio_ws::CustomRpcHandler {
   })
 }
 
-fn setup_main_window(app: &tauri::App, axio: &Allio) -> Result<(), Box<dyn std::error::Error>> {
-  let (width, height) = axio.screen_size();
+fn setup_main_window(app: &tauri::App, allio: &Allio) -> Result<(), Box<dyn std::error::Error>> {
+  let (width, height) = allio.screen_size();
   let window = app
     .get_webview_window("main")
     .ok_or("Main window not found")?;
@@ -454,7 +454,7 @@ fn setup_main_window(app: &tauri::App, axio: &Allio) -> Result<(), Box<dyn std::
 
 #[cfg(target_os = "macos")]
 fn setup_macos_panel(window: &tauri::WebviewWindow) -> Result<(), Box<dyn std::error::Error>> {
-  let panel = window.to_panel::<AxioPanel>()?;
+  let panel = window.to_panel::<AllioPanel>()?;
 
   panel.set_style_mask(StyleMask::empty().nonactivating_panel().into());
   panel.set_level(PanelLevel::Floating.into());
@@ -515,22 +515,22 @@ fn main() {
   builder
     .manage(AppState::default())
     .setup(|app| {
-      // Create Axio instance (polling starts automatically)
-      let axio = match Allio::builder().exclude_pid(std::process::id()).build() {
+      // Create Allio instance (polling starts automatically)
+      let allio = match Allio::builder().exclude_pid(std::process::id()).build() {
         Ok(a) => a,
         Err(_) => {
-          eprintln!("[axio] ⚠️  Accessibility permissions NOT granted!");
-          eprintln!("[axio]    Go to System Preferences > Privacy & Security > Accessibility");
+          eprintln!("[allio] ⚠️  Accessibility permissions NOT granted!");
+          eprintln!("[allio]    Go to System Preferences > Privacy & Security > Accessibility");
           std::process::exit(1);
         }
       };
 
       // WebSocket setup
-      let ws_state = WebSocketState::new(axio.clone())
+      let ws_state = WebSocketState::new(allio.clone())
         .with_custom_handler(create_rpc_handler(app.handle().clone()));
 
       // Window setup
-      setup_main_window(app, &axio)?;
+      setup_main_window(app, &allio)?;
 
       // Shortcuts
       #[cfg(desktop)]
@@ -548,12 +548,12 @@ fn main() {
         }
       }
 
-      // Start WebSocket server (axio polling already running)
+      // Start WebSocket server (allio polling already running)
       let ws = ws_state.clone();
       thread::spawn(move || {
         tokio::runtime::Runtime::new()
           .expect("Failed to create runtime")
-          .block_on(axio_ws::start_server(ws));
+          .block_on(allio_ws::start_server(ws));
       });
 
       Ok(())

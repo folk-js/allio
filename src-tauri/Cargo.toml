@@ -1,11 +1,11 @@
 [package]
-name = "axio-app"
+name = "allio-app"
 version = "0.0.1"
-description = "AXIO Tauri Application"
+description = "Allio Tauri Application"
 authors = ["Orion Reed"]
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/folkjs/axio"
+repository = "https://github.com/folk-js/allio"
 readme = "../README.md"
 keywords = ["accessibility", "tauri", "desktop"]
 categories = ["gui"]
@@ -13,15 +13,15 @@ publish = false
 
 
 [[bin]]
-name = "axio"
+name = "allio"
 path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-axio = { path = "../crates/axio" }
-axio-ws = { path = "../crates/axio-ws" }
+allio = { path = "../crates/allio" }
+allio-ws = { path = "../crates/allio-ws" }
 
 # Tauri framework
 tauri = { version = "2", features = [

@@ -12,10 +12,10 @@ MISC:
 - figure out future ways to handle table (or other structured) data
 - figure out how to get filepaths from macos finder accessibility elements
 
-- rename AXIO to ALLIO? As in a11y i/o layer? ALL I/O!
+- [x] rename AXIO to ALLIO? As in a11y i/o layer? ALL I/O! **DONE - Renamed to Allio!**
 
 misc other bits:
 
-- [ ] **CLI tool?** - Use `axio` crate directly for scripting/automation without Tauri
-- [ ] **Query API?** - `axio.query()` for searching elements by predicate
-- [ ] **Select API?** - `axio.select(element_id)` for selecting items in lists/tables
+- [ ] **CLI tool?** - Use `allio` crate directly for scripting/automation without Tauri
+- [ ] **Query API?** - `allio.query()` for searching elements by predicate
+- [ ] **Select API?** - `allio.select(element_id)` for selecting items in lists/tables

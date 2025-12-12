@@ -1,5 +1,5 @@
 /**
- * AxioPassthrough - Declarative pointer event handling for overlay UIs
+ * AllioPassthrough - Declarative pointer event handling for overlay UIs
  *
  * Automatically manages passthrough state based on mode and DOM attributes.
  *
@@ -15,7 +15,7 @@
  * - `ax-io="transparent"`: Element passes pointer events through (can create "holes" in opaque regions)
  *
  * Usage:
- *   const passthrough = new AxioPassthrough(axio);
+ *   const passthrough = new AllioPassthrough(allio);
  *
  *   // Change mode
  *   passthrough.mode = "opaque";     // Always capture
@@ -31,7 +31,7 @@
  *   </div>
  */
 
-import type { AXIO } from "./index";
+import type { Allio } from "./index";
 
 export type PassthroughMode =
   | "auto"
@@ -40,20 +40,20 @@ export type PassthroughMode =
   | "outside"
   | "inside";
 
-export class AxioPassthrough {
-  private axio: AXIO;
+export class AllioPassthrough {
+  private allio: Allio;
   private _mode: PassthroughMode = "auto";
   private lastState: boolean | null = null;
   private cleanupMouseListener: (() => void) | null = null;
 
   constructor(
-    axio: AXIO,
+    allio: Allio,
     options: {
       /** Initial mode (default: "auto") */
       mode?: PassthroughMode;
     } = {}
   ) {
-    this.axio = axio;
+    this.allio = allio;
     this._mode = options.mode ?? "auto";
 
     this.setupMouseListener();
@@ -76,9 +76,9 @@ export class AxioPassthrough {
       this.handleMouseMove(x, y);
     };
 
-    this.axio.on("mouse:position", handler);
+    this.allio.on("mouse:position", handler);
     this.cleanupMouseListener = () => {
-      this.axio.off("mouse:position", handler);
+      this.allio.off("mouse:position", handler);
     };
   }
 
@@ -91,9 +91,9 @@ export class AxioPassthrough {
       // Delay 1 frame to allow mouse exit and other events to fire as Rust will set this
       // window to 'non key' when passthrough is disabled and this interrupts ... something.
       if (shouldPassthrough) {
-        requestAnimationFrame(() => this.axio.setPassthrough(true));
+        requestAnimationFrame(() => this.allio.setPassthrough(true));
       } else {
-        this.axio.setPassthrough(false);
+        this.allio.setPassthrough(false);
       }
     }
   }
@@ -127,7 +127,7 @@ export class AxioPassthrough {
    * Check if point is inside any tracked window's geometry.
    */
   private isInsideAnyWindow(x: number, y: number): boolean {
-    for (const win of this.axio.windows.values()) {
+    for (const win of this.allio.windows.values()) {
       const b = win.bounds;
       if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
         return true;

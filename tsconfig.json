@@ -20,11 +20,7 @@
     "noFallthroughCasesInSwitch": true,
 
     /* Path aliases */
-    "baseUrl": ".",
-    "paths": {
-      "@axio/client": ["packages/axio-client/src"],
-      "@axio/client/*": ["packages/axio-client/src/*"]
-    }
+    "baseUrl": "."
   },
   "include": ["src-web", "packages"],
   "references": [{ "path": "./tsconfig.node.json" }]

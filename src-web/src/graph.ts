@@ -8,7 +8,7 @@
  * - Element removal on view changes
  */
 
-import { AXIO, AX, AxioPassthrough } from "@axio/client";
+import { Allio, AX, AllioPassthrough } from "allio";
 import {
   forceSimulation,
   forceLink,
@@ -31,9 +31,9 @@ interface GraphLink extends SimulationLinkDatum<GraphNode> {
 }
 
 class AXGraph {
-  private axio: AXIO;
+  private allio: Allio;
   // @ts-expect-error passthrough must stay in scope to keep mouse listener active
-  private passthrough: AxioPassthrough;
+  private passthrough: AllioPassthrough;
   private svg: SVGSVGElement;
   private container: HTMLElement;
 
@@ -56,9 +56,9 @@ class AXGraph {
     this.svg = document.getElementById("graph") as unknown as SVGSVGElement;
     this.elementInfoPanel = document.getElementById("element-info");
     this.elementDetailsEl = document.getElementById("element-details");
-    this.axio = new AXIO();
+    this.allio = new Allio();
     // Declarative passthrough: elements with ax-io="opaque" capture, rest passes through
-    this.passthrough = new AxioPassthrough(this.axio);
+    this.passthrough = new AllioPassthrough(this.allio);
 
     this.createHoverOverlay();
     this.updateDimensions();
@@ -135,18 +135,18 @@ class AXGraph {
 
   private async init() {
     // Connect to AXIO
-    await this.axio.connect();
+    await this.allio.connect();
 
     // Listen for element events
-    this.axio.on("element:added", (data) => {
+    this.allio.on("element:added", (data) => {
       this.onElementAdded(data.element);
     });
 
-    this.axio.on("element:changed", (data) => {
+    this.allio.on("element:changed", (data) => {
       this.onElementChanged(data.element);
     });
 
-    this.axio.on("element:removed", (data) => {
+    this.allio.on("element:removed", (data) => {
       this.onElementRemoved(data.element_id);
     });
 
@@ -156,7 +156,7 @@ class AXGraph {
       if (e.target !== this.svg) return;
 
       try {
-        const element = await this.axio.elementAt(e.clientX, e.clientY);
+        const element = await this.allio.elementAt(e.clientX, e.clientY);
 
         // No tracked window at this position - not an error
         if (!element) return;
@@ -165,7 +165,7 @@ class AXGraph {
         if (element.is_fallback) {
           requestAnimationFrame(async () => {
             try {
-              const retried = await this.axio.elementAt(e.clientX, e.clientY);
+              const retried = await this.allio.elementAt(e.clientX, e.clientY);
               if (!retried) return;
               const { isNew } = this.addNode(retried);
               if (isNew) this.toast(`+ ${retried.role}`);
@@ -337,7 +337,7 @@ class AXGraph {
       let existingCount = 0;
 
       // Fetch children
-      const children = await this.axio.children(node.id);
+      const children = await this.allio.children(node.id);
       for (const child of children) {
         const { isNew } = this.addNode(child);
         if (isNew) newCount++;
@@ -346,7 +346,7 @@ class AXGraph {
 
       // Fetch parent (if not root)
       if (!node.element.is_root) {
-        const parent = await this.axio.parent(node.id);
+        const parent = await this.allio.parent(node.id);
         if (parent) {
           const { isNew } = this.addNode(parent);
           if (isNew) newCount++;
@@ -382,7 +382,7 @@ class AXGraph {
   /** Called on every simulation tick - only updates positions */
   private render() {
     // Hide all overlays if in passthrough mode
-    if (this.axio.passthrough) {
+    if (this.allio.passthrough) {
       this.hideBoundsOverlay();
       this.hideElementInfo();
     }
@@ -595,7 +595,7 @@ class AXGraph {
 
     // Refresh element data to get latest bounds
     try {
-      const fresh = await this.axio.refresh(node.element.id);
+      const fresh = await this.allio.refresh(node.element.id);
       node.element = fresh;
     } catch {
       // Element might be gone, use cached data
@@ -605,7 +605,7 @@ class AXGraph {
     if (this.hoveredNode === node) {
       this.updateElementInfo(node);
       // Only show bounds overlay if not in passthrough mode
-      if (!this.axio.passthrough) {
+      if (!this.allio.passthrough) {
         this.showBoundsOverlay(node);
       }
     }

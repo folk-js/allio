@@ -1,4 +1,4 @@
-import { AXIO, AX, AxioOcclusion, AxioPassthrough } from "@axio/client";
+import { Allio, AX, AllioOcclusion, AllioPassthrough } from "allio";
 
 type PortType = "input" | "output";
 
@@ -62,9 +62,9 @@ const dom = {
 };
 
 // Services
-let axio: AXIO;
-let occlusion: AxioOcclusion;
-let passthrough: AxioPassthrough;
+let allio: Allio;
+let occlusion: AllioOcclusion;
+let passthrough: AllioPassthrough;
 
 // Computed port positions (updated on render)
 const portPositions = new Map<string, PortPosition>();
@@ -72,31 +72,31 @@ const portPositions = new Map<string, PortPosition>();
 // --- Initialization ---
 
 async function init() {
-  axio = new AXIO();
-  occlusion = new AxioOcclusion(axio);
-  passthrough = new AxioPassthrough(axio);
+  allio = new Allio();
+  occlusion = new AllioOcclusion(allio);
+  passthrough = new AllioPassthrough(allio);
 
   createHoverOverlay();
   createDragOverlays();
   setupEventListeners();
 
-  await axio.connect();
+  await allio.connect();
   updateMenuBar();
 }
 
 function setupEventListeners() {
   // Window updates trigger re-render
   const render = () => renderAll();
-  axio.on("sync:init", render);
-  axio.on("window:added", render);
-  axio.on("window:removed", render);
-  axio.on("window:changed", render);
+  allio.on("sync:init", render);
+  allio.on("window:added", render);
+  allio.on("window:removed", render);
+  allio.on("window:changed", render);
 
   // Element value changes trigger propagation
-  axio.on("element:changed", ({ element }) => handleElementUpdate(element));
+  allio.on("element:changed", ({ element }) => handleElementUpdate(element));
 
   // Mouse tracking for connections, hover, and drag preview
-  axio.on("mouse:position", ({ x, y }) => {
+  allio.on("mouse:position", ({ x, y }) => {
     if (state.connectingFrom && dom.tempLine) {
       updateTempLine(x, y);
     }
@@ -163,7 +163,7 @@ async function onMouseDown(e: MouseEvent) {
   if (!window) return;
 
   try {
-    const element = await axio.elementAt(e.clientX, e.clientY);
+    const element = await allio.elementAt(e.clientX, e.clientY);
 
     // No tracked window at this position, or no bounds
     if (!element?.bounds) return;
@@ -174,7 +174,7 @@ async function onMouseDown(e: MouseEvent) {
       const y = e.clientY;
       requestAnimationFrame(async () => {
         try {
-          const retried = await axio.elementAt(x, y);
+          const retried = await allio.elementAt(x, y);
           if (!retried?.bounds) return;
 
           state.dragging = {
@@ -217,7 +217,7 @@ async function updateDragPreview(x: number, y: number) {
 
   // Check what element is under cursor
   try {
-    const targetElement = await axio.elementAt(x, y);
+    const targetElement = await allio.elementAt(x, y);
     const targetWindow = getWindowAt(x, y);
 
     // Skip fallback elements - next mouse move will retry naturally
@@ -293,12 +293,12 @@ async function completeDrag(isTransform: boolean) {
 
   if (!sourceExists) {
     createPortPair(sourceWindow.id, sourceElement, false);
-    axio.watch(sourceElement.id);
+    allio.watch(sourceElement.id);
   }
 
   if (!targetExists) {
     createPortPair(targetWindow.id, targetElement, isTransform);
-    axio.watch(targetElement.id);
+    allio.watch(targetElement.id);
   }
 
   // Find output port of source and input port of target
@@ -532,7 +532,7 @@ function deletePort(portId: string) {
   );
   if (!hasOtherPorts) {
     transformInputCache.delete(port.element.id);
-    axio.unwatch(port.element.id).catch(() => {});
+    allio.unwatch(port.element.id).catch(() => {});
   }
 
   redrawConnections();
@@ -813,7 +813,7 @@ function updatePortHover(x: number, y: number) {
 async function showHoverOverlay(port: Port) {
   // Refresh element data
   try {
-    port.element = await axio.refresh(port.element.id);
+    port.element = await allio.refresh(port.element.id);
   } catch {
     // Use cached data if refresh fails
   }
@@ -823,7 +823,7 @@ async function showHoverOverlay(port: Port) {
   if (!bounds || !dom.hoverOverlay || !dom.infoPanel) return;
 
   // Get window container to inherit its clip-path
-  const axWindow = axio.windows.get(port.windowId);
+  const axWindow = allio.windows.get(port.windowId);
   const container = dom.windowContainers.get(port.windowId);
   if (!axWindow || !container) return;
 
@@ -999,7 +999,7 @@ function handleElementUpdate(element: AX.Element) {
 
 async function reEvaluateTransform(inputPort: Port, inputValue: unknown) {
   try {
-    const freshElement = await axio.refresh(inputPort.element.id);
+    const freshElement = await allio.refresh(inputPort.element.id);
     const functionCode = freshElement.value?.value;
 
     if (typeof functionCode !== "string") return;
@@ -1055,7 +1055,7 @@ async function propagateThroughTransform(
   transformInputCache.set(targetPort.element.id, inputValue);
 
   try {
-    const freshElement = await axio.refresh(targetPort.element.id);
+    const freshElement = await allio.refresh(targetPort.element.id);
     const functionCode = freshElement.value?.value;
 
     if (typeof functionCode !== "string") {
@@ -1109,7 +1109,7 @@ function parseTransformFunction(code: string): (val: unknown) => unknown {
 async function writeValueToElement(element: AX.Element, value: unknown) {
   try {
     const primitive = typeof value === "bigint" ? Number(value) : value;
-    await axio.writeValue(element, primitive as string | number | boolean);
+    await allio.writeValue(element, primitive as string | number | boolean);
   } catch (err) {
     console.error("Failed to propagate:", err);
   }
@@ -1118,8 +1118,8 @@ async function writeValueToElement(element: AX.Element, value: unknown) {
 // --- Utilities ---
 
 function getWindowsSorted(): AX.Window[] {
-  return axio.zOrder
-    .map((id) => axio.windows.get(id))
+  return allio.zOrder
+    .map((id) => allio.windows.get(id))
     .filter((w): w is AX.Window => !!w);
 }
 

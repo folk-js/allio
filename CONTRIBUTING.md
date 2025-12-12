@@ -2,7 +2,7 @@
 
 1. Install [Node + NPM](https://nodejs.org/en/download)
 1. Install [Rust + Cargo](https://rust-lang.org/tools/install/)
-1. Clone the [repo](https://github.com/folk-js/axio)
+1. Clone the [repo](https://github.com/folk-js/allio)
 1. Run `npm i && npm run dev`
 
 ## MacOS

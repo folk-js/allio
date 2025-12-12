@@ -1,5 +1,5 @@
 /**
- * AXIO - Accessibility I/O Layer (TypeScript Client)
+ * Allio - Accessibility (A11y) I/O Layer (TypeScript Client)
  *
  * Mirrors Rust Registry via WebSocket events.
  * Elements are primary, trees are views.
@@ -110,7 +110,7 @@ type EventNamespace =
   | "mouse";
 type NamespaceEvents = { [N in EventNamespace]: [Event] };
 
-type AxioEvents = { [E in EventName]: [EventData<E>] } & NamespaceEvents;
+type AllioEvents = { [E in EventName]: [EventData<E>] } & NamespaceEvents;
 
 type Pending = {
   resolve: (r: unknown) => void;
@@ -120,7 +120,7 @@ type Pending = {
 
 type WatchCallback = (element: AX.Element) => void;
 
-export class AXIO extends EventEmitter<AxioEvents> {
+export class Allio extends EventEmitter<AllioEvents> {
   private ws: WebSocket | null = null;
   private requestId = 0;
   private pending = new Map<number, Pending>();
@@ -153,11 +153,11 @@ export class AXIO extends EventEmitter<AxioEvents> {
   }
 
   private log(...args: unknown[]) {
-    if (this.debug) console.log("[axio]", ...args);
+    if (this.debug) console.log("[allio]", ...args);
   }
 
   private logError(...args: unknown[]) {
-    if (this.debug) console.error("[axio]", ...args);
+    if (this.debug) console.error("[allio]", ...args);
   }
 
   // === Connection ===
@@ -289,9 +289,9 @@ export class AXIO extends EventEmitter<AxioEvents> {
    * Actions are platform-agnostic operations like press, showmenu, increment, etc.
    *
    * @example
-   * await axio.action(buttonId, 'press');
-   * await axio.action(sliderId, 'increment');
-   * await axio.action(menuId, 'showmenu');
+   * await allio.action(buttonId, 'press');
+   * await allio.action(sliderId, 'increment');
+   * await allio.action(menuId, 'showmenu');
    */
   action = (element_id: AX.ElementId, action: AX.Action) =>
     this.call("action", { element_id, action });

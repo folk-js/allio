@@ -1,4 +1,4 @@
-import { AXIO, AxioPassthrough } from "@axio/client";
+import { Allio, AllioPassthrough } from "allio";
 import {
   collisionFragmentShader,
   collisionVertexShader,
@@ -143,14 +143,14 @@ export class FolkSand extends HTMLElement {
   #shapeIndexBuffer!: WebGLBuffer;
   #shapeIndexCount = 0;
 
-  // Add AXIO client for window state
-  #axio: AXIO;
+  // Add Allio client for window state
+  #allio: Allio;
 
   onMaterialChange?: (type: number) => void;
 
   constructor() {
     super();
-    this.#axio = new AXIO();
+    this.#allio = new Allio();
   }
 
   connectedCallback(): void {
@@ -175,7 +175,7 @@ export class FolkSand extends HTMLElement {
 
   disconnectedCallback() {
     this.#detachEventListeners();
-    this.#axio.disconnect();
+    this.#allio.disconnect();
   }
 
   #initializeWebGL() {
@@ -900,21 +900,21 @@ export class FolkSand extends HTMLElement {
         this.#handleShapeTransform();
       };
 
-      this.#axio.on("sync:init", handleWindowUpdate);
-      this.#axio.on("window:added", handleWindowUpdate);
-      this.#axio.on("window:removed", handleWindowUpdate);
-      this.#axio.on("window:changed", handleWindowUpdate);
+      this.#allio.on("sync:init", handleWindowUpdate);
+      this.#allio.on("window:added", handleWindowUpdate);
+      this.#allio.on("window:removed", handleWindowUpdate);
+      this.#allio.on("window:changed", handleWindowUpdate);
 
       // Use "outside" mode: capture events in empty space (for drawing sand),
       // pass through when over windows (so clicks reach underlying apps)
-      new AxioPassthrough(this.#axio, { mode: "outside" });
+      new AllioPassthrough(this.#allio, { mode: "outside" });
 
-      await this.#axio.connect();
+      await this.#allio.connect();
 
       // Initial shape transform with current windows
       this.#handleShapeTransform();
     } catch (error) {
-      console.error("Failed to connect AXIO in folk-sand:", error);
+      console.error("Failed to connect Allio in folk-sand:", error);
     }
   }
 
@@ -923,8 +923,8 @@ export class FolkSand extends HTMLElement {
     const indices: number[] = [];
     let vertexOffset = 0;
 
-    // Use AXIO windows (always up-to-date)
-    this.#axio.windows.forEach((win, _id) => {
+    // Use Allio windows (always up-to-date)
+    this.#allio.windows.forEach((win, _id) => {
       const { x, y, w, h } = win.bounds;
 
       // Convert window coordinates to buffer coordinates

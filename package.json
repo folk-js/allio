@@ -1,5 +1,5 @@
 {
-  "name": "axio",
+  "name": "allio",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -7,12 +7,12 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "RUST_LOG=axio=warn tauri dev",
-    "dev:debug": "RUST_LOG=axio=debug tauri dev",
+    "dev": "RUST_LOG=allio=warn tauri dev",
+    "dev:debug": "RUST_LOG=allio=debug tauri dev",
     "build": "tsc && vite build",
     "check": "cargo check",
-    "docs": "cargo doc -p axio --no-deps --open",
-    "typegen": "rm -rf packages/axio-client/src/types/generated && cargo test -p axio -p axio-ws export_bindings"
+    "docs": "cargo doc -p allio --no-deps --open",
+    "typegen": "rm -rf packages/allio-client/src/types/generated && cargo test -p allio -p allio-ws export_bindings"
   },
   "dependencies": {
     "d3-force": "^3.0.0"

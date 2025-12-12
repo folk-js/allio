@@ -1,30 +1,30 @@
 /**
- * AxioOcclusion - CSS-driven window occlusion for overlay UIs
+ * AllioOcclusion - CSS-driven window occlusion for overlay UIs
  *
  * Creates shared SVG clipPath definitions based on window z-order.
  * Elements just reference their layer's clipPath for hardware-accelerated clipping.
  *
  * Usage:
- *   const occlusion = new AxioOcclusion(axio);
+ *   const occlusion = new AllioOcclusion(allio);
  *   // For positioned elements (window containers):
  *   container.style.clipPath = occlusion.getClipPath(windowId);
  *   // For absolute-positioned elements (SVG paths):
  *   path.style.clipPath = occlusion.getAbsoluteClipPath(windowId);
  */
 
-import type { AXIO, AX } from "./index";
+import type { Allio, AX } from "./index";
 
 type Rect = { x: number; y: number; w: number; h: number };
 
-export class AxioOcclusion {
-  private axio: AXIO;
+export class AllioOcclusion {
+  private allio: Allio;
   private svgDefs: SVGDefsElement;
   private svg: SVGSVGElement;
   private clipPaths = new Map<AX.WindowId, SVGClipPathElement>();
   private absoluteClipPaths = new Map<AX.WindowId, SVGClipPathElement>();
 
-  constructor(axio: AXIO) {
-    this.axio = axio;
+  constructor(allio: Allio) {
+    this.allio = allio;
 
     // Create hidden SVG for clipPath definitions
     this.svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -41,10 +41,10 @@ export class AxioOcclusion {
     document.body.appendChild(this.svg);
 
     // Listen to window events to update clipPaths
-    this.axio.on("sync:init", () => this.update());
-    this.axio.on("window:added", () => this.update());
-    this.axio.on("window:changed", () => this.update());
-    this.axio.on("window:removed", () => this.update());
+    this.allio.on("sync:init", () => this.update());
+    this.allio.on("window:added", () => this.update());
+    this.allio.on("window:changed", () => this.update());
+    this.allio.on("window:removed", () => this.update());
     this.update();
   }
 
@@ -64,7 +64,7 @@ export class AxioOcclusion {
 
   /** Get z-index for a window (higher = more in front) */
   getZIndex(windowId: AX.WindowId): number {
-    const index = this.axio.zOrder.indexOf(windowId);
+    const index = this.allio.zOrder.indexOf(windowId);
     if (index === -1) return 0;
     return 1000 - index;
   }
@@ -99,8 +99,8 @@ export class AxioOcclusion {
 
   /** Get windows sorted by z-order (frontmost first) */
   private getWindows(): AX.Window[] {
-    return this.axio.zOrder
-      .map((id) => this.axio.windows.get(id))
+    return this.allio.zOrder
+      .map((id) => this.allio.windows.get(id))
       .filter((w): w is AX.Window => !!w);
   }
 

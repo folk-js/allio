@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/axio", "crates/axio-ws", "src-tauri"]
+members = ["crates/allio", "crates/allio-ws", "src-tauri"]
 
 [workspace.lints.rust]
 future_incompatible = { level = "warn", priority = -1 }

@@ -1,4 +1,4 @@
-/*! AXIO JSON-RPC over WebSocket. */
+/*! Allio JSON-RPC over WebSocket. */
 
 mod rpc;
 mod server;

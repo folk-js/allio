@@ -4,8 +4,8 @@ RPC request/response types and dispatch.
 
 #![allow(missing_docs)]
 
-use axio::a11y::{Action, Value as AXValue};
-use axio::{Allio, Element, ElementId, Snapshot, WindowId};
+use allio::a11y::{Action, Value as AXValue};
+use allio::{Allio, Element, ElementId, Snapshot, WindowId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use ts_rs::TS;
@@ -70,11 +70,11 @@ pub enum RpcResponse {
   Null,
 }
 
-pub fn dispatch_json(axio: &Allio, method: &str, args: &JsonValue) -> JsonValue {
+pub fn dispatch_json(allio: &Allio, method: &str, args: &JsonValue) -> JsonValue {
   let request_value = json!({ "method": method, "args": args });
 
   match serde_json::from_value::<RpcRequest>(request_value) {
-    Ok(request) => match dispatch(axio, request) {
+    Ok(request) => match dispatch(allio, request) {
       Ok(response) => json!({ "result": response }),
       Err(e) => {
         log::warn!("[rpc] {method} failed: {e}");
@@ -88,27 +88,27 @@ pub fn dispatch_json(axio: &Allio, method: &str, args: &JsonValue) -> JsonValue 
   }
 }
 
-pub fn dispatch(axio: &Allio, request: RpcRequest) -> Result<RpcResponse, String> {
+pub fn dispatch(allio: &Allio, request: RpcRequest) -> Result<RpcResponse, String> {
   match request {
     RpcRequest::Snapshot => {
-      let snapshot = axio.snapshot();
+      let snapshot = allio.snapshot();
       Ok(RpcResponse::Snapshot(Box::new(snapshot)))
     }
 
     RpcRequest::ElementAt { x, y } => {
-      let element = axio.element_at(x, y).map_err(|e| e.to_string())?;
+      let element = allio.element_at(x, y).map_err(|e| e.to_string())?;
       Ok(RpcResponse::OptionalElement(element.map(Box::new)))
     }
 
     RpcRequest::Get { element_id } => {
-      let element = axio
-        .get(element_id, axio::Recency::Any)
+      let element = allio
+        .get(element_id, allio::Recency::Any)
         .map_err(|e| e.to_string())?;
       Ok(RpcResponse::Element(Box::new(element)))
     }
 
     RpcRequest::WindowRoot { window_id } => {
-      let element = axio
+      let element = allio
         .window_root(window_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Window not found or has no accessibility: {window_id}"))?;
@@ -119,47 +119,47 @@ pub fn dispatch(axio: &Allio, request: RpcRequest) -> Result<RpcResponse, String
       element_id,
       max_children: _max_children,
     } => {
-      let children = axio
-        .children(element_id, axio::Recency::Current)
+      let children = allio
+        .children(element_id, allio::Recency::Current)
         .map_err(|e| e.to_string())?;
       Ok(RpcResponse::Elements(children))
     }
 
     RpcRequest::Parent { element_id } => {
-      let parent = axio
-        .parent(element_id, axio::Recency::Current)
+      let parent = allio
+        .parent(element_id, allio::Recency::Current)
         .map_err(|e| e.to_string())?;
       Ok(RpcResponse::OptionalElement(parent.map(Box::new)))
     }
 
     RpcRequest::Refresh { element_id } => {
-      let element = axio
-        .get(element_id, axio::Recency::Current)
+      let element = allio
+        .get(element_id, allio::Recency::Current)
         .map_err(|e| e.to_string())?;
       Ok(RpcResponse::Element(Box::new(element)))
     }
 
     RpcRequest::Write { element_id, value } => {
-      axio
+      allio
         .set_value(element_id, &value)
         .map_err(|e| e.to_string())?;
       Ok(RpcResponse::Null)
     }
 
     RpcRequest::Action { element_id, action } => {
-      axio
+      allio
         .perform_action(element_id, action)
         .map_err(|e| e.to_string())?;
       Ok(RpcResponse::Null)
     }
 
     RpcRequest::Watch { element_id } => {
-      axio.watch(element_id).map_err(|e| e.to_string())?;
+      allio.watch(element_id).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Null)
     }
 
     RpcRequest::Unwatch { element_id } => {
-      axio.unwatch(element_id).map_err(|e| e.to_string())?;
+      allio.unwatch(element_id).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Null)
     }
   }

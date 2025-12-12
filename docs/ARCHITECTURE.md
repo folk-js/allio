@@ -1,8 +1,8 @@
-# Axio Architecture
+# Allio Architecture
 
-## What is Axio?
+## What is Allio?
 
-At its core, Axio is:
+At its core, Allio is:
 
 1. A **cache** of accessibility state from the OS
 2. A **query interface** to that cache
@@ -48,7 +48,7 @@ This enables callers to make explicit tradeoffs between latency and recency.
 
 ```
 ┌─────────────────────────────────────────────────┐
-│              Public API (Axio)                  │
+│              Public API (Allio)                 │
 │   get, children, parent, element_at, etc.       │
 └─────────────────────┬───────────────────────────┘
                       │
@@ -67,7 +67,7 @@ This enables callers to make explicit tradeoffs between latency and recency.
 
 ### Layer Responsibilities
 
-**Axio (Coordinator)**
+**Allio (Coordinator)**
 
 - Public API for consumers
 - Orchestrates Registry + Platform calls
@@ -88,9 +88,9 @@ This enables callers to make explicit tradeoffs between latency and recency.
 - Trait-based abstraction over OS APIs
 - macOS implementation via Accessibility APIs
 - Handles all FFI and unsafe code
-- Callbacks go through `EventHandler` trait (implemented by Axio)
+- Callbacks go through `EventHandler` trait (implemented by Allio)
 
-### Platform/Axio Decoupling
+### Platform/Allio Decoupling
 
 Platform callbacks use the `EventHandler` trait:
 
@@ -109,7 +109,7 @@ pub enum ElementEvent<H> {
 }
 ```
 
-Axio implements this trait, keeping Platform unaware of Axio internals.
+Allio implements this trait, keeping Platform unaware of Allio internals.
 
 ## Element Identity
 
@@ -164,8 +164,8 @@ impl Registry {
 ### Construction & Events
 
 ```rust
-pub fn new() -> AxioResult<Self>;
-pub fn builder() -> AxioBuilder;  // .exclude_pid(u32).build()
+pub fn new() -> AllioResult<Self>;
+pub fn builder() -> AllioBuilder;  // .exclude_pid(u32).build()
 pub fn has_permissions() -> bool;
 pub fn subscribe(&self) -> Receiver<Event>;
 ```
@@ -274,10 +274,10 @@ Because Registry owns event emission:
 ## File Structure
 
 ```
-crates/axio/src/
+crates/allio/src/
 ├── lib.rs              # Re-exports only
 ├── core/
-│   ├── mod.rs          # Axio struct, construction, EventHandler impl
+│   ├── mod.rs          # Allio struct, construction, EventHandler impl
 │   ├── queries.rs      # get, children, parent, element_at, etc.
 │   ├── actions.rs      # set_value, perform_action (write to OS)
 │   ├── sync.rs         # sync_windows, sync_mouse (bulk updates from polling)
@@ -311,7 +311,7 @@ crates/axio/src/
 | **get(id, recency)**     | Element retrieval with recency control              |
 | **Handle**               | OS reference, used as HashMap key for deduplication |
 | **ElementId**            | Our stable ID given to clients                      |
-| **EventHandler**         | Trait for OS notifications → Axio                   |
+| **EventHandler**         | Trait for OS notifications → Allio                  |
 | **upsert/update/remove** | Registry mutation operations                        |
 | **watch/unwatch**        | Element change subscriptions                        |
 | **sync\_**               | Bulk updates from polling                           |

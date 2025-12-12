@@ -34,12 +34,6 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
-  // Path aliases
-  resolve: {
-    alias: {
-      "@axio/client": path.resolve(__dirname, "packages/axio-client/src"),
-    },
-  },
   // Build config for multi-page app
   build: {
     outDir: path.resolve(__dirname, "dist"),

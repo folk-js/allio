@@ -1,4 +1,4 @@
-import { AXIO, AX } from "@axio/client";
+import { Allio, AX } from "allio";
 
 interface Rectangle {
   x: number;
@@ -12,7 +12,7 @@ interface Point {
 }
 
 class WindowOverlay {
-  private axio = new AXIO();
+  private allio = new Allio();
   private container = document.getElementById("windowContainer")!;
   private labels = new Map<AX.WindowId, HTMLElement>();
   private svg: SVGSVGElement;
@@ -39,12 +39,12 @@ class WindowOverlay {
   }
 
   private async connect() {
-    await this.axio.connect();
+    await this.allio.connect();
 
-    const render = () => this.render([...this.axio.windows.values()]);
+    const render = () => this.render([...this.allio.windows.values()]);
     render();
     (["window:added", "window:changed", "window:removed"] as const).forEach(
-      (e) => this.axio.on(e, render)
+      (e) => this.allio.on(e, render)
     );
   }
 

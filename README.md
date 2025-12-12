@@ -9,7 +9,7 @@ This lets you augment existing interfaces, link apps together, use window geomet
 
 For more background check out our [paper](https://folkjs.org/live-2025/).
 
-![AXIO architecture diagram](/docs/axio_architecture.png)
+![Allio architecture diagram](/docs/allio_architecture.png)
 
 Check out the [Contributing Guide](/CONTRIBUTING.md) to setting up the repo.
 

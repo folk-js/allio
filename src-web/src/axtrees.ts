@@ -1,13 +1,13 @@
 /**
  * AXTree Overlay - Accessibility tree viewer
- * Uses the new AXIO architecture: elements are primary, trees are views.
+ * Uses the new Allio architecture: elements are primary, trees are views.
  */
 
-import { AXIO, AX, AxioPassthrough } from "@axio/client";
+import { Allio, AX, AllioPassthrough } from "allio";
 
 class AXTreeOverlay {
   private container: HTMLElement;
-  private axio: AXIO;
+  private allio: Allio;
 
   // Minimal local state
   private expanded = new Set<AX.ElementId>();
@@ -18,9 +18,9 @@ class AXTreeOverlay {
 
   constructor() {
     this.container = document.getElementById("windowContainer")!;
-    this.axio = new AXIO();
-    // Declarative passthrough: axio-opaque elements capture, rest passes through
-    new AxioPassthrough(this.axio);
+    this.allio = new Allio();
+    // Declarative passthrough: allio-opaque elements capture, rest passes through
+    new AllioPassthrough(this.allio);
     this.init();
   }
 
@@ -28,15 +28,15 @@ class AXTreeOverlay {
     const render = () => this.render();
 
     // Fetch root when we get initial sync data
-    this.axio.on("sync:init", async () => {
-      if (this.axio.focusedWindow) {
-        await this.fetchWindowRoot(this.axio.focusedWindow);
+    this.allio.on("sync:init", async () => {
+      if (this.allio.focusedWindow) {
+        await this.fetchWindowRoot(this.allio.focusedWindow);
       }
       render();
     });
 
     // Fetch root elements when active window changes
-    this.axio.on("focus:window", async (data) => {
+    this.allio.on("focus:window", async (data) => {
       if (data.window_id) {
         await this.fetchWindowRoot(data.window_id);
         render();
@@ -44,15 +44,15 @@ class AXTreeOverlay {
     });
 
     // Fetch root when a new window is added (in case it's focused)
-    this.axio.on("window:added", async () => {
-      if (this.axio.focusedWindow) {
-        await this.fetchWindowRoot(this.axio.focusedWindow);
+    this.allio.on("window:added", async () => {
+      if (this.allio.focusedWindow) {
+        await this.fetchWindowRoot(this.allio.focusedWindow);
       }
       render();
     });
 
     // Clean up tracked roots when windows are removed
-    this.axio.on("window:removed", (data) => {
+    this.allio.on("window:removed", (data) => {
       this.fetchedRoots.delete(data.window_id);
       render();
     });
@@ -69,22 +69,22 @@ class AXTreeOverlay {
         "element:changed",
         "element:removed",
       ] as const
-    ).forEach((e) => this.axio.on(e, render));
+    ).forEach((e) => this.allio.on(e, render));
 
     // Clickthrough is now handled declaratively by PointerPassthroughManager
     // (tree element is marked with axio-opaque attribute)
 
-    await this.axio.connect();
+    await this.allio.connect();
   }
 
   /** Fetch root element and its immediate children for a window */
   private async fetchWindowRoot(windowId: AX.WindowId): Promise<void> {
     try {
-      const root = await this.axio.windowRoot(windowId);
+      const root = await this.allio.windowRoot(windowId);
       if (root) {
         this.fetchedRoots.add(windowId);
         // Also fetch immediate children so tree is usable
-        await this.axio.children(root.id);
+        await this.allio.children(root.id);
       }
     } catch (err) {
       console.error("Failed to fetch window root:", err);
@@ -92,7 +92,7 @@ class AXTreeOverlay {
   }
 
   private render() {
-    const win = this.axio.focused;
+    const win = this.allio.focused;
 
     // No focused window - remove tree
     if (!win) {
@@ -102,7 +102,7 @@ class AXTreeOverlay {
     }
 
     // Get the root element for this window (elements with root=true)
-    const rootElement = this.axio.getRootElement(win.id);
+    const rootElement = this.allio.getRootElement(win.id);
 
     // Create tree container if needed
     if (!this.treeEl) {
@@ -144,7 +144,7 @@ class AXTreeOverlay {
   }
 
   private renderNode(el: AX.Element, depth: number): string {
-    const children = this.axio.getChildren(el);
+    const children = this.allio.getChildren(el);
     const notDiscovered = el.children === null;
     // Has children if IDs exist (even if not yet loaded into elements Map)
     const hasChildIds = (el.children?.length ?? 0) > 0;
@@ -152,7 +152,7 @@ class AXTreeOverlay {
     const isExpanded = this.expanded.has(el.id);
     const isLoading =
       this.expanded.has(el.id) && hasChildIds && !hasLoadedChildren;
-    const isWatched = this.axio.watched.has(el.id);
+    const isWatched = this.allio.watched.has(el.id);
 
     // Indicator: + (not discovered), ⋯ (loading), ▸/▾ (expand/collapse), •/◉ (leaf)
     let indicator = isWatched ? "◉" : "•";
@@ -253,10 +253,10 @@ class AXTreeOverlay {
 
       if (action === "toggle") {
         e.stopPropagation();
-        const el = this.axio.get(id);
+        const el = this.allio.get(id);
         if (!el) return;
 
-        const loadedChildren = this.axio.getChildren(el);
+        const loadedChildren = this.allio.getChildren(el);
         const hasChildIds = (el.children?.length ?? 0) > 0;
         const needsLoad =
           el.children === null || (hasChildIds && loadedChildren.length === 0);
@@ -272,7 +272,7 @@ class AXTreeOverlay {
 
           if (needsLoad) {
             try {
-              await this.axio.children(id);
+              await this.allio.children(id);
             } catch (err) {
               console.error("Failed to load children:", err);
               this.expanded.delete(id);
@@ -290,10 +290,10 @@ class AXTreeOverlay {
         e.preventDefault();
         const node = target.closest(".tree-node") as HTMLElement;
         if (node?.dataset.id) {
-          const el = this.axio.get(parseInt(node.dataset.id!));
+          const el = this.allio.get(parseInt(node.dataset.id!));
           if (el) {
             try {
-              await this.axio.writeValue(el, target.value);
+              await this.allio.writeValue(el, target.value);
               console.log(`✅ Wrote "${target.value}"`);
             } catch (err) {
               console.error("Failed to write:", err);
@@ -317,7 +317,7 @@ class AXTreeOverlay {
       ) as HTMLElement;
       if (node?.dataset.id) {
         try {
-          const el = await this.axio.refresh(parseInt(node.dataset.id!));
+          const el = await this.allio.refresh(parseInt(node.dataset.id!));
           if (el.bounds) {
             const { x, y, w, h } = el.bounds;
             this.showOutline(x, y, w, h);

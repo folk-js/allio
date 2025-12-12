@@ -1,11 +1,11 @@
 [package]
-name = "axio-ws"
+name = "allio-ws"
 version = "0.1.0"
 edition = "2021"
-description = "WebSocket server for AXIO accessibility layer"
+description = "WebSocket server for Allio accessibility layer"
 authors = ["Orion Reed"]
 license = "MIT"
-repository = "https://github.com/folkjs/axio"
+repository = "https://github.com/folk-js/allio"
 readme = "../../README.md"
 keywords = ["accessibility", "websocket", "rpc"]
 categories = ["accessibility", "network-programming"]
@@ -14,7 +14,7 @@ categories = ["accessibility", "network-programming"]
 workspace = true
 
 [dependencies]
-axio = { path = "../axio" }
+allio = { path = "../allio" }
 axum = { version = "0.7", features = ["ws"] }
 log = "0.4"
 serde = { version = "1", features = ["derive"] }

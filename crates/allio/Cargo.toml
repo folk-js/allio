@@ -1,11 +1,11 @@
 [package]
-name = "axio"
+name = "allio"
 version = "0.1.0"
 edition = "2021"
-description = "Accessibility I/O - window tracking and accessibility API"
+description = "Accessibility (A11y) I/O layer"
 authors = ["Orion Reed"]
 license = "MIT"
-repository = "https://github.com/folkjs/axio"
+repository = "https://github.com/folk-js/allio"
 readme = "README.md"
 keywords = ["accessibility", "interoperability", "ui-automation"]
 categories = ["accessibility", "api-bindings"]

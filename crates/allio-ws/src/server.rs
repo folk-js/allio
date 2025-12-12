@@ -2,7 +2,7 @@
 WebSocket server implementation.
 */
 
-use axio::{Allio, Event};
+use allio::{Allio, Event};
 use axum::{
   extract::{
     ws::{Message, WebSocket, WebSocketUpgrade},
@@ -116,8 +116,8 @@ async fn websocket_handler(
 
 async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
   let mut rx = ws_state.json_sender.subscribe();
-  let axio_for_init = ws_state.axio.clone();
-  let init_result = tokio::task::spawn_blocking(move || axio_for_init.snapshot()).await;
+  let allio_for_init = ws_state.axio.clone();
+  let init_result = tokio::task::spawn_blocking(move || allio_for_init.snapshot()).await;
 
   let Ok(init) = init_result else {
     return;
@@ -199,9 +199,9 @@ async fn handle_request_async(request: &str, ws_state: &WebSocketState) -> Strin
     }
   }
 
-  let axio = ws_state.axio.clone();
+  let allio = ws_state.axio.clone();
   let dispatch_result =
-    tokio::task::spawn_blocking(move || crate::rpc::dispatch_json(&axio, &method, &args)).await;
+    tokio::task::spawn_blocking(move || crate::rpc::dispatch_json(&allio, &method, &args)).await;
 
   let mut response = match dispatch_result {
     Ok(r) => r,

@@ -18,6 +18,59 @@ dependencies = [
 ]
 
 [[package]]
+name = "allio"
+version = "0.1.0"
+dependencies = [
+ "async-broadcast",
+ "derive_more 1.0.0",
+ "log",
+ "objc2 0.6.3",
+ "objc2-app-kit",
+ "objc2-application-services",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-core-video",
+ "objc2-foundation 0.3.2",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "ts-rs",
+]
+
+[[package]]
+name = "allio-app"
+version = "0.0.1"
+dependencies = [
+ "allio",
+ "allio-ws",
+ "core-graphics 0.23.2",
+ "env_logger",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-nspanel",
+ "tauri-plugin-dialog",
+ "tauri-plugin-global-shortcut",
+ "tauri-plugin-shell",
+ "tokio",
+]
+
+[[package]]
+name = "allio-ws"
+version = "0.1.0"
+dependencies = [
+ "allio",
+ "axum",
+ "log",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-http 0.5.2",
+ "ts-rs",
+]
+
+[[package]]
 name = "alloc-no-stdlib"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -186,59 +239,6 @@ name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
-
-[[package]]
-name = "axio"
-version = "0.1.0"
-dependencies = [
- "async-broadcast",
- "derive_more 1.0.0",
- "log",
- "objc2 0.6.3",
- "objc2-app-kit",
- "objc2-application-services",
- "objc2-core-foundation",
- "objc2-core-graphics",
- "objc2-core-video",
- "objc2-foundation 0.3.2",
- "parking_lot",
- "serde",
- "serde_json",
- "thiserror 2.0.17",
- "ts-rs",
-]
-
-[[package]]
-name = "axio-app"
-version = "0.0.1"
-dependencies = [
- "axio",
- "axio-ws",
- "core-graphics 0.23.2",
- "env_logger",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-nspanel",
- "tauri-plugin-dialog",
- "tauri-plugin-global-shortcut",
- "tauri-plugin-shell",
- "tokio",
-]
-
-[[package]]
-name = "axio-ws"
-version = "0.1.0"
-dependencies = [
- "axio",
- "axum",
- "log",
- "serde",
- "serde_json",
- "tokio",
- "tower-http 0.5.2",
- "ts-rs",
-]
 
 [[package]]
 name = "axum"
