@@ -17,18 +17,40 @@ use crate::types::{ElementId, Event};
 
 impl Registry {
   /// Insert or update an element by handle.
+  ///
+  /// If the element exists with the same parent, updates it in place.
+  ///
+  /// If the element exists with a DIFFERENT parent (platform reparented it),
+  /// destroys the old element and its subtree, then creates a new element.
+  /// Our API doesn't support reparenting - element IDs have stable parents.
   pub(crate) fn upsert_element(&mut self, elem: CachedElement) -> ElementId {
     let handle = elem.handle.clone();
     let parent_handle = elem.parent_handle.clone();
     let is_root = elem.is_root;
 
     if let Some(&existing_id) = self.handle_to_id.get(&handle) {
-      let mut fresh_elem = elem;
-      fresh_elem.id = existing_id;
-      self.update_element(existing_id, fresh_elem);
-      return existing_id;
+      // Check if parent changed (platform reparented this element)
+      let parent_changed = self
+        .elements
+        .get(&existing_id)
+        .is_some_and(|cached| !is_root && cached.parent_handle != parent_handle);
+
+      if parent_changed {
+        // Parent changed = element was reparented by platform.
+        // Our API doesn't support reparenting, so destroy old element and subtree,
+        // then create as new element with new ID.
+        self.remove_element(existing_id);
+        // Fall through to create new element below
+      } else {
+        // Same parent - just update in place
+        let mut fresh_elem = elem;
+        fresh_elem.id = existing_id;
+        self.update_element(existing_id, fresh_elem);
+        return existing_id;
+      }
     }
 
+    // Create new element (either first time, or after reparent-destroy)
     let element_id = elem.id;
 
     self.handle_to_id.insert(handle.clone(), element_id);
@@ -144,6 +166,21 @@ impl Registry {
     let old_children = self.tree.children(id);
     if old_children == valid_children {
       return;
+    }
+
+    // Clear children from waiting_for_parent to prevent orphan resolution
+    // from trying to re-link them to a different parent later.
+    for &child_id in &valid_children {
+      if let Some(elem) = self.elements.get(&child_id) {
+        if let Some(ref parent_handle) = elem.parent_handle {
+          if let Some(waiting) = self.waiting_for_parent.get_mut(parent_handle) {
+            waiting.retain(|&wid| wid != child_id);
+            if waiting.is_empty() {
+              self.waiting_for_parent.remove(parent_handle);
+            }
+          }
+        }
+      }
     }
 
     self.tree.set_children(id, valid_children);

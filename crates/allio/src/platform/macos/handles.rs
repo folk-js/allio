@@ -68,12 +68,12 @@ impl ElementHandle {
 
   /// Compare with another handle using `CFEqual` (local, no IPC).
   pub(crate) fn cf_equal(&self, other: &Self) -> bool {
-    unsafe {
-      CFEqual(
-        (self.inner() as *const AXUIElement).cast::<c_void>(),
-        (other.inner() as *const AXUIElement).cast::<c_void>(),
-      ) != 0
-    }
+    // IMPORTANT: Use as_ptr() to get the actual CF pointer, not a pointer to the wrapper struct.
+    let self_ptr = CFRetained::as_ptr(&self.inner).as_ptr().cast::<c_void>();
+    let other_ptr = CFRetained::as_ptr(&other.inner).as_ptr().cast::<c_void>();
+    let result = unsafe { CFEqual(self_ptr, other_ptr) != 0 };
+
+    result
   }
 
   /// Get string attribute by name.
@@ -474,7 +474,20 @@ impl PartialEq for ElementHandle {
     if self.cached_hash != other.cached_hash {
       return false;
     }
-    self.cf_equal(other)
+    let result = self.cf_equal(other);
+    // Log hash collisions where CFEqual determines the outcome
+    if result {
+      log::trace!(
+        "ElementHandle::eq: hash={:#x} matched, CFEqual=true (same element)",
+        self.cached_hash
+      );
+    } else {
+      log::debug!(
+        "ElementHandle::eq: hash={:#x} collision, CFEqual=false (different elements)",
+        self.cached_hash
+      );
+    }
+    result
   }
 }
 

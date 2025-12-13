@@ -305,6 +305,7 @@ impl Allio {
     let mut child_ids = Vec::with_capacity(cap);
 
     for child_handle in child_handles.into_iter().take(max_children) {
+      // upsert_element will detect parent changes and reparent in the tree
       let child_id = self.upsert_from_handle(child_handle, window_id, ProcessId(pid));
       if let Some(child) = self.read(|r| super::build_element(r, child_id)) {
         child_ids.push(child.id);

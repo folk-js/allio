@@ -39,9 +39,7 @@ pub(crate) fn enable_accessibility_for_pid(pid: crate::ProcessId) {
   unsafe {
     let result = app_el.set_attribute_value(&attr_name, value);
 
-    if result == AXError::Success {
-      log::debug!("Enabled accessibility for PID {raw_pid}");
-    } else if result != AXError::AttributeUnsupported {
+    if !matches!(result, AXError::Success | AXError::AttributeUnsupported) {
       log::debug!("Failed to enable accessibility for PID {raw_pid} (error: {result:?})");
     }
   }

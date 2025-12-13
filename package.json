@@ -7,7 +7,7 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "RUST_LOG=allio=warn tauri dev",
+    "dev": "RUST_LOG=allio=debug tauri dev",
     "dev:debug": "RUST_LOG=allio=debug tauri dev",
     "build": "tsc && vite build",
     "check": "cargo check",
