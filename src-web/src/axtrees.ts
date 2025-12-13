@@ -3,7 +3,7 @@
  * Uses the new Allio architecture: elements are primary, trees are views.
  */
 
-import { Allio, AX, AllioPassthrough } from "allio";
+import { Allio, AX, AllioPassthrough, accepts } from "allio";
 
 class AXTreeOverlay {
   private container: HTMLElement;
@@ -139,11 +139,11 @@ class AXTreeOverlay {
     `;
   }
 
-  private renderNodes(elements: AX.Element[], depth = 0): string {
+  private renderNodes(elements: AX.TypedElement[], depth = 0): string {
     return elements.map((el) => this.renderNode(el, depth)).join("");
   }
 
-  private renderNode(el: AX.Element, depth: number): string {
+  private renderNode(el: AX.TypedElement, depth: number): string {
     const children = this.allio.getChildren(el);
     const notDiscovered = el.children === null;
     // Has children if IDs exist (even if not yet loaded into elements Map)
@@ -169,10 +169,7 @@ class AXTreeOverlay {
 
     // Count
     const count = notDiscovered ? "?" : hasChildIds ? el.children!.length : 0;
-    const isTextInput =
-      el.role === "textfield" ||
-      el.role === "searchfield" ||
-      el.role === "textarea";
+    const isTextInput = accepts(el, "string");
 
     return `
       <div class="tree-node" data-id="${el.id}">
@@ -291,9 +288,9 @@ class AXTreeOverlay {
         const node = target.closest(".tree-node") as HTMLElement;
         if (node?.dataset.id) {
           const el = this.allio.get(parseInt(node.dataset.id!));
-          if (el) {
+          if (el && accepts(el, "string")) {
             try {
-              await this.allio.writeValue(el, target.value);
+              await this.allio.set(el, target.value);
               console.log(`✅ Wrote "${target.value}"`);
             } catch (err) {
               console.error("Failed to write:", err);

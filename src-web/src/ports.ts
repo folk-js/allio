@@ -1,11 +1,11 @@
-import { Allio, AX, AllioOcclusion, AllioPassthrough } from "allio";
+import { Allio, AX, AllioOcclusion, AllioPassthrough, accepts } from "allio";
 
 type PortType = "input" | "output";
 
 interface Port {
   id: string;
   windowId: AX.WindowId;
-  element: AX.Element;
+  element: AX.TypedElement;
   type: PortType;
   isTransform: boolean;
 }
@@ -22,9 +22,9 @@ interface PortPosition {
 }
 
 interface DragState {
-  sourceElement: AX.Element;
+  sourceElement: AX.TypedElement;
   sourceWindow: AX.Window;
-  targetElement: AX.Element | null;
+  targetElement: AX.TypedElement | null;
   targetWindow: AX.Window | null;
 }
 
@@ -93,7 +93,9 @@ function setupEventListeners() {
   allio.on("window:changed", render);
 
   // Element value changes trigger propagation
-  allio.on("element:changed", ({ element }) => handleElementUpdate(element));
+  allio.on("element:changed", ({ element }) =>
+    handleElementUpdate(element as AX.TypedElement)
+  );
 
   // Mouse tracking for connections, hover, and drag preview
   allio.on("mouse:position", ({ x, y }) => {
@@ -374,7 +376,7 @@ function createDragOverlays() {
   document.body.append(dom.dragSourceOverlay, dom.dragTargetOverlay);
 }
 
-function showDragSource(element: AX.Element) {
+function showDragSource(element: AX.TypedElement) {
   if (!dom.dragSourceOverlay || !element.bounds || !state.dragging) return;
   const { x, y, w, h } = element.bounds;
   const window = state.dragging.sourceWindow;
@@ -398,7 +400,7 @@ function hideDragSource() {
   if (dom.dragSourceOverlay) dom.dragSourceOverlay.style.display = "none";
 }
 
-function showDragTarget(element: AX.Element) {
+function showDragTarget(element: AX.TypedElement) {
   if (!dom.dragTargetOverlay || !element.bounds) return;
   const targetWindow = state.dragging?.targetWindow;
   if (!targetWindow) return;
@@ -438,7 +440,7 @@ function hideDragLine() {
 
 function createPortPair(
   windowId: AX.WindowId,
-  element: AX.Element,
+  element: AX.TypedElement,
   isTransform: boolean
 ) {
   // Skip if ports already exist for this element
@@ -860,7 +862,10 @@ async function showHoverOverlay(port: Port) {
   drawWiringLine(port, bounds);
 }
 
-function buildInfoPanelHtml(element: AX.Element, isTransform: boolean): string {
+function buildInfoPanelHtml(
+  element: AX.TypedElement,
+  isTransform: boolean
+): string {
   const lines: string[] = [];
 
   lines.push(
@@ -972,7 +977,7 @@ function clearHoverOverlay() {
 
 // --- Value Propagation ---
 
-function handleElementUpdate(element: AX.Element) {
+function handleElementUpdate(element: AX.TypedElement) {
   for (const port of state.ports.values()) {
     if (port.element.id === element.id) {
       port.element = element;
@@ -1106,10 +1111,15 @@ function parseTransformFunction(code: string): (val: unknown) => unknown {
   return new Function("val", cleanCode) as (val: unknown) => unknown;
 }
 
-async function writeValueToElement(element: AX.Element, value: unknown) {
+async function writeValueToElement(element: AX.TypedElement, value: unknown) {
   try {
-    const primitive = typeof value === "bigint" ? Number(value) : value;
-    await allio.writeValue(element, primitive as string | number | boolean);
+    if (accepts(element, "string")) {
+      await allio.set(element, String(value));
+    } else if (accepts(element, "number")) {
+      await allio.set(element, Number(value));
+    } else if (accepts(element, "boolean")) {
+      await allio.set(element, Boolean(value));
+    }
   } catch (err) {
     console.error("Failed to propagate:", err);
   }

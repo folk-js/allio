@@ -7,70 +7,14 @@
 
 import EventEmitter from "eventemitter3";
 import type { RpcRequest, AX } from "./types";
-
-// === Role-based type utilities ===
-
-const STRING_ROLES = new Set([
-  "textfield",
-  "textarea",
-  "searchfield",
-  "combobox",
-]);
-const BOOLEAN_ROLES = new Set(["checkbox", "switch", "radiobutton"]);
-const NUMBER_ROLES = new Set(["slider", "progressbar", "stepper"]);
-const INTEGER_ROLES = new Set(["stepper"]); // Subset of NUMBER_ROLES that expect integers
-
-/** Check if element expects string values */
-export function isStringElement(el: AX.Element): boolean {
-  return STRING_ROLES.has(el.role);
-}
-
-/** Check if element expects boolean values */
-export function isBooleanElement(el: AX.Element): boolean {
-  return BOOLEAN_ROLES.has(el.role);
-}
-
-/** Check if element expects numeric values */
-export function isNumberElement(el: AX.Element): boolean {
-  return NUMBER_ROLES.has(el.role);
-}
-
-/** Check if element expects integer values (should display/round as whole number) */
-export function isIntegerElement(el: AX.Element): boolean {
-  return INTEGER_ROLES.has(el.role);
-}
-
-/** Check if element expects float values (continuous) */
-export function isFloatElement(el: AX.Element): boolean {
-  return NUMBER_ROLES.has(el.role) && !INTEGER_ROLES.has(el.role);
-}
-
-/** Check if element is writable (can accept value input) */
-export function isWritable(el: AX.Element): boolean {
-  return (
-    STRING_ROLES.has(el.role) ||
-    BOOLEAN_ROLES.has(el.role) ||
-    NUMBER_ROLES.has(el.role)
-  );
-}
-
-/** Create a Value from a primitive, inferring type from element's role */
-export function createValue(
-  el: AX.Element,
-  primitive: string | number | boolean
-): AX.Value {
-  if (STRING_ROLES.has(el.role)) {
-    return { type: "String", value: String(primitive) };
-  }
-  if (BOOLEAN_ROLES.has(el.role)) {
-    return { type: "Boolean", value: Boolean(primitive) };
-  }
-  if (NUMBER_ROLES.has(el.role)) {
-    return { type: "Number", value: Number(primitive) };
-  }
-  // Fallback to string
-  return { type: "String", value: String(primitive) };
-}
+import {
+  ROLE_VALUES,
+  type TypedElement,
+  type ElementOfRole,
+  type PrimitiveForRole,
+  type WritableRole,
+} from "./types";
+import type { Color } from "./types/generated/Color";
 
 // === Type helpers ===
 type RpcMethod = RpcRequest["method"];
@@ -84,12 +28,12 @@ type RpcArgs<M extends RpcMethod> = Extract<RpcRequest, { method: M }> extends {
 // Manual return type mapping (matches Rust dispatch)
 type RpcReturns = {
   snapshot: AX.Snapshot;
-  element_at: AX.Element;
-  get: AX.Element;
-  window_root: AX.Element;
-  children: AX.Element[];
-  parent: AX.Element | null;
-  refresh: AX.Element;
+  element_at: TypedElement;
+  get: TypedElement;
+  window_root: TypedElement;
+  children: TypedElement[];
+  parent: TypedElement | null;
+  refresh: TypedElement;
   write: boolean;
   action: boolean;
   watch: void;
@@ -118,7 +62,7 @@ type Pending = {
   timer: number;
 };
 
-type WatchCallback = (element: AX.Element) => void;
+type WatchCallback = (element: TypedElement) => void;
 
 export class Allio extends EventEmitter<AllioEvents> {
   private ws: WebSocket | null = null;
@@ -128,7 +72,7 @@ export class Allio extends EventEmitter<AllioEvents> {
 
   // === State (mirrors Registry) ===
   readonly windows = new Map<AX.WindowId, AX.Window>();
-  readonly elements = new Map<AX.ElementId, AX.Element>();
+  readonly elements = new Map<AX.ElementId, TypedElement>();
   readonly watched = new Set<AX.ElementId>();
 
   /** Window IDs sorted by z-order (front to back) */
@@ -136,7 +80,7 @@ export class Allio extends EventEmitter<AllioEvents> {
 
   // Focus tracking
   focusedWindow: AX.WindowId | null = null;
-  focusedElement: AX.Element | null = null;
+  focusedElement: TypedElement | null = null;
   selection: AX.TextSelection | null = null;
   passthrough = false;
 
@@ -194,7 +138,7 @@ export class Allio extends EventEmitter<AllioEvents> {
   // === State access (derived queries, local only) ===
 
   /** Get element by ID from local cache */
-  get(id: AX.ElementId): AX.Element | undefined {
+  get(id: AX.ElementId): TypedElement | undefined {
     return this.elements.get(id);
   }
 
@@ -206,24 +150,24 @@ export class Allio extends EventEmitter<AllioEvents> {
   }
 
   /** Get all elements for a window */
-  getWindowElements(windowId: AX.WindowId): AX.Element[] {
+  getWindowElements(windowId: AX.WindowId): TypedElement[] {
     return Array.from(this.elements.values()).filter(
       (el) => el.window_id === windowId
     );
   }
 
   /** Get root element for a window (element with is_root === true) */
-  getRootElement(windowId: AX.WindowId): AX.Element | undefined {
+  getRootElement(windowId: AX.WindowId): TypedElement | undefined {
     return Array.from(this.elements.values()).find(
       (el) => el.window_id === windowId && el.is_root
     );
   }
 
   /** Get children of an element from local cache */
-  getChildren(parent: { children: AX.ElementId[] | null }): AX.Element[] {
+  getChildren(parent: { children: AX.ElementId[] | null }): TypedElement[] {
     return (parent.children ?? [])
       .map((id) => this.elements.get(id))
-      .filter((e): e is AX.Element => !!e);
+      .filter((e): e is TypedElement => !!e);
   }
 
   // === RPC Methods (questions + actions) ===
@@ -239,9 +183,9 @@ export class Allio extends EventEmitter<AllioEvents> {
     this.windows.clear();
     this.elements.clear();
     snap.windows.forEach((w) => this.windows.set(w.id, w));
-    snap.elements.forEach((e) => this.elements.set(e.id, e));
+    snap.elements.forEach((e) => this.elements.set(e.id, e as TypedElement));
     this.focusedWindow = snap.focused_window;
-    this.focusedElement = snap.focused_element;
+    this.focusedElement = snap.focused_element as TypedElement | null;
     this.selection = snap.selection;
     this.zOrder = snap.z_order;
     return snap;
@@ -249,7 +193,7 @@ export class Allio extends EventEmitter<AllioEvents> {
 
   /** Get element at screen coordinates (fetches from OS).
    * Returns null if no tracked window exists at the position. */
-  elementAt = (x: number, y: number): Promise<AX.Element | null> =>
+  elementAt = (x: number, y: number): Promise<TypedElement | null> =>
     this.call("element_at", { x, y });
 
   /** Get element by ID (from registry, fetches if needed) */
@@ -264,23 +208,90 @@ export class Allio extends EventEmitter<AllioEvents> {
     this.call("children", { element_id, max_children });
 
   /** Get parent of element (fetches from OS, null if element is root) */
-  parent = (element_id: AX.ElementId): Promise<AX.Element | null> =>
+  parent = (element_id: AX.ElementId): Promise<TypedElement | null> =>
     this.call("parent", { element_id });
 
   /** Force re-fetch element from OS */
   refresh = (element_id: AX.ElementId) => this.call("refresh", { element_id });
 
-  /** Write typed value to element */
+  /**
+   * Set element value with type-safe primitive.
+   * TypeScript enforces correct value type based on element's role.
+   *
+   * @example
+   * await allio.set(slider, 50);      // number for slider
+   * await allio.set(textfield, "hi"); // string for textfield
+   * await allio.set(checkbox, true);  // boolean for checkbox
+   */
+  set<R extends WritableRole>(
+    element: ElementOfRole<R>,
+    value: PrimitiveForRole<R>
+  ): Promise<boolean> {
+    const valueType = ROLE_VALUES[element.role];
+    let envelope: AX.Value;
+
+    switch (valueType) {
+      case "string":
+        envelope = { type: "String", value: value as string };
+        break;
+      case "number":
+        envelope = { type: "Number", value: value as number };
+        break;
+      case "boolean":
+        envelope = { type: "Boolean", value: value as boolean };
+        break;
+      case "color":
+        envelope = { type: "Color", value: value as Color };
+        break;
+      default:
+        throw new Error(`Role ${element.role} does not accept values`);
+    }
+
+    return this.call("write", { element_id: element.id, value: envelope });
+  }
+
+  /**
+   * Write a raw Value envelope to element (low-level API).
+   * Prefer `set()` for type-safe value writing.
+   */
   write = (element_id: AX.ElementId, value: AX.Value) =>
     this.call("write", { element_id, value });
 
-  /** Write a primitive value, auto-converting to the element's expected type */
-  writeValue = async (
-    element: AX.Element,
+  /**
+   * Write a primitive value, auto-converting to Value envelope.
+   * Less type-safe than `set()` but works with any element.
+   *
+   * @deprecated Prefer `set()` for type-safe value writing.
+   */
+  writeValue = (
+    element: AX.Element | TypedElement,
     primitive: string | number | boolean
-  ) => {
-    const value = createValue(element, primitive);
-    return this.write(element.id, value);
+  ): Promise<boolean> => {
+    const valueType = ROLE_VALUES[element.role as AX.Role];
+    let envelope: AX.Value;
+
+    switch (valueType) {
+      case "string":
+        envelope = { type: "String", value: String(primitive) };
+        break;
+      case "number":
+        envelope = { type: "Number", value: Number(primitive) };
+        break;
+      case "boolean":
+        envelope = { type: "Boolean", value: Boolean(primitive) };
+        break;
+      default:
+        // Fallback: guess type from primitive
+        if (typeof primitive === "string") {
+          envelope = { type: "String", value: primitive };
+        } else if (typeof primitive === "number") {
+          envelope = { type: "Number", value: primitive };
+        } else {
+          envelope = { type: "Boolean", value: primitive };
+        }
+    }
+
+    return this.call("write", { element_id: element.id, value: envelope });
   };
 
   /**
@@ -405,9 +416,9 @@ export class Allio extends EventEmitter<AllioEvents> {
         this.windows.clear();
         this.elements.clear();
         windows.forEach((w) => this.windows.set(w.id, w));
-        elements.forEach((e) => this.elements.set(e.id, e));
+        elements.forEach((e) => this.elements.set(e.id, e as TypedElement));
         this.focusedWindow = focused_window;
-        this.focusedElement = focused_element;
+        this.focusedElement = focused_element as TypedElement | null;
         this.selection = selection;
         this.zOrder = z_order;
         break;
@@ -440,14 +451,19 @@ export class Allio extends EventEmitter<AllioEvents> {
       }
 
       case "element:added": {
-        this.elements.set(event.data.element.id, event.data.element);
+        this.elements.set(
+          event.data.element.id,
+          event.data.element as TypedElement
+        );
         break;
       }
 
       case "element:changed": {
         const { element } = event.data;
-        this.elements.set(element.id, element);
-        this.watchCallbacks.get(element.id)?.forEach((cb) => cb(element));
+        this.elements.set(element.id, element as TypedElement);
+        this.watchCallbacks
+          .get(element.id)
+          ?.forEach((cb) => cb(element as TypedElement));
         break;
       }
 
@@ -465,8 +481,8 @@ export class Allio extends EventEmitter<AllioEvents> {
 
       case "focus:element": {
         const { element } = event.data;
-        this.focusedElement = element;
-        this.elements.set(element.id, element);
+        this.focusedElement = element as TypedElement;
+        this.elements.set(element.id, element as TypedElement);
         break;
       }
 

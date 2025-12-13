@@ -18,3 +18,14 @@ export type { Value } from "./generated/Value";
 export type { ValueType } from "./generated/ValueType";
 export type { Color } from "./generated/Color";
 export type { Notification } from "./generated/Notification";
+
+// Typed elements - role-based discriminated union
+export {
+  ROLE_VALUES,
+  accepts,
+  type TypedElement,
+  type ElementOfRole,
+  type PrimitiveForRole,
+  type RolesWithValueType,
+  type WritableRole,
+} from "./typed";

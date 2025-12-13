@@ -21,7 +21,7 @@ import {
 
 interface GraphNode extends SimulationNodeDatum {
   id: AX.ElementId;
-  element: AX.Element;
+  element: AX.TypedElement;
 }
 
 interface GraphLink extends SimulationLinkDatum<GraphNode> {
@@ -139,11 +139,11 @@ class AXGraph {
 
     // Listen for element events
     this.allio.on("element:added", (data) => {
-      this.onElementAdded(data.element);
+      this.onElementAdded(data.element as AX.TypedElement);
     });
 
     this.allio.on("element:changed", (data) => {
-      this.onElementChanged(data.element);
+      this.onElementChanged(data.element as AX.TypedElement);
     });
 
     this.allio.on("element:removed", (data) => {
@@ -194,7 +194,10 @@ class AXGraph {
   }
 
   /** Add a node to the graph. Returns { node, isNew } */
-  private addNode(element: AX.Element): { node: GraphNode; isNew: boolean } {
+  private addNode(element: AX.TypedElement): {
+    node: GraphNode;
+    isNew: boolean;
+  } {
     // Update existing node
     if (this.nodes.has(element.id)) {
       const node = this.nodes.get(element.id)!;
@@ -223,14 +226,14 @@ class AXGraph {
     return { node, isNew: true };
   }
 
-  private onElementAdded(element: AX.Element) {
+  private onElementAdded(element: AX.TypedElement) {
     const { isNew } = this.addNode(element);
     if (isNew) {
       this.toast(`+ ${element.role} [${this.parentState(element)}]`);
     }
   }
 
-  private onElementChanged(element: AX.Element) {
+  private onElementChanged(element: AX.TypedElement) {
     const node = this.nodes.get(element.id);
     if (!node) return;
 
@@ -518,7 +521,7 @@ class AXGraph {
   }
 
   /** Get parent state as a string for display */
-  private parentState(el: AX.Element): "root" | "linked" | "orphan" {
+  private parentState(el: AX.TypedElement): "root" | "linked" | "orphan" {
     if (el.is_root) return "root";
     if (el.parent_id !== null) return "linked";
     return "orphan";

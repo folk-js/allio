@@ -9,3 +9,14 @@ export * as AX from "./ax";
 // RPC types (no collision risk, used internally)
 export type { RpcRequest } from "./generated/RpcRequest";
 export type { RpcResponse } from "./generated/RpcResponse";
+
+// Typed element exports (for direct import without AX namespace)
+export {
+  ROLE_VALUES,
+  accepts,
+  type TypedElement,
+  type ElementOfRole,
+  type PrimitiveForRole,
+  type RolesWithValueType,
+  type WritableRole,
+} from "./typed";
