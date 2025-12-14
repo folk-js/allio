@@ -1,15 +1,10 @@
-# Allio
-
-> Accessibility (a11y) i/o
+# Allio (Accessibility I/O)
 
 > [!IMPORTANT]
-> This is a highly experimental system not ready for everyday use.
+> An experimental system to expose accessibility trees as read-write interfaces and augment existing apps with new UI or affordances.
+> For more background and motivation check out our [paper](https://folkjs.org/live-2025/).
 
-An experimental system to expose accessibility trees as read-write interfaces for all running applications.
-
-For more background check out our [paper](https://folkjs.org/live-2025/).
-
-Check out the [Contributing Guide](/CONTRIBUTING.md) to setting up the repo.
+See also the [Contributing Guide](/CONTRIBUTING.md).
 
 ## Open Problems
 
@@ -24,7 +19,7 @@ There are 3 things in the way of a11y-as-interop which we are fighting against:
 | API       | Description                     | Status |
 | --------- | ------------------------------- | ------ |
 | get       | Get an element by id            | ✅     |
-| set       | Set the value of an element     | ✅     |
+| set       | Set the value of an element     | 🚧     |
 | perform   | Perform an action on an element | ✅     |
 | discovery | parent, children, element_at    | ✅     |
 | observe   | Observe changes to an element   | 🚧     |
