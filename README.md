@@ -1,7 +1,7 @@
 # Allio (Accessibility I/O)
 
 > [!IMPORTANT]
-> This is an experimental system to expose accessibility trees as read-write interfaces and augment existing apps with new UI or affordances.
+> This is an experimental system to expose accessibility trees as read-write interfaces and augment existing apps with new UI affordances.
 >
 > For more background and motivation see our [paper](https://folkjs.org/live-2025/).
 >
@@ -15,7 +15,7 @@ There are 3 things in the way of a11y-as-interop which we are fighting against:
 2. bias of a11y towards read-only data, with inconsistent and unreliable writing of data depending on the app.
 3. lack of _structured_ i/o. A11y biases towards readable metadata instead of structured types, which in the best-of-all-worlds would be higher-level semantic operations on native data storage like sqlite, automerge or filesystem representations. This goal overlaps heavily with interoperability advocates.
 
-## API Progress Table
+## API Status
 
 | API       | Description                     | Status |
 | --------- | ------------------------------- | ------ |
@@ -27,6 +27,8 @@ There are 3 things in the way of a11y-as-interop which we are fighting against:
 | select    | Multi-select elements           | ❌     |
 | query     | Query the tree                  | ❌     |
 | views     | Simplified tree projections     | ❌     |
+| windows   | all, focused, z-order           | ✅     |
+| TS client | rpc, occlusion, passthrough     | ✅     |
 
 ## Architecture
 
