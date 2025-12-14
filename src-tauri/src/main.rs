@@ -76,6 +76,7 @@ const DEFAULT_OVERLAYS: &[&str] = &[
   "graph.html",
   "identifiers.html",
   "ports.html",
+  "query.html",
   "sand.html",
   "windows-debug.html",
 ];

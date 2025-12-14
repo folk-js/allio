@@ -531,20 +531,7 @@ impl PartialEq for ElementHandle {
     if self.cached_hash != other.cached_hash {
       return false;
     }
-    let result = self.cf_equal(other);
-    // Log hash collisions where CFEqual determines the outcome
-    if result {
-      log::trace!(
-        "ElementHandle::eq: hash={:#x} matched, CFEqual=true (same element)",
-        self.cached_hash
-      );
-    } else {
-      log::debug!(
-        "ElementHandle::eq: hash={:#x} collision, CFEqual=false (different elements)",
-        self.cached_hash
-      );
-    }
-    result
+    self.cf_equal(other)
   }
 }
 
