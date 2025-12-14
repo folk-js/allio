@@ -15,7 +15,7 @@ There are 3 things in the way of a11y-as-interop which we are fighting against:
 
 1. pull-based architectures instead of [push-based](https://gitlab.gnome.org/GNOME/at-spi2-core/-/blob/2.58.2/devel-docs/new-protocol.rst) ones, making efficient queries and robust reactivity challenging.
 2. bias of a11y towards read-only data, with inconsistent and unreliable writing of data depending on the app.
-3. lack of _structured_ i/o. A11y biases towards readable metadata instead of structured types, which in the best-of-all-worlds would be higher-level semantic operations on native data storage like sqlite, automerge or filesystem representations. This goal overlaps heavily with interoperability advocates.
+3. lack of _structured_ i/o. A11y biases towards readable metadata instead of structured types, which in the best-of-all-worlds would be higher-level semantic operations on native data storage like sqlite, automerge or filesystem representations.
 
 ## API Status
 
