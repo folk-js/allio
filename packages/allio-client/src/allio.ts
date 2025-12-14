@@ -6,53 +6,20 @@
  */
 
 import EventEmitter from "eventemitter3";
-import type { RpcRequest, AX } from "./types";
-import {
-  ROLE_VALUES,
-  type TypedElement,
-  type ElementOfRole,
-  type PrimitiveForRole,
-  type WritableRole,
+import type {
+  AX,
+  AllioEvents,
+  WatchCallback,
+  Pending,
+  RpcMethod,
+  RpcArgs,
+  RpcReturns,
+  TypedElement,
+  ElementOfRole,
+  PrimitiveForRole,
+  WritableRole,
 } from "./types";
-import type { Color } from "./types/generated/Color";
-
-// === Type helpers ===
-type RpcMethod = RpcRequest["method"];
-// For methods with args, extract the args type; for methods without, use empty object
-type RpcArgs<M extends RpcMethod> = Extract<RpcRequest, { method: M }> extends {
-  args: infer A;
-}
-  ? A
-  : Record<string, never>;
-
-// Manual return type mapping (matches Rust dispatch)
-type RpcReturns = {
-  snapshot: AX.Snapshot;
-  element_at: TypedElement;
-  get: TypedElement;
-  window_root: TypedElement;
-  children: TypedElement[];
-  parent: TypedElement | null;
-  refresh: TypedElement;
-  write: boolean;
-  action: boolean;
-  watch: void;
-  unwatch: void;
-};
-
-// Event types derived from ServerEvent
-type EventName = AX.Event["event"];
-type EventData<E extends EventName> = Extract<AX.Event, { event: E }>["data"];
-
-type AllioEvents = { [E in EventName]: [EventData<E>] };
-
-type Pending = {
-  resolve: (r: unknown) => void;
-  reject: (e: Error) => void;
-  timer: number;
-};
-
-type WatchCallback = (element: TypedElement) => void;
+import { ROLE_VALUES } from "./types";
 
 export class Allio extends EventEmitter<AllioEvents> {
   private ws: WebSocket | null = null;
@@ -231,7 +198,7 @@ export class Allio extends EventEmitter<AllioEvents> {
         envelope = { type: "Boolean", value: value as boolean };
         break;
       case "color":
-        envelope = { type: "Color", value: value as Color };
+        envelope = { type: "Color", value: value as AX.Color };
         break;
       default:
         throw new Error(`Role ${element.role} does not accept values`);

@@ -5,6 +5,7 @@
 // Use this to avoid collisions with browser's Window/Element types
 // Example: import { AX } from 'allio'; then use AX.Element, AX.Window
 export * as AX from "./ax";
+export * from "./rpc";
 
 // RPC types (no collision risk, used internally)
 export type { RpcRequest } from "./generated/RpcRequest";
