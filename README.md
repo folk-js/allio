@@ -7,7 +7,7 @@
 >
 > See also the [Contributing Guide](/CONTRIBUTING.md).
 
-Every GUI application must implement accessibility. It's not optional—there are legal requirements (ADA, WCAG, Section 508). Apple, Microsoft, and GNOME all have accessibility frameworks that apps expose. This creates a system-wide, cross-application API that developers can't opt out of. We believe this is an under-explored and under-advocated space for interoperability.
+Every GUI application must implement accessibility. It's not optional—there are legal requirements (ADA, WCAG, Section 508). Apple, Microsoft, and GNOME all have accessibility frameworks that apps expose. This creates a system-wide, cross-application API that developers can't opt out of. We believe this is under-explored for interoperability and under-advocated for [policy](https://www.eff.org/deeplinks/2019/10/adversarial-interoperability).
 
 ## Open Problems
 
@@ -274,23 +274,9 @@ pub fn watch(&self, id: ElementId) -> AllioResult<()>;
 pub fn unwatch(&self, id: ElementId) -> AllioResult<()>;
 ```
 
-## Event
+## Events
 
 - `upsert_element` → emits `ElementAdded` if truly new
 - `update_element` → emits `ElementChanged` if data has changed
 - `remove_element` → emits `ElementRemoved` for element + all descendants
 - `remove_window` → emits `WindowRemoved` + `ElementRemoved` for all elements
-
-## Summary
-
-| Concept                  | Meaning                                             |
-| ------------------------ | --------------------------------------------------- |
-| **Registry**             | Cache with automatic event emission                 |
-| **Recency**              | How up-to-date data should be (Any/Current/MaxAge)  |
-| **get(id, recency)**     | Element retrieval with recency control              |
-| **Handle**               | OS reference, used as HashMap key for deduplication |
-| **ElementId**            | Our stable ID given to clients                      |
-| **EventHandler**         | Trait for OS notifications → Allio                  |
-| **upsert/update/remove** | Registry mutation operations                        |
-| **watch/unwatch**        | Element change subscriptions                        |
-| **sync\_**               | Bulk updates from polling                           |
