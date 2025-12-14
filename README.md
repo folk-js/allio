@@ -11,6 +11,14 @@ For more background check out our [paper](https://folkjs.org/live-2025/).
 
 Check out the [Contributing Guide](/CONTRIBUTING.md) to setting up the repo.
 
+## Open Problems
+
+There are really 3 things in the way of much better interop on top of existing a11y infrastructure:
+
+1. pull-based architectures instead of [push-based](https://gitlab.gnome.org/GNOME/at-spi2-core/-/blob/2.58.2/devel-docs/new-protocol.rst) ones
+2. lack of structured data I/O
+3. lack of cross-platform _client_ libraries for efficient consumption of a11y data, which would be easier to create with push-based infrastructure.
+
 ## API Progress Table
 
 | API       | Description                     | Status |
@@ -23,8 +31,6 @@ Check out the [Contributing Guide](/CONTRIBUTING.md) to setting up the repo.
 | select    | Multi-select elements           | ❌     |
 | query     | Query the tree                  | ❌     |
 | views     | Simplified tree projections     | ❌     |
-
-## Missing features and known issues
 
 ## Architecture
 

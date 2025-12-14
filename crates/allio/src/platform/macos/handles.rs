@@ -13,7 +13,7 @@ The rest of the crate can interact with elements using safe methods.
 )]
 
 use super::mapping::{action_from_macos, role_from_macos};
-use crate::a11y::{Role, Value};
+use crate::a11y::{Color, Role, Value};
 use crate::platform::ElementAttributes;
 use crate::types::Bounds;
 use objc2_application_services::{
@@ -160,7 +160,7 @@ impl ElementHandle {
     }
   }
 
-  /// Set typed value (string, boolean, or number).
+  /// Set typed value (string, boolean, number, or color).
   pub(crate) fn set_typed_value(&self, value: &Value) -> Result<(), AXError> {
     let attr = CFString::from_static_str("AXValue");
     unsafe {
@@ -178,10 +178,12 @@ impl ElementHandle {
           let cf_value = CFNumber::new_f64(*n);
           self.inner.set_attribute_value(&attr, &cf_value)
         }
-        Value::Color(_) => {
-          // TODO: Setting color values requires creating an NSColor or CGColor
-          // and passing it through the accessibility API. Not yet implemented.
-          return Err(AXError::IllegalArgument);
+        Value::Color(c) => {
+          // AXColorWell uses "rgb R G B A" string format (space-separated 0.0-1.0 floats)
+          // Use explicit precision to ensure consistent format (e.g., "1.0" not "1")
+          let color_str = format!("rgb {:.6} {:.6} {:.6} {:.6}", c.r, c.g, c.b, c.a);
+          let cf_value = CFString::from_str(&color_str);
+          self.inner.set_attribute_value(&attr, &cf_value)
         }
       };
       if result == AXError::Success {
@@ -400,7 +402,16 @@ impl ElementHandle {
 
   fn extract_value(cf_value: &CFType, role: Option<&str>) -> Option<Value> {
     if let Some(cf_string) = cf_value.downcast_ref::<CFString>() {
-      return Some(Value::String(cf_string.to_string()));
+      let s = cf_string.to_string();
+
+      // For ColorWell, macOS may return color as "rgb R G B A" string format
+      if role == Some("AXColorWell") {
+        if let Some(color) = Self::parse_color_string(&s) {
+          return Some(Value::Color(color));
+        }
+      }
+
+      return Some(Value::String(s));
     }
 
     if let Some(cf_number) = cf_value.downcast_ref::<CFNumber>() {
@@ -427,6 +438,21 @@ impl ElementHandle {
       return Some(Value::Boolean(cf_bool.as_bool()));
     }
 
+    None
+  }
+
+  /// Parse macOS color string format: "rgb R G B A" (space-separated 0.0-1.0 floats)
+  fn parse_color_string(s: &str) -> Option<Color> {
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    // Format: "rgb R G B A" with 5 parts total
+    if parts.len() >= 5 && parts[0] == "rgb" {
+      let r = parts[1].parse::<f64>().ok()?;
+      let g = parts[2].parse::<f64>().ok()?;
+      let b = parts[3].parse::<f64>().ok()?;
+      let a = parts[4].parse::<f64>().ok()?;
+      return Some(Color::new(r, g, b, a));
+    }
+    log::debug!("Unknown ColorWell value format: {:?}", s);
     None
   }
 

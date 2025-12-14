@@ -53,6 +53,8 @@ impl WatchHandleInner {
       if result == AXError::Success {
         self.notifications.insert(*notif);
         added += 1;
+      } else {
+        log::warn!("Failed to add {:?} notification: {:?}", notif, result);
       }
     }
     added

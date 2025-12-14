@@ -35,7 +35,13 @@ impl Allio {
       return Ok(());
     };
 
-    watch.add(&notifs);
+    let added = watch.add(&notifs);
+    if added < notifs.len() {
+      log::warn!(
+        "Element {element_id}: only {added}/{} notifications registered",
+        notifs.len()
+      );
+    }
 
     // Step 3: Put watch back (quick write)
     self.write(|s| s.set_element_watch(element_id, watch));

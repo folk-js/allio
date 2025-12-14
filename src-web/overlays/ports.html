@@ -6,16 +6,24 @@
     <title>Ports</title>
     <style>
       :root {
-        /* Blender-inspired muted palette */
-        --port-input: #63a87d;
-        --port-input-glow: rgba(99, 168, 125, 0.4);
-        --port-output: #6b8fc7;
-        --port-output-glow: rgba(107, 143, 199, 0.4);
-        --port-transform: #d4a054;
-        --port-transform-glow: rgba(212, 160, 84, 0.4);
+        /* Value type colors - semantic palette */
+        --type-string: #e8a854;
+        --type-string-glow: rgba(232, 168, 84, 0.4);
+        --type-number: #5b9bd5;
+        --type-number-glow: rgba(91, 155, 213, 0.4);
+        --type-boolean: #b57edc;
+        --type-boolean-glow: rgba(181, 126, 220, 0.4);
+        --type-color: #e85d8c;
+        --type-color-glow: rgba(232, 93, 140, 0.4);
+        --type-none: #7a8a99;
+        --type-none-glow: rgba(122, 138, 153, 0.35);
+        /* Transform overlay */
+        --port-transform: #2dd4bf;
+        --port-transform-glow: rgba(45, 212, 191, 0.4);
+        /* UI chrome */
         --port-border: rgba(255, 255, 255, 0.25);
         --port-border-hover: rgba(255, 255, 255, 0.5);
-        --connection-color: #6b8fc7;
+        --connection-color: rgba(255, 255, 255, 0.6);
         --menu-bg: rgba(40, 40, 40, 0.95);
       }
 
@@ -53,12 +61,12 @@
         border-color: rgba(255, 255, 255, 0.12);
       }
       #menuBar.active {
-        background: rgba(99, 168, 125, 0.9);
+        background: rgba(45, 212, 191, 0.85);
         color: white;
-        border-color: var(--port-input);
+        border-color: var(--port-transform);
       }
       #menuBar.active:hover {
-        background: rgba(99, 168, 125, 0.95);
+        background: rgba(45, 212, 191, 0.92);
       }
       #menuBar kbd {
         background: rgba(255, 255, 255, 0.1);
@@ -68,7 +76,7 @@
         font-size: 10px;
       }
       #menuBar .mode-indicator {
-        color: #8cd9a0;
+        color: #5eead4;
         margin-right: 4px;
         animation: glow 2s ease-in-out infinite;
       }
@@ -120,21 +128,38 @@
         transition: border-color 0.15s ease, box-shadow 0.15s ease,
           filter 0.15s ease;
         position: relative;
+        /* Default to none type */
+        background: var(--type-none);
+        box-shadow: 0 0 8px var(--type-none-glow);
       }
 
-      .port.input {
-        background: var(--port-input);
-        box-shadow: 0 0 8px var(--port-input-glow);
+      /* Value type colors */
+      .port.type-string {
+        background: var(--type-string);
+        box-shadow: 0 0 8px var(--type-string-glow);
       }
-      .port.output {
-        background: var(--port-output);
-        box-shadow: 0 0 8px var(--port-output-glow);
+      .port.type-number {
+        background: var(--type-number);
+        box-shadow: 0 0 8px var(--type-number-glow);
+      }
+      .port.type-boolean {
+        background: var(--type-boolean);
+        box-shadow: 0 0 8px var(--type-boolean-glow);
+      }
+      .port.type-color {
+        background: var(--type-color);
+        box-shadow: 0 0 8px var(--type-color-glow);
+      }
+      .port.type-none {
+        background: var(--type-none);
+        box-shadow: 0 0 8px var(--type-none-glow);
       }
 
-      /* Transform ports - override colors */
+      /* Transform ports - teal ring overlay */
       .port.transform {
-        background: var(--port-transform);
-        box-shadow: 0 0 8px var(--port-transform-glow);
+        border: 2px solid var(--port-transform);
+        box-shadow: 0 0 8px var(--port-transform-glow),
+          inset 0 0 4px rgba(45, 212, 191, 0.3);
       }
       .port.transform::after {
         content: "ƒ";
@@ -148,16 +173,33 @@
         pointer-events: none;
       }
 
+      /* Input ports get a subtle inset to distinguish direction */
+      .port.input {
+        border-style: dashed;
+      }
+
       .port:hover {
         border-color: var(--port-border-hover);
       }
-      .port.input:hover {
-        box-shadow: 0 0 12px var(--port-input-glow),
-          0 0 20px var(--port-input-glow);
+      .port.type-string:hover {
+        box-shadow: 0 0 12px var(--type-string-glow),
+          0 0 20px var(--type-string-glow);
       }
-      .port.output:hover {
-        box-shadow: 0 0 12px var(--port-output-glow),
-          0 0 20px var(--port-output-glow);
+      .port.type-number:hover {
+        box-shadow: 0 0 12px var(--type-number-glow),
+          0 0 20px var(--type-number-glow);
+      }
+      .port.type-boolean:hover {
+        box-shadow: 0 0 12px var(--type-boolean-glow),
+          0 0 20px var(--type-boolean-glow);
+      }
+      .port.type-color:hover {
+        box-shadow: 0 0 12px var(--type-color-glow),
+          0 0 20px var(--type-color-glow);
+      }
+      .port.type-none:hover {
+        box-shadow: 0 0 12px var(--type-none-glow),
+          0 0 20px var(--type-none-glow);
       }
       .port.transform:hover {
         box-shadow: 0 0 12px var(--port-transform-glow),
@@ -170,11 +212,11 @@
       @keyframes connectPulse {
         0%,
         100% {
-          box-shadow: 0 0 8px var(--port-output-glow);
+          box-shadow: 0 0 8px var(--type-none-glow);
         }
         50% {
-          box-shadow: 0 0 16px var(--port-output-glow),
-            0 0 24px var(--port-output-glow);
+          box-shadow: 0 0 16px rgba(255, 255, 255, 0.4),
+            0 0 24px rgba(255, 255, 255, 0.3);
         }
       }
 
@@ -215,7 +257,7 @@
         width: 24px;
         height: 24px;
         border-radius: 50%;
-        border: 1px solid var(--port-input);
+        border: 1px solid rgba(255, 255, 255, 0.5);
         pointer-events: none;
       }
     </style>

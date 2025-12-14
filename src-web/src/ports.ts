@@ -1,6 +1,35 @@
 import { Allio, AX, AllioOcclusion, AllioPassthrough, accepts } from "allio";
 
 type PortType = "input" | "output";
+type ValueTypeClass =
+  | "type-string"
+  | "type-number"
+  | "type-boolean"
+  | "type-color"
+  | "type-none";
+
+/** Map element role to its value type CSS class */
+function getValueTypeClass(role: AX.Role): ValueTypeClass {
+  switch (role) {
+    case "textfield":
+    case "textarea":
+    case "searchfield":
+    case "combobox":
+      return "type-string";
+    case "slider":
+    case "progressbar":
+    case "stepper":
+      return "type-number";
+    case "checkbox":
+    case "switch":
+    case "radiobutton":
+      return "type-boolean";
+    case "colorwell":
+      return "type-color";
+    default:
+      return "type-none";
+  }
+}
 
 interface Port {
   id: string;
@@ -357,9 +386,9 @@ function createDragOverlays() {
   dom.dragSourceOverlay = createOverlayElement(`
     position: absolute;
     pointer-events: none;
-    border: 2px solid var(--port-output);
+    border: 2px solid rgba(255, 255, 255, 0.6);
     border-radius: 4px;
-    background: rgba(107, 143, 199, 0.15);
+    background: rgba(255, 255, 255, 0.1);
     box-sizing: border-box;
     display: none;
     z-index: 997;
@@ -368,9 +397,9 @@ function createDragOverlays() {
   dom.dragTargetOverlay = createOverlayElement(`
     position: absolute;
     pointer-events: none;
-    border: 2px solid var(--port-input);
+    border: 2px dashed rgba(255, 255, 255, 0.6);
     border-radius: 4px;
-    background: rgba(99, 168, 125, 0.15);
+    background: rgba(255, 255, 255, 0.08);
     box-sizing: border-box;
     display: none;
     z-index: 997;
@@ -485,7 +514,10 @@ function createPortPair(
 
 function createPortElement(port: Port) {
   const el = document.createElement("div");
-  el.className = `port ${port.type}${port.isTransform ? " transform" : ""}`;
+  const typeClass = getValueTypeClass(port.element.role);
+  el.className = `port ${port.type} ${typeClass}${
+    port.isTransform ? " transform" : ""
+  }`;
   el.setAttribute("ax-io", "opaque");
   el.title = formatPortTitle(port);
 
@@ -740,9 +772,9 @@ function createHoverOverlay() {
   dom.hoverOverlay = createOverlayElement(`
     position: absolute;
     pointer-events: none;
-    border: 2px solid var(--port-output);
+    border: 2px solid rgba(255, 255, 255, 0.5);
     border-radius: 4px;
-    background: rgba(107, 143, 199, 0.1);
+    background: rgba(255, 255, 255, 0.08);
     box-sizing: border-box;
     display: none;
     z-index: 999;
@@ -840,12 +872,17 @@ async function showHoverOverlay(port: Port) {
   // Move overlay into window container so it inherits the container's clip-path
   container.appendChild(dom.hoverOverlay);
 
+  // Get type color for this element
+  const typeClass = getValueTypeClass(element.role);
+  const typeColor = getTypeColor(typeClass);
+
   // Position with window-relative coordinates
   Object.assign(dom.hoverOverlay.style, {
     left: `${bounds.x - axWindow.bounds.x}px`,
     top: `${bounds.y - axWindow.bounds.y}px`,
     width: `${bounds.w}px`,
     height: `${bounds.h}px`,
+    borderColor: typeColor,
     display: "block",
   });
 
@@ -870,14 +907,32 @@ async function showHoverOverlay(port: Port) {
   drawWiringLine(port, bounds);
 }
 
+/** Get CSS color for a value type class */
+function getTypeColor(typeClass: ValueTypeClass): string {
+  switch (typeClass) {
+    case "type-string":
+      return "var(--type-string)";
+    case "type-number":
+      return "var(--type-number)";
+    case "type-boolean":
+      return "var(--type-boolean)";
+    case "type-color":
+      return "var(--type-color)";
+    default:
+      return "var(--type-none)";
+  }
+}
+
 function buildInfoPanelHtml(
   element: AX.TypedElement,
   isTransform: boolean
 ): string {
   const lines: string[] = [];
+  const typeClass = getValueTypeClass(element.role);
+  const typeColor = getTypeColor(typeClass);
 
   lines.push(
-    `<div style="color: var(--port-output); font-weight: 600; margin-bottom: 4px;">${element.role} <span style="opacity: 0.5">(${element.platform_role})</span></div>`
+    `<div style="color: ${typeColor}; font-weight: 600; margin-bottom: 4px;">${element.role} <span style="opacity: 0.5">(${element.platform_role})</span></div>`
   );
 
   if (element.label) {
@@ -892,7 +947,7 @@ function buildInfoPanelHtml(
     const val = element.value.value;
     const displayVal = typeof val === "string" ? `"${val}"` : String(val);
     lines.push(
-      `<div><span style="opacity: 0.6;">Value:</span> <span style="color: var(--port-input);">${escapeHtml(
+      `<div><span style="opacity: 0.6;">Value:</span> <span style="color: ${typeColor};">${escapeHtml(
         displayVal
       )}</span></div>`
     );
@@ -970,10 +1025,8 @@ function drawWiringLine(
     "class",
     port.type === "input" ? "wiring-in" : "wiring-out"
   );
-  dom.wiringPath.setAttribute(
-    "stroke",
-    port.type === "input" ? "var(--port-input)" : "var(--port-output)"
-  );
+  const typeClass = getValueTypeClass(port.element.role);
+  dom.wiringPath.setAttribute("stroke", getTypeColor(typeClass));
   dom.wiringSvg.style.display = "block";
 }
 
@@ -1125,14 +1178,96 @@ function parseTransformFunction(code: string): (val: unknown) => unknown {
   return new Function("val", cleanCode) as (val: unknown) => unknown;
 }
 
+/** Parse a value into a Color object (0.0-1.0 RGBA components) */
+function parseColorValue(value: unknown): AX.Color | null {
+  // Already a Color object with r, g, b properties
+  if (
+    value &&
+    typeof value === "object" &&
+    "r" in value &&
+    "g" in value &&
+    "b" in value
+  ) {
+    const c = value as { r: number; g: number; b: number; a?: number };
+    return { r: c.r, g: c.g, b: c.b, a: c.a ?? 1.0 };
+  }
+
+  if (typeof value === "string") {
+    // Parse rgba(r, g, b, a) or rgb(r, g, b) CSS format (0-255 integers)
+    const rgbaMatch = value.match(
+      /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)/
+    );
+    if (rgbaMatch) {
+      return {
+        r: parseInt(rgbaMatch[1], 10) / 255,
+        g: parseInt(rgbaMatch[2], 10) / 255,
+        b: parseInt(rgbaMatch[3], 10) / 255,
+        a: rgbaMatch[4] ? parseFloat(rgbaMatch[4]) : 1.0,
+      };
+    }
+
+    // Parse #RRGGBB or #RRGGBBAA hex format
+    const hexMatch = value.match(
+      /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})?$/i
+    );
+    if (hexMatch) {
+      return {
+        r: parseInt(hexMatch[1], 16) / 255,
+        g: parseInt(hexMatch[2], 16) / 255,
+        b: parseInt(hexMatch[3], 16) / 255,
+        a: hexMatch[4] ? parseInt(hexMatch[4], 16) / 255 : 1.0,
+      };
+    }
+
+    // Parse #RGB short hex format
+    const shortHexMatch = value.match(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/i);
+    if (shortHexMatch) {
+      return {
+        r: parseInt(shortHexMatch[1] + shortHexMatch[1], 16) / 255,
+        g: parseInt(shortHexMatch[2] + shortHexMatch[2], 16) / 255,
+        b: parseInt(shortHexMatch[3] + shortHexMatch[3], 16) / 255,
+        a: 1.0,
+      };
+    }
+  }
+
+  return null;
+}
+
+/** Format a value as a CSS color string if it's a color, otherwise stringify */
+function formatColorAsString(value: unknown): string {
+  // Check if it's a Color object with r, g, b properties (0.0-1.0 range)
+  if (
+    value &&
+    typeof value === "object" &&
+    "r" in value &&
+    "g" in value &&
+    "b" in value
+  ) {
+    const c = value as { r: number; g: number; b: number; a?: number };
+    const r = Math.round(c.r * 255);
+    const g = Math.round(c.g * 255);
+    const b = Math.round(c.b * 255);
+    const a = c.a ?? 1.0;
+    return a === 1.0 ? `rgb(${r}, ${g}, ${b})` : `rgba(${r}, ${g}, ${b}, ${a})`;
+  }
+
+  return String(value);
+}
+
 async function writeValueToElement(element: AX.TypedElement, value: unknown) {
   try {
     if (accepts(element, "string")) {
-      await allio.set(element, String(value));
+      // If value is a Color, format it as CSS; otherwise stringify normally
+      const stringValue = formatColorAsString(value);
+      await allio.set(element, stringValue);
     } else if (accepts(element, "number")) {
       await allio.set(element, Number(value));
     } else if (accepts(element, "boolean")) {
       await allio.set(element, Boolean(value));
+    } else if (accepts(element, "color")) {
+      const color = parseColorValue(value);
+      if (color) await allio.set(element, color);
     }
   } catch (err) {
     console.error("Failed to propagate:", err);
