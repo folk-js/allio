@@ -233,8 +233,9 @@ impl ElementHandle {
     let column_index = CFString::from_static_str("AXColumnIndex");
     let row_count = CFString::from_static_str("AXRowCount");
     let column_count = CFString::from_static_str("AXColumnCount");
+    let identifier = CFString::from_static_str("AXIdentifier");
 
-    let attr_refs: [&CFString; 17] = [
+    let attr_refs: [&CFString; 18] = [
       &role,         // 0
       &subrole,      // 1
       &title,        // 2
@@ -252,6 +253,7 @@ impl ElementHandle {
       &column_index, // 14
       &row_count,    // 15
       &column_count, // 16
+      &identifier,   // 17
     ];
     let attrs = CFArray::from_objects(&attr_refs);
 
@@ -324,6 +326,7 @@ impl ElementHandle {
     let column_index_val = get_val(14).and_then(|v| parse_usize(&v));
     let row_count_val = get_val(15).and_then(|v| parse_usize(&v));
     let column_count_val = get_val(16).and_then(|v| parse_usize(&v));
+    let identifier_str = get_val(17).and_then(|v| parse_str(&v));
 
     let action_strs = self.get_actions();
     let actions = action_strs
@@ -368,6 +371,7 @@ impl ElementHandle {
       row_count: row_count_val,
       column_count: column_count_val,
       actions,
+      identifier: identifier_str,
     }
   }
 

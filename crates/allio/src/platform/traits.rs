@@ -62,6 +62,9 @@ pub(crate) struct ElementAttributes {
   pub row_count: Option<usize>,
   pub column_count: Option<usize>,
   pub actions: Vec<crate::a11y::Action>,
+  /// Platform accessibility identifier (AXIdentifier on macOS).
+  /// May provide stable identity across element moves if the app sets it.
+  pub identifier: Option<String>,
 }
 
 /// Callbacks from platform to core when OS events fire.

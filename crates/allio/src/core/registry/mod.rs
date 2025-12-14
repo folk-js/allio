@@ -111,6 +111,10 @@ pub(crate) struct CachedElement {
   // === Actions ===
   pub(crate) actions: Vec<Action>,
 
+  // === Identity ===
+  /// Platform accessibility identifier (AXIdentifier on macOS).
+  pub(crate) identifier: Option<String>,
+
   // === Hit Test Status ===
   /// True if this element is a fallback container from Chromium/Electron lazy init.
   pub(crate) is_fallback: bool,
@@ -145,6 +149,7 @@ impl PartialEq for CachedElement {
       && self.row_count == other.row_count
       && self.column_count == other.column_count
       && self.actions == other.actions
+      && self.identifier == other.identifier
       && self.is_fallback == other.is_fallback
   }
 }
@@ -184,6 +189,7 @@ impl CachedElement {
       row_count: attrs.row_count,
       column_count: attrs.column_count,
       actions: attrs.actions,
+      identifier: attrs.identifier,
       is_fallback: false,
       watch: None,
       last_refreshed: std::time::Instant::now(),
@@ -215,6 +221,7 @@ impl CachedElement {
     self.row_count = attrs.row_count;
     self.column_count = attrs.column_count;
     self.actions = attrs.actions;
+    self.identifier = attrs.identifier;
     self.is_fallback = false;
     self.last_refreshed = std::time::Instant::now();
   }

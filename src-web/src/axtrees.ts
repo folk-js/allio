@@ -13,6 +13,7 @@ class AXTreeOverlay {
   private expanded = new Set<AX.ElementId>();
   private treeEl: HTMLElement | null = null;
   private outlineEl: HTMLElement | null = null;
+  private hoverPanel: HTMLElement | null = null;
   // Track which windows we've fetched the tree root for
   private fetchedRoots = new Set<AX.WindowId>();
 
@@ -201,9 +202,7 @@ class AXTreeOverlay {
               : ""
           }
           ${count ? `<span class="tree-count">(${count})</span>` : ""}
-          <span class="tree-id" title="${this.formatElementTooltip(el)}">[${
-      el.id
-    }]</span>
+          <span class="tree-id">[${el.id}]</span>
           ${
             isTextInput
               ? `
@@ -238,39 +237,44 @@ class AXTreeOverlay {
     );
   }
 
-  private formatElementTooltip(el: AX.TypedElement): string {
-    const lines: string[] = [
-      `id: ${el.id}`,
-      `pid: ${el.pid}`,
-      `window_id: ${el.window_id}`,
-      `role: ${el.role}`,
-      `platform_role: ${el.platform_role}`,
-    ];
-    if (el.label) lines.push(`label: ${el.label}`);
-    if (el.description) lines.push(`description: ${el.description}`);
-    if (el.value) {
-      const v = el.value.value;
-      lines.push(
-        `value: ${typeof v === "string" ? `"${v}"` : v} (${el.value.type})`
-      );
+  private showHoverPanel(el: AX.TypedElement, anchor: HTMLElement) {
+    if (!this.hoverPanel) {
+      this.hoverPanel = document.createElement("div");
+      this.hoverPanel.className = "element-hover-panel";
+      this.hoverPanel.style.cssText = `
+        position: fixed;
+        background: rgba(20, 20, 20, 0.95);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 6px;
+        padding: 8px 12px;
+        font-family: ui-monospace, monospace;
+        font-size: 10px;
+        color: #e0e0e0;
+        white-space: pre-wrap;
+        max-width: 400px;
+        max-height: 300px;
+        overflow: auto;
+        z-index: 10000;
+        pointer-events: none;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+      `;
+      document.body.appendChild(this.hoverPanel);
     }
-    if (el.bounds) {
-      lines.push(
-        `bounds: ${el.bounds.x.toFixed(0)},${el.bounds.y.toFixed(
-          0
-        )} ${el.bounds.w.toFixed(0)}×${el.bounds.h.toFixed(0)}`
-      );
+
+    // Format element as pretty JSON
+    this.hoverPanel.textContent = JSON.stringify(el, null, 2);
+
+    // Position below the anchor
+    const rect = anchor.getBoundingClientRect();
+    this.hoverPanel.style.left = `${rect.left}px`;
+    this.hoverPanel.style.top = `${rect.bottom + 4}px`;
+    this.hoverPanel.style.display = "block";
+  }
+
+  private hideHoverPanel() {
+    if (this.hoverPanel) {
+      this.hoverPanel.style.display = "none";
     }
-    if (el.parent_id !== null) lines.push(`parent_id: ${el.parent_id}`);
-    if (el.children !== null)
-      lines.push(`children: [${el.children.join(", ")}]`);
-    if (el.focused) lines.push(`focused: true`);
-    if (el.disabled) lines.push(`disabled: true`);
-    if (el.selected) lines.push(`selected: true`);
-    if (el.expanded !== undefined) lines.push(`expanded: ${el.expanded}`);
-    if (el.actions.length > 0)
-      lines.push(`actions: [${el.actions.join(", ")}]`);
-    return this.escapeHtml(lines.join("\n"));
   }
 
   private attachHandlers() {
@@ -337,11 +341,10 @@ class AXTreeOverlay {
       }
     });
 
-    // Hover outline - refresh to get current bounds
+    // Hover outline and element details - refresh to get current bounds
     this.treeEl.addEventListener("mouseover", async (e) => {
-      const node = (e.target as HTMLElement).closest(
-        ".tree-node"
-      ) as HTMLElement;
+      const target = e.target as HTMLElement;
+      const node = target.closest(".tree-node") as HTMLElement;
       if (node?.dataset.id) {
         try {
           const el = await this.allio.getElement(
@@ -352,6 +355,10 @@ class AXTreeOverlay {
             const { x, y, w, h } = el.bounds;
             this.showOutline(x, y, w, h);
           }
+          // Show element details panel when hovering over the ID badge
+          if (target.classList.contains("tree-id")) {
+            this.showHoverPanel(el, target);
+          }
         } catch {
           // Element may no longer exist, ignore
         }
@@ -359,11 +366,13 @@ class AXTreeOverlay {
     });
 
     this.treeEl.addEventListener("mouseout", (e) => {
-      const node = (e.target as HTMLElement).closest(
-        ".tree-node"
-      ) as HTMLElement;
+      const target = e.target as HTMLElement;
+      const node = target.closest(".tree-node") as HTMLElement;
       if (node?.dataset.id) {
         this.hideOutline();
+      }
+      if (target.classList.contains("tree-id")) {
+        this.hideHoverPanel();
       }
     });
   }

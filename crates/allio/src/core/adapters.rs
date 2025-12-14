@@ -49,6 +49,7 @@ pub(crate) fn build_element(registry: &Registry, id: ElementId) -> Option<Elemen
     row_count: elem.row_count,
     column_count: elem.column_count,
     actions: elem.actions.clone(),
+    identifier: elem.identifier.clone(),
     is_fallback: elem.is_fallback,
   })
 }

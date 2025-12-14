@@ -62,6 +62,11 @@ pub struct Element {
   // === Actions ===
   pub actions: Vec<crate::a11y::Action>,
 
+  // === Identity ===
+  /// Platform accessibility identifier (AXIdentifier on macOS).
+  /// May provide stable identity across element moves if the app sets it.
+  pub identifier: Option<String>,
+
   // === Hit Test Status ===
   /// True if this element is a fallback container from Chromium/Electron lazy init.
   /// Only meaningful for elements returned from `fetch_element_at`.
