@@ -1,10 +1,11 @@
 # Allio (Accessibility I/O)
 
 > [!IMPORTANT]
-> An experimental system to expose accessibility trees as read-write interfaces and augment existing apps with new UI or affordances.
-> For more background and motivation check out our [paper](https://folkjs.org/live-2025/).
-
-See also the [Contributing Guide](/CONTRIBUTING.md).
+> This is an experimental system to expose accessibility trees as read-write interfaces and augment existing apps with new UI or affordances.
+>
+> For more background and motivation see our [paper](https://folkjs.org/live-2025/).
+>
+> See also the [Contributing Guide](/CONTRIBUTING.md).
 
 ## Open Problems
 
@@ -35,7 +36,7 @@ At its core, Allio is:
 2. A **query interface** to that cache
 3. A **sync mechanism** that keeps the cache fresh (polling + notifications)
 4. An **event stream** for clients to mirror state changes
-5. A **JS client** to overlay new UI on top of existing apps
+5. A **JS client** to overlay new UI in/on/around existing apps
 
 ```
 ┌─────────────────────────────────────────────────┐
@@ -65,7 +66,7 @@ Process (1:N)──→ Window (1:N)──→ Element (1:N)──→ Children
 Each entity has:
 
 - **Data**: The info we expose (`Window`, `Element`)
-- **Handle**: OS reference for operations (used as HashMap key for deduplication)
+- **Handle**: OS reference for operations and HashMap key for deduplication
 
 ### Cascade Rules
 
@@ -95,7 +96,6 @@ This enables callers to make explicit tradeoffs between latency and recency.
 
 - Public API for consumers
 - Orchestrates Registry + Platform calls
-- Sets up watches after inserts
 - Implements `EventHandler` trait for OS notifications
 
 **Registry (Cache + Events)**
@@ -105,12 +105,10 @@ This enables callers to make explicit tradeoffs between latency and recency.
 - Maintains tree relationships via `ElementTree`
 - Cascading removals
 - Emits events when data changes
-- **No OS calls, no subscriptions**
 
 **Platform (OS Interface)**
 
 - Trait-based abstraction over OS APIs
-- macOS implementation via Accessibility APIs
 - Handles all FFI and unsafe code
 - Callbacks go through `EventHandler` trait (implemented by Allio)
 
@@ -133,8 +131,6 @@ pub enum ElementEvent<H> {
 }
 ```
 
-Allio implements this trait, keeping Platform unaware of Allio internals.
-
 ## Element Identity
 
 Elements are deduplicated using their OS handle:
@@ -142,9 +138,9 @@ Elements are deduplicated using their OS handle:
 - **Handle** (`ElementHandle`): Wraps macOS `AXUIElement`, implements `Hash + Eq`
 - **ElementId**: Our stable u32 ID given to clients
 
-The handle's `Hash` uses `CFHash` (computed once, cached). The handle's `Eq` uses `CFEqual` for collision resolution (local comparison, no IPC).
+For macOS the handle's `Hash` uses `CFHash` (computed once, cached). The handle's `Eq` uses `CFEqual` for collision resolution.
 
-Registry maintains `handle_to_id: HashMap<Handle, ElementId>` for O(1) deduplication.
+Registry maintains `handle_to_id: HashMap<Handle, ElementId>` for deduplication.
 
 ## Registry Operations
 
@@ -175,14 +171,6 @@ impl Registry {
 }
 ```
 
-### Key Invariant
-
-**Registry fields are private.** All changes go through these methods, guaranteeing:
-
-- Indexes are always updated
-- Events are always emitted
-- Cascades always happen
-
 ## Public API
 
 ### Construction & Events
@@ -195,8 +183,6 @@ pub fn subscribe(&self) -> Receiver<Event>;
 ```
 
 ### Element Retrieval
-
-The unified `get` method with recency:
 
 ```rust
 /// Get element by ID with specified recency.
@@ -284,47 +270,12 @@ pub fn watch(&self, id: ElementId) -> AllioResult<()>;
 pub fn unwatch(&self, id: ElementId) -> AllioResult<()>;
 ```
 
-## Event Guarantees
+## Event
 
-Because Registry owns event emission:
-
-- `upsert_element` → emits `ElementAdded` only if truly new
-- `update_element` → emits `ElementChanged` only if data differs
+- `upsert_element` → emits `ElementAdded` if truly new
+- `update_element` → emits `ElementChanged` if data has changed
 - `remove_element` → emits `ElementRemoved` for element + all descendants
 - `remove_window` → emits `WindowRemoved` + `ElementRemoved` for all elements
-
-**You cannot change state without emitting the correct events.**
-
-## File Structure
-
-```
-crates/allio/src/
-├── lib.rs              # Re-exports only
-├── core/
-│   ├── mod.rs          # Allio struct, construction, EventHandler impl
-│   ├── queries.rs      # get, children, parent, element_at, etc.
-│   ├── actions.rs      # set_value, perform_action (write to OS)
-│   ├── sync.rs         # sync_windows, sync_mouse (bulk updates from polling)
-│   ├── handlers.rs     # handle_* methods (process OS notifications)
-│   ├── subscriptions.rs # watch/unwatch
-│   ├── adapters.rs     # build_element, build_snapshot (Registry → public types)
-│   └── registry/
-│       ├── mod.rs      # Registry struct, global state, CachedElement/Window/Process
-│       ├── elements.rs # upsert_element, update_element, remove_element
-│       ├── windows.rs  # upsert_window, update_window, remove_window
-│       ├── processes.rs # upsert_process, remove_process
-│       └── tree.rs     # ElementTree for parent/child relationships
-├── platform/
-│   ├── mod.rs          # Re-exports
-│   ├── traits.rs       # Platform, PlatformHandle, EventHandler, ElementEvent
-│   └── macos/          # macOS implementation
-│       ├── mod.rs      # Platform trait impl
-│       ├── handles.rs  # ElementHandle (with Hash + Eq)
-│       ├── observer.rs # AXObserver management
-│       └── ...
-├── polling/            # Window/focus sync loop
-└── types/              # Element, Window, Event, Recency, etc.
-```
 
 ## Summary
 
