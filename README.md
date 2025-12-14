@@ -13,11 +13,11 @@ Check out the [Contributing Guide](/CONTRIBUTING.md) to setting up the repo.
 
 ## Open Problems
 
-There are really 3 things in the way of much better interop on top of existing a11y infrastructure:
+There are 3 things in the way of a11y-as-interop which we are fighting against:
 
-1. pull-based architectures instead of [push-based](https://gitlab.gnome.org/GNOME/at-spi2-core/-/blob/2.58.2/devel-docs/new-protocol.rst) ones
-2. lack of structured data I/O
-3. lack of cross-platform _client_ libraries for efficient consumption of a11y data, which would be easier to create with push-based infrastructure.
+1. pull-based architectures instead of [push-based](https://gitlab.gnome.org/GNOME/at-spi2-core/-/blob/2.58.2/devel-docs/new-protocol.rst) ones, making efficient queries and robust reactivity challenging.
+2. bias of a11y towards read-only data, with inconsistent and unreliable writing of data depending on the app.
+3. lack of _structured_ i/o, where a11y biases towards strings metadata instead of structured types or better yet, higher-level semantic operations on native data storage like sqlite, automerge or filesystem representations.
 
 ## API Progress Table
 

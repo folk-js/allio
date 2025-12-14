@@ -164,31 +164,58 @@ impl ElementHandle {
   pub(crate) fn set_typed_value(&self, value: &Value) -> Result<(), AXError> {
     let attr = CFString::from_static_str("AXValue");
     unsafe {
-      let result = match value {
+      let (result, debug_info) = match value {
         Value::String(s) => {
           let cf_value = CFString::from_str(s);
-          self.inner.set_attribute_value(&attr, &cf_value)
+          (
+            self.inner.set_attribute_value(&attr, &cf_value),
+            format!("String({:?})", s),
+          )
         }
         Value::Boolean(b) => {
           // macOS checkboxes use CFNumber 0/1, not CFBoolean
           let cf_value = CFNumber::new_i32(i32::from(*b));
-          self.inner.set_attribute_value(&attr, &cf_value)
+          (
+            self.inner.set_attribute_value(&attr, &cf_value),
+            format!("Boolean({})", b),
+          )
         }
         Value::Number(n) => {
           let cf_value = CFNumber::new_f64(*n);
-          self.inner.set_attribute_value(&attr, &cf_value)
+          (
+            self.inner.set_attribute_value(&attr, &cf_value),
+            format!("Number({})", n),
+          )
         }
         Value::Color(c) => {
           // AXColorWell uses "rgb R G B A" string format (space-separated 0.0-1.0 floats)
           // Use explicit precision to ensure consistent format (e.g., "1.0" not "1")
           let color_str = format!("rgb {:.6} {:.6} {:.6} {:.6}", c.r, c.g, c.b, c.a);
           let cf_value = CFString::from_str(&color_str);
-          self.inner.set_attribute_value(&attr, &cf_value)
+
+          // Debug: Log available actions and current value before setting
+          let actions = self.get_actions();
+          let current_value = self.get_string("AXValue");
+          log::debug!(
+            "ColorWell before set: value={:?}, actions={:?}",
+            current_value,
+            actions
+          );
+
+          let result = self.inner.set_attribute_value(&attr, &cf_value);
+
+          // Debug: Read back after setting
+          let after_value = self.get_string("AXValue");
+          log::debug!("ColorWell after set: value={:?}", after_value);
+
+          (result, format!("Color({:?})", color_str))
         }
       };
       if result == AXError::Success {
+        log::debug!("set_typed_value: {} -> Success", debug_info);
         Ok(())
       } else {
+        log::warn!("set_typed_value: {} -> {:?}", debug_info, result);
         Err(result)
       }
     }
