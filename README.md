@@ -7,6 +7,8 @@
 >
 > See also the [Contributing Guide](/CONTRIBUTING.md).
 
+Every GUI application must implement accessibility. It's not optional—there are legal requirements (ADA, WCAG, Section 508). Apple, Microsoft, and GNOME all have accessibility frameworks that apps expose. This creates a system-wide, cross-application API that developers can't opt out of. We believe this is an under-explored and under-advocated space for interoperability.
+
 ## Open Problems
 
 There are 3 things in the way of a11y-as-interop which we are fighting against:
