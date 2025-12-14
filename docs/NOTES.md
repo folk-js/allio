@@ -19,3 +19,29 @@ misc other bits:
 - [ ] **CLI tool?** - Use `allio` crate directly for scripting/automation without Tauri
 - [ ] **Query API?** - `allio.query()` for searching elements by predicate
 - [ ] **Select API?** - `allio.select(element_id)` for selecting items in lists/tables
+
+now:
+
+- Expose current API in TS and update RPC (get, recency)
+- remove click, write, writeValue, refresh
+- rename action to perform
+
+from reminders:
+
+- Ports demo piping more than just text… colors and booleans
+- Sketch out elements API with status: get, set, perform, observe, select, query, views
+- Need to ensure we don’t double subscribe, always clean up, and handle failures correctly (new error types?) failures could inform polling fallbacks???
+- Multiselect api?
+- MERGE!
+- future speculative structured data bridge! Any way to do this without community-maintained mappings?? If not, how do we make that easy and effective? Map identifier to data? Hmmmm this seems like the hard end goal…. Can prototype…
+- Can we get multiline strings?? YES
+- Table data (spreadsheets!)
+- Observe API, add+remove observations, use notifs + polling
+- Tree views: pruning + contraction
+- Deprecate watch+unwatch (or just internal as add/remove trait via observers?)
+- Remove destruction special case? What about structural changes as a category?
+- Can we get filepaths? What about refs to entries in e.g. sqlite for Zotero and others? How do we bridge to structured data?
+- What does a query api look like? ARIA CSS selectors? observe selection? How in the world do we make this GLOBAL and efficient? That’s THE goal right?
+- Need a more robust WS discovery mechanism… what do other systems do?
+- Need non-overlay tests/demos: CLI tool, non-overlay web page…
+- Need to handle offscreen stuff correctly, currently we just stop polling but this is hacky, we still getElementAt… what’s the approach here? Can our approach double as cleanup/preparation for multiscreen and multi window?
