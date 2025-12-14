@@ -815,7 +815,7 @@ function updatePortHover(x: number, y: number) {
 async function showHoverOverlay(port: Port) {
   // Refresh element data
   try {
-    port.element = await allio.refresh(port.element.id);
+    port.element = await allio.getElement(port.element.id, "current");
   } catch {
     // Use cached data if refresh fails
   }
@@ -1004,7 +1004,10 @@ function handleElementUpdate(element: AX.TypedElement) {
 
 async function reEvaluateTransform(inputPort: Port, inputValue: unknown) {
   try {
-    const freshElement = await allio.refresh(inputPort.element.id);
+    const freshElement = await allio.getElement(
+      inputPort.element.id,
+      "current"
+    );
     const functionCode = freshElement.value?.value;
 
     if (typeof functionCode !== "string") return;
@@ -1060,7 +1063,10 @@ async function propagateThroughTransform(
   transformInputCache.set(targetPort.element.id, inputValue);
 
   try {
-    const freshElement = await allio.refresh(targetPort.element.id);
+    const freshElement = await allio.getElement(
+      targetPort.element.id,
+      "current"
+    );
     const functionCode = freshElement.value?.value;
 
     if (typeof functionCode !== "string") {

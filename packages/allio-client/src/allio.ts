@@ -18,6 +18,7 @@ import type {
   ElementOfRole,
   PrimitiveForRole,
   WritableRole,
+  Recency,
 } from "./types";
 import { ROLE_VALUES } from "./types";
 
@@ -153,8 +154,12 @@ export class Allio extends EventEmitter<AllioEvents> {
   elementAt = (x: number, y: number): Promise<TypedElement | null> =>
     this.call("element_at", { x, y });
 
-  /** Get element by ID (from registry, fetches if needed) */
-  getElement = (element_id: AX.ElementId) => this.call("get", { element_id });
+  /**
+   * Get element by ID with optional recency control.
+   * @param recency - "any" (cache), "current" (fetch from OS), or { max_age_ms: number }
+   */
+  getElement = (element_id: AX.ElementId, recency: Recency | null = null) =>
+    this.call("get", { element_id, recency });
 
   /** Get root element for a window (fetches from OS if not cached) */
   windowRoot = (window_id: AX.WindowId) =>
@@ -167,9 +172,6 @@ export class Allio extends EventEmitter<AllioEvents> {
   /** Get parent of element (fetches from OS, null if element is root) */
   parent = (element_id: AX.ElementId): Promise<TypedElement | null> =>
     this.call("parent", { element_id });
-
-  /** Force re-fetch element from OS */
-  refresh = (element_id: AX.ElementId) => this.call("refresh", { element_id });
 
   /**
    * Set element value with type-safe primitive.
@@ -204,52 +206,8 @@ export class Allio extends EventEmitter<AllioEvents> {
         throw new Error(`Role ${element.role} does not accept values`);
     }
 
-    return this.call("write", { element_id: element.id, value: envelope });
+    return this.call("set", { element_id: element.id, value: envelope });
   }
-
-  /**
-   * Write a raw Value envelope to element (low-level API).
-   * Prefer `set()` for type-safe value writing.
-   */
-  write = (element_id: AX.ElementId, value: AX.Value) =>
-    this.call("write", { element_id, value });
-
-  /**
-   * Write a primitive value, auto-converting to Value envelope.
-   * Less type-safe than `set()` but works with any element.
-   *
-   * @deprecated Prefer `set()` for type-safe value writing.
-   */
-  writeValue = (
-    element: AX.Element | TypedElement,
-    primitive: string | number | boolean
-  ): Promise<boolean> => {
-    const valueType = ROLE_VALUES[element.role as AX.Role];
-    let envelope: AX.Value;
-
-    switch (valueType) {
-      case "string":
-        envelope = { type: "String", value: String(primitive) };
-        break;
-      case "number":
-        envelope = { type: "Number", value: Number(primitive) };
-        break;
-      case "boolean":
-        envelope = { type: "Boolean", value: Boolean(primitive) };
-        break;
-      default:
-        // Fallback: guess type from primitive
-        if (typeof primitive === "string") {
-          envelope = { type: "String", value: primitive };
-        } else if (typeof primitive === "number") {
-          envelope = { type: "Number", value: primitive };
-        } else {
-          envelope = { type: "Boolean", value: primitive };
-        }
-    }
-
-    return this.call("write", { element_id: element.id, value: envelope });
-  };
 
   /**
    * Perform an action on an element.
@@ -257,17 +215,12 @@ export class Allio extends EventEmitter<AllioEvents> {
    * Actions are platform-agnostic operations like press, showmenu, increment, etc.
    *
    * @example
-   * await allio.action(buttonId, 'press');
-   * await allio.action(sliderId, 'increment');
-   * await allio.action(menuId, 'showmenu');
+   * await allio.perform(buttonId, 'press');
+   * await allio.perform(sliderId, 'increment');
+   * await allio.perform(menuId, 'showmenu');
    */
-  action = (element_id: AX.ElementId, action: AX.Action) =>
-    this.call("action", { element_id, action });
-
-  /**
-   * Click/press an element. Convenience wrapper for action(id, 'press').
-   */
-  click = (element_id: AX.ElementId) => this.action(element_id, "press");
+  perform = (element_id: AX.ElementId, action: AX.Action) =>
+    this.call("perform", { element_id, action });
 
   /**
    * Watch an element for changes.

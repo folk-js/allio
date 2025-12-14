@@ -314,7 +314,7 @@ class AXTreeOverlay {
       ) as HTMLElement;
       if (node?.dataset.id) {
         try {
-          const el = await this.allio.refresh(parseInt(node.dataset.id!));
+          const el = await this.allio.getElement(parseInt(node.dataset.id!), "current");
           if (el.bounds) {
             const { x, y, w, h } = el.bounds;
             this.showOutline(x, y, w, h);

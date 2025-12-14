@@ -10,6 +10,29 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use ts_rs::TS;
 
+/// Recency for RPC requests (serializable subset of allio::Recency).
+#[derive(Debug, Clone, Copy, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum Recency {
+  /// Use cached value, might be stale.
+  Any,
+  /// Always fetch from OS.
+  Current,
+  /// Value must be at most this old (milliseconds).
+  MaxAgeMs(u32),
+}
+
+impl From<Recency> for allio::Recency {
+  fn from(r: Recency) -> Self {
+    match r {
+      Recency::Any => allio::Recency::Any,
+      Recency::Current => allio::Recency::Current,
+      Recency::MaxAgeMs(ms) => allio::Recency::max_age_ms(ms),
+    }
+  }
+}
+
 /// RPC request.
 #[derive(Debug, Deserialize, TS)]
 #[serde(tag = "method", content = "args", rename_all = "snake_case")]
@@ -19,8 +42,12 @@ pub enum RpcRequest {
   Snapshot,
   /// Get deepest element at screen coordinates.
   ElementAt { x: f64, y: f64 },
-  /// Get cached element by ID.
-  Get { element_id: ElementId },
+  /// Get element by ID with optional recency control.
+  Get {
+    element_id: ElementId,
+    #[serde(default)]
+    recency: Option<Recency>,
+  },
   /// Get root element for a window.
   WindowRoot { window_id: WindowId },
   /// Discover children of element.
@@ -31,15 +58,13 @@ pub enum RpcRequest {
   },
   /// Discover parent of element.
   Parent { element_id: ElementId },
-  /// Refresh element from OS.
-  Refresh { element_id: ElementId },
-  /// Write value to element.
-  Write {
+  /// Set value on element.
+  Set {
     element_id: ElementId,
     value: AXValue,
   },
   /// Perform an action on element.
-  Action {
+  Perform {
     element_id: ElementId,
     action: Action,
   },
@@ -100,10 +125,12 @@ pub fn dispatch(allio: &Allio, request: RpcRequest) -> Result<RpcResponse, Strin
       Ok(RpcResponse::OptionalElement(element.map(Box::new)))
     }
 
-    RpcRequest::Get { element_id } => {
-      let element = allio
-        .get(element_id, allio::Recency::Any)
-        .map_err(|e| e.to_string())?;
+    RpcRequest::Get {
+      element_id,
+      recency,
+    } => {
+      let recency = recency.map(Into::into).unwrap_or(allio::Recency::Any);
+      let element = allio.get(element_id, recency).map_err(|e| e.to_string())?;
       Ok(RpcResponse::Element(Box::new(element)))
     }
 
@@ -132,21 +159,14 @@ pub fn dispatch(allio: &Allio, request: RpcRequest) -> Result<RpcResponse, Strin
       Ok(RpcResponse::OptionalElement(parent.map(Box::new)))
     }
 
-    RpcRequest::Refresh { element_id } => {
-      let element = allio
-        .get(element_id, allio::Recency::Current)
-        .map_err(|e| e.to_string())?;
-      Ok(RpcResponse::Element(Box::new(element)))
-    }
-
-    RpcRequest::Write { element_id, value } => {
+    RpcRequest::Set { element_id, value } => {
       allio
         .set_value(element_id, &value)
         .map_err(|e| e.to_string())?;
       Ok(RpcResponse::Null)
     }
 
-    RpcRequest::Action { element_id, action } => {
+    RpcRequest::Perform { element_id, action } => {
       allio
         .perform_action(element_id, action)
         .map_err(|e| e.to_string())?;

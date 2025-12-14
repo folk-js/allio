@@ -53,8 +53,8 @@ impl Recency {
   /// assert!(!recency.is_satisfied_by(Duration::from_millis(150)));
   /// ```
   #[inline]
-  pub const fn max_age_ms(ms: u64) -> Self {
-    Self::MaxAge(Duration::from_millis(ms))
+  pub const fn max_age_ms(ms: u32) -> Self {
+    Self::MaxAge(Duration::from_millis(ms as u64))
   }
 
   /// Convenience constructor for max age in seconds.
@@ -69,8 +69,8 @@ impl Recency {
   /// assert!(recency.is_satisfied_by(Duration::from_secs(3)));
   /// ```
   #[inline]
-  pub const fn max_age_secs(secs: u64) -> Self {
-    Self::MaxAge(Duration::from_secs(secs))
+  pub const fn max_age_secs(secs: u32) -> Self {
+    Self::MaxAge(Duration::from_secs(secs as u64))
   }
 
   /// Check if a value with the given age satisfies this recency requirement.

@@ -12,6 +12,9 @@ export type RpcArgs<M extends RpcMethod> = Extract<
   ? A
   : Record<string, never>;
 
+// Re-export Recency from generated types
+export type { Recency } from "./generated/Recency";
+
 // Manual return type mapping (matches Rust dispatch)
 export type RpcReturns = {
   snapshot: AX.Snapshot;
@@ -20,9 +23,8 @@ export type RpcReturns = {
   window_root: TypedElement;
   children: TypedElement[];
   parent: TypedElement | null;
-  refresh: TypedElement;
-  write: boolean;
-  action: boolean;
+  set: boolean;
+  perform: boolean;
   watch: void;
   unwatch: void;
 };

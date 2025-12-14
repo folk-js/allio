@@ -598,7 +598,7 @@ class AXGraph {
 
     // Refresh element data to get latest bounds
     try {
-      const fresh = await this.allio.refresh(node.element.id);
+      const fresh = await this.allio.getElement(node.element.id, "current");
       node.element = fresh;
     } catch {
       // Element might be gone, use cached data
