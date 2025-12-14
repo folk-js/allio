@@ -44,17 +44,7 @@ type RpcReturns = {
 type EventName = AX.Event["event"];
 type EventData<E extends EventName> = Extract<AX.Event, { event: E }>["data"];
 
-// Namespace events (e.g., 'window' catches 'window:added', 'window:changed', 'window:removed')
-type EventNamespace =
-  | "window"
-  | "element"
-  | "focus"
-  | "selection"
-  | "sync"
-  | "mouse";
-type NamespaceEvents = { [N in EventNamespace]: [Event] };
-
-type AllioEvents = { [E in EventName]: [EventData<E>] } & NamespaceEvents;
+type AllioEvents = { [E in EventName]: [EventData<E>] };
 
 type Pending = {
   resolve: (r: unknown) => void;
@@ -500,10 +490,6 @@ export class Allio extends EventEmitter<AllioEvents> {
 
     // Emit specific event for external listeners
     (this.emit as Function)(event.event, event.data);
-
-    // Emit namespace event (e.g., 'window' for 'window:added')
-    const namespace = event.event.split(":")[0] as EventNamespace;
-    (this.emit as Function)(namespace, event);
   }
 
   private updateZOrder() {
