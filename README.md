@@ -1,13 +1,13 @@
 # Allio (Accessibility I/O)
 
 > [!IMPORTANT]
-> This is an experimental system to expose accessibility trees as read-write interfaces and augment existing apps with new UI affordances.
+> This is an experimental system to expose accessibility trees as read-write interfaces and augment existing apps with new UI affordances. Currently only macOS is supported but it is designed with cross-platform in mind.
 >
 > For more background and motivation see our [paper](https://folkjs.org/live-2025/).
 >
 > See also the [Contributing Guide](/CONTRIBUTING.md).
 
-Every GUI application must implement accessibility. It's not optional—there are legal requirements (ADA, WCAG, Section 508). Apple, Microsoft, and GNOME all have accessibility frameworks that apps expose. This creates a system-wide, cross-application API that developers can't opt out of. We believe this is under-explored for interoperability and under-advocated for [policy](https://www.eff.org/deeplinks/2019/10/adversarial-interoperability).
+Every GUI application must implement accessibility. It's not optional—there are legal requirements (ADA, WCAG, Section 508). Apple, Microsoft, and GNOME all have accessibility frameworks that apps expose. This creates a system-wide, cross-application API that developers can't opt out of. We believe this is an under-explored space for interoperability and under-utilized among [policy advocates](https://www.eff.org/deeplinks/2019/10/adversarial-interoperability).
 
 ## Open Problems
 
