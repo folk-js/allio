@@ -7,7 +7,7 @@
 >
 > See also the [Contributing Guide](/CONTRIBUTING.md).
 
-Every GUI application must implement accessibility. It's not optional—there are legal requirements (ADA, WCAG, Section 508). Apple, Microsoft, and GNOME all have accessibility frameworks that apps expose. This creates a system-wide, cross-application API that developers can't opt out of. We believe this is an under-explored space for interoperability and under-utilized among [policy advocates](https://www.eff.org/deeplinks/2019/10/adversarial-interoperability).
+Every GUI application must implement accessibility. In many cases there are legal requirements (ADA, WCAG, Section 508). Apple, Microsoft, and GNOME all have accessibility frameworks that apps expose, creating a system-wide, cross-application API that developers can't opt out of. We believe this is an under-explored space for interoperability and under-utilized among [policy advocates](https://www.eff.org/deeplinks/2019/10/adversarial-interoperability).
 
 ## Open Problems
 
