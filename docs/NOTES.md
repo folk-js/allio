@@ -20,16 +20,9 @@ misc other bits:
 - [ ] **Query API?** - `allio.query()` for searching elements by predicate
 - [ ] **Select API?** - `allio.select(element_id)` for selecting items in lists/tables
 
-now:
-
-- Expose current API in TS and update RPC (get, recency)
-- remove click, write, writeValue, refresh
-- rename action to perform
-
 from reminders:
 
-- Ports demo piping more than just text… colors and booleans
-- Sketch out elements API with status: get, set, perform, observe, select, query, views
+- Ports demo watching/piping more than just text… colors, booleans, etc...
 - Need to ensure we don’t double subscribe, always clean up, and handle failures correctly (new error types?) failures could inform polling fallbacks???
 - Multiselect api?
 - MERGE!
@@ -45,3 +38,4 @@ from reminders:
 - Need a more robust WS discovery mechanism… what do other systems do?
 - Need non-overlay tests/demos: CLI tool, non-overlay web page…
 - Need to handle offscreen stuff correctly, currently we just stop polling but this is hacky, we still getElementAt… what’s the approach here? Can our approach double as cleanup/preparation for multiscreen and multi window?
+- views API needs incremental view maintenance... need to have correct events, and somehow be simple? (simple is more important than efficient for now) --- we could do this in TS to start???

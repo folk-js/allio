@@ -210,7 +210,8 @@ pub(in crate::platform) fn role_from_macos(platform_role: &str) -> Role {
     ax_role::IMAGE => Role::Image,
     ax_role::SPLITTER => Role::Separator,
 
-    // Known non-semantic leaf elements → GenericElement
+    // Known non-semantic LEAFY elements → GenericElement.
+    // Leafy elements in this case means we DO NOT care about the children of these elements.
     ax_role::SCROLL_BAR
     | ax_role::VALUE_INDICATOR
     | ax_role::HANDLE
@@ -220,11 +221,12 @@ pub(in crate::platform) fn role_from_macos(platform_role: &str) -> Role {
     | ax_role::GROW_AREA
     | ax_role::DRAWER
     | ax_role::POPOVER
-    | ax_role::LAYOUT_AREA
-    | ax_role::LAYOUT_ITEM
     | ax_role::RELEVANCE_INDICATOR
     | ax_role::LEVEL_INDICATOR
     | ax_role::BUSY_INDICATOR => Role::GenericElement,
+
+    // Known non-semantic CONTAINER elements → GenericGroup
+    ax_role::LAYOUT_AREA | ax_role::LAYOUT_ITEM => Role::GenericGroup,
 
     ax_role::UNKNOWN => Role::Unknown,
 

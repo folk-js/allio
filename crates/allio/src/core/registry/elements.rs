@@ -29,11 +29,17 @@ impl Registry {
     let is_root = elem.is_root;
 
     if let Some(&existing_id) = self.handle_to_id.get(&handle) {
-      // Check if parent changed (platform reparented this element)
+      // Check if parent actually changed (not just discovered).
+      // Discovering a parent (None → Some) is NOT reparenting.
+      // Actual reparenting (Some(A) → Some(B)) triggers destroy & recreate.
       let parent_changed = self
         .elements
         .get(&existing_id)
-        .is_some_and(|cached| !is_root && cached.parent_handle != parent_handle);
+        .is_some_and(|cached| {
+          !is_root
+            && cached.parent_handle.is_some() // Only if we already had a parent
+            && cached.parent_handle != parent_handle
+        });
 
       if parent_changed {
         // Parent changed = element was reparented by platform.
@@ -42,7 +48,7 @@ impl Registry {
         self.remove_element(existing_id);
         // Fall through to create new element below
       } else {
-        // Same parent - just update in place
+        // Same parent (or discovering parent for first time) - update in place
         let mut fresh_elem = elem;
         fresh_elem.id = existing_id;
         self.update_element(existing_id, fresh_elem);

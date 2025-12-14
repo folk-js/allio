@@ -133,7 +133,7 @@ class AXTreeOverlay {
         <span class="legend-item"><span class="tree-label">label</span></span>
         <span class="legend-item"><span class="tree-value">value</span></span>
         <span class="legend-item"><span class="tree-actions">[actions]</span></span>
-        <span class="legend-item"><span class="tree-pid">[pid]</span></span>
+        <span class="legend-item"><span class="tree-id">[id]</span></span>
       </div>
       <div class="tree-content">${this.renderNodes([rootElement])}</div>
     `;
@@ -201,7 +201,9 @@ class AXTreeOverlay {
               : ""
           }
           ${count ? `<span class="tree-count">(${count})</span>` : ""}
-          <span class="tree-pid">[${el.pid}]</span>
+          <span class="tree-id" title="${this.formatElementTooltip(el)}">[${
+      el.id
+    }]</span>
           ${
             isTextInput
               ? `
@@ -236,6 +238,41 @@ class AXTreeOverlay {
     );
   }
 
+  private formatElementTooltip(el: AX.TypedElement): string {
+    const lines: string[] = [
+      `id: ${el.id}`,
+      `pid: ${el.pid}`,
+      `window_id: ${el.window_id}`,
+      `role: ${el.role}`,
+      `platform_role: ${el.platform_role}`,
+    ];
+    if (el.label) lines.push(`label: ${el.label}`);
+    if (el.description) lines.push(`description: ${el.description}`);
+    if (el.value) {
+      const v = el.value.value;
+      lines.push(
+        `value: ${typeof v === "string" ? `"${v}"` : v} (${el.value.type})`
+      );
+    }
+    if (el.bounds) {
+      lines.push(
+        `bounds: ${el.bounds.x.toFixed(0)},${el.bounds.y.toFixed(
+          0
+        )} ${el.bounds.w.toFixed(0)}×${el.bounds.h.toFixed(0)}`
+      );
+    }
+    if (el.parent_id !== null) lines.push(`parent_id: ${el.parent_id}`);
+    if (el.children !== null)
+      lines.push(`children: [${el.children.join(", ")}]`);
+    if (el.focused) lines.push(`focused: true`);
+    if (el.disabled) lines.push(`disabled: true`);
+    if (el.selected) lines.push(`selected: true`);
+    if (el.expanded !== undefined) lines.push(`expanded: ${el.expanded}`);
+    if (el.actions.length > 0)
+      lines.push(`actions: [${el.actions.join(", ")}]`);
+    return this.escapeHtml(lines.join("\n"));
+  }
+
   private attachHandlers() {
     if (!this.treeEl) return;
 
@@ -253,29 +290,22 @@ class AXTreeOverlay {
         const el = this.allio.get(id);
         if (!el) return;
 
-        const loadedChildren = this.allio.getChildren(el);
-        const hasChildIds = (el.children?.length ?? 0) > 0;
-        const needsLoad =
-          el.children === null || (hasChildIds && loadedChildren.length === 0);
-
-        if (this.expanded.has(id) && !needsLoad) {
-          // Collapse (only if children are loaded)
+        if (this.expanded.has(id)) {
+          // Collapse
           this.expanded.delete(id);
           this.render();
         } else {
-          // Expand (and load if needed)
+          // Expand - always re-fetch children from OS
           this.expanded.add(id);
           this.render();
 
-          if (needsLoad) {
-            try {
-              await this.allio.children(id);
-            } catch (err) {
-              console.error("Failed to load children:", err);
-              this.expanded.delete(id);
-            }
-            this.render();
+          try {
+            await this.allio.children(id);
+          } catch (err) {
+            console.error("Failed to load children:", err);
+            this.expanded.delete(id);
           }
+          this.render();
         }
       }
     });
@@ -314,7 +344,10 @@ class AXTreeOverlay {
       ) as HTMLElement;
       if (node?.dataset.id) {
         try {
-          const el = await this.allio.getElement(parseInt(node.dataset.id!), "current");
+          const el = await this.allio.getElement(
+            parseInt(node.dataset.id!),
+            "current"
+          );
           if (el.bounds) {
             const { x, y, w, h } = el.bounds;
             this.showOutline(x, y, w, h);

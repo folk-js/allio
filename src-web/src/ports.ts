@@ -97,6 +97,14 @@ function setupEventListeners() {
     handleElementUpdate(element as AX.TypedElement)
   );
 
+  // Clean up ports when elements are removed
+  allio.on("element:removed", ({ element_id }) => {
+    const portsToRemove = [...state.ports.values()]
+      .filter((p) => p.element.id === element_id)
+      .map((p) => p.id);
+    portsToRemove.forEach((portId) => deletePort(portId));
+  });
+
   // Mouse tracking for connections, hover, and drag preview
   allio.on("mouse:position", ({ x, y }) => {
     if (state.connectingFrom && dom.tempLine) {
