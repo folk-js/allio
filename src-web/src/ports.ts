@@ -1,788 +1,1317 @@
-import {
-  AXIO,
-  AXElement,
-  AXWindow,
-  AxioOcclusion,
-  AxioPassthrough,
-} from "@axio/client";
+import { Allio, AX, AllioOcclusion, AllioPassthrough, accepts } from "allio";
 
 type PortType = "input" | "output";
+type ValueTypeClass =
+  | "type-string"
+  | "type-number"
+  | "type-boolean"
+  | "type-color"
+  | "type-none";
+
+/** Map element role to its value type CSS class */
+function getValueTypeClass(role: AX.Role): ValueTypeClass {
+  switch (role) {
+    case "textfield":
+    case "textarea":
+    case "searchfield":
+    case "combobox":
+      return "type-string";
+    case "slider":
+    case "progressbar":
+    case "stepper":
+      return "type-number";
+    case "checkbox":
+    case "switch":
+    case "radiobutton":
+      return "type-boolean";
+    case "colorwell":
+      return "type-color";
+    default:
+      return "type-none";
+  }
+}
 
 interface Port {
   id: string;
-  windowId: string;
-  element: AXElement;
+  windowId: AX.WindowId;
+  element: AX.TypedElement;
   type: PortType;
-  x: number;
-  y: number;
+  isTransform: boolean;
 }
 
 interface Connection {
   id: string;
-  sourcePort: Port;
-  targetPort: Port;
+  sourceId: string;
+  targetId: string;
 }
 
-/**
- * Ports Demo - Connect UI elements across windows
- *
- * Usage:
- * - Click the menu bar to enter/exit port creation mode
- * - In creation mode, click anywhere to create ports for that element
- * - Drag from output (right) to input (left) to connect
- * - Shift+click a port to delete it
- */
-class PortsDemo {
-  private container: HTMLElement;
-  private svg: SVGElement;
-  private menuBar: HTMLElement;
-  private axio: AXIO;
-  private occlusion: AxioOcclusion;
-  private passthrough: AxioPassthrough;
+interface PortPosition {
+  x: number;
+  y: number;
+}
 
-  private ports = new Map<string, Port>();
-  private connections: Connection[] = [];
-  private portElements = new Map<string, HTMLElement>();
-  private windowContainers = new Map<string, HTMLElement>();
-  private edgeGroups = new Map<
-    string,
-    { left: HTMLElement; right: HTMLElement }
-  >();
+interface DragState {
+  sourceElement: AX.TypedElement;
+  sourceWindow: AX.Window;
+  targetElement: AX.TypedElement | null;
+  targetWindow: AX.Window | null;
+}
 
-  // Mode state
-  private creationMode = false;
+// State
+const state = {
+  ports: new Map<string, Port>(),
+  connections: [] as Connection[],
+  creationMode: false,
+  connectingFrom: null as Port | null,
+  hoveredPort: null as Port | null,
+  // Drag-to-connect state (creation mode)
+  dragging: null as DragState | null,
+};
 
-  // Drag connection state
-  private connectingFrom: Port | null = null;
-  private tempLine: SVGPathElement | null = null;
+// Transform input cache: elementId -> last input value
+const transformInputCache = new Map<AX.ElementId, unknown>();
 
-  // Hover state
-  private hoveredPort: Port | null = null;
-  private boundsOverlay: HTMLElement | null = null;
-  private infoPanel: HTMLElement | null = null;
-  private wiringSvg: SVGSVGElement | null = null;
-  private wiringPath: SVGPathElement | null = null;
+// DOM elements
+const dom = {
+  container: document.getElementById("portContainer")!,
+  svg: document.getElementById("connections") as unknown as SVGSVGElement,
+  menuBar: document.getElementById("menuBar")!,
+  portElements: new Map<string, HTMLElement>(),
+  windowContainers: new Map<AX.WindowId, HTMLElement>(),
+  edgeGroups: new Map<AX.WindowId, { left: HTMLElement; right: HTMLElement }>(),
+  tempLine: null as SVGPathElement | null,
+  hoverOverlay: null as HTMLElement | null,
+  infoPanel: null as HTMLElement | null,
+  wiringSvg: null as SVGSVGElement | null,
+  wiringPath: null as SVGPathElement | null,
+  // Drag preview elements
+  dragSourceOverlay: null as HTMLElement | null,
+  dragTargetOverlay: null as HTMLElement | null,
+  dragLine: null as SVGPathElement | null,
+};
 
-  constructor() {
-    this.container = document.getElementById("portContainer")!;
-    this.svg = document.getElementById("connections") as unknown as SVGElement;
-    this.menuBar = document.getElementById("menuBar")!;
-    this.axio = new AXIO();
-    this.occlusion = new AxioOcclusion(this.axio);
-    // Declarative passthrough: axio-opaque elements capture, rest passes through
-    this.passthrough = new AxioPassthrough(this.axio);
-    this.createHoverOverlay();
-    this.init();
+// Services
+let allio: Allio;
+let occlusion: AllioOcclusion;
+let passthrough: AllioPassthrough;
+
+// Computed port positions (updated on render)
+const portPositions = new Map<string, PortPosition>();
+
+// --- Initialization ---
+
+async function init() {
+  allio = new Allio();
+  occlusion = new AllioOcclusion(allio);
+  passthrough = new AllioPassthrough(allio);
+
+  createHoverOverlay();
+  createDragOverlays();
+  setupEventListeners();
+
+  await allio.connect();
+  updateMenuBar();
+}
+
+function setupEventListeners() {
+  // Window updates trigger re-render
+  const render = () => renderAll();
+  allio.on("sync:init", render);
+  allio.on("window:added", render);
+  allio.on("window:removed", render);
+  allio.on("window:changed", render);
+
+  // Element value changes trigger propagation
+  allio.on("element:changed", ({ element }) =>
+    handleElementUpdate(element as AX.TypedElement)
+  );
+
+  // Clean up ports when elements are removed
+  allio.on("element:removed", ({ element_id }) => {
+    const portsToRemove = [...state.ports.values()]
+      .filter((p) => p.element.id === element_id)
+      .map((p) => p.id);
+    portsToRemove.forEach((portId) => deletePort(portId));
+  });
+
+  // Mouse tracking for connections, hover, and drag preview
+  allio.on("mouse:position", ({ x, y }) => {
+    if (state.connectingFrom && dom.tempLine) {
+      updateTempLine(x, y);
+    }
+    if (state.dragging) {
+      updateDragPreview(x, y);
+    }
+    if (!state.dragging) {
+      updatePortHover(x, y);
+    }
+  });
+
+  // Menu bar toggles creation mode
+  dom.menuBar.addEventListener("click", toggleCreationMode);
+
+  // Keyboard shortcuts
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      if (state.dragging) cancelDrag();
+      else if (state.creationMode) toggleCreationMode();
+      else if (state.connectingFrom) cancelConnection();
+    }
+  });
+
+  // Mouse events for drag-to-connect and port connections
+  document.addEventListener("mousedown", onMouseDown);
+  document.addEventListener("mouseup", onMouseUp);
+}
+
+// --- Mode Management ---
+
+function toggleCreationMode() {
+  state.creationMode = !state.creationMode;
+  passthrough.mode = state.creationMode ? "opaque" : "auto";
+  updateMenuBar();
+}
+
+function updateMenuBar() {
+  dom.menuBar.classList.toggle("active", state.creationMode);
+  dom.menuBar.innerHTML = state.creationMode
+    ? `<span class="mode-indicator">●</span> Drag to connect elements | <kbd>Shift</kbd> on release for transform | <kbd>Esc</kbd> to exit`
+    : `Click to enter creation mode | Drag output → input to connect | <kbd>Shift</kbd>+click to delete`;
+}
+
+// --- Drag-to-Connect (Creation Mode) ---
+
+async function onMouseDown(e: MouseEvent) {
+  // Handle port connection start (output ports)
+  const portEl = (e.target as Element)?.closest(".port") as HTMLElement | null;
+  if (portEl) {
+    const portId = findPortIdByElement(portEl);
+    const port = portId ? state.ports.get(portId) : null;
+    if (port?.type === "output" && !e.shiftKey) {
+      e.stopPropagation();
+      startConnection(port);
+      return;
+    }
   }
 
-  private createHoverOverlay() {
-    // Bounds overlay - shows element rectangle
-    this.boundsOverlay = document.createElement("div");
-    this.boundsOverlay.style.cssText = `
-      position: absolute;
-      pointer-events: none;
-      border: 2px solid var(--port-output);
-      border-radius: 4px;
-      background: rgba(107, 143, 199, 0.1);
-      box-sizing: border-box;
-      display: none;
-      z-index: 999;
-    `;
-    document.body.appendChild(this.boundsOverlay);
+  // Start drag-to-connect in creation mode
+  if (!state.creationMode) return;
+  if ((e.target as Element)?.closest("#menuBar, .port")) return;
 
-    // Internal wiring SVG - shows connection from element to port
-    this.wiringSvg = document.createElementNS(
-      "http://www.w3.org/2000/svg",
-      "svg"
-    );
-    this.wiringSvg.style.cssText = `
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      pointer-events: none;
-      z-index: 998;
-      display: none;
-    `;
+  const window = getWindowAt(e.clientX, e.clientY);
+  if (!window) return;
 
-    // Add keyframes animation inside SVG
-    const style = document.createElementNS(
-      "http://www.w3.org/2000/svg",
-      "style"
-    );
-    style.textContent = `
-      @keyframes wiringFlowOut {
-        to { stroke-dashoffset: -10; }
-      }
-      @keyframes wiringFlowIn {
-        to { stroke-dashoffset: 10; }
-      }
-      .wiring-path-output {
-        animation: wiringFlowOut 0.4s linear infinite;
-      }
-      .wiring-path-input {
-        animation: wiringFlowIn 0.4s linear infinite;
-      }
-    `;
-    this.wiringSvg.appendChild(style);
+  try {
+    const element = await allio.elementAt(e.clientX, e.clientY);
 
-    this.wiringPath = document.createElementNS(
-      "http://www.w3.org/2000/svg",
-      "path"
-    );
-    this.wiringPath.setAttribute("fill", "none");
-    this.wiringPath.setAttribute("stroke-width", "2");
-    this.wiringPath.setAttribute("stroke-dasharray", "6,4");
-    this.wiringPath.setAttribute("opacity", "0.7");
-    this.wiringSvg.appendChild(this.wiringPath);
-    document.body.appendChild(this.wiringSvg);
+    // No tracked window at this position, or no bounds
+    if (!element?.bounds) return;
 
-    // Info panel - shows element details
-    this.infoPanel = document.createElement("div");
-    this.infoPanel.style.cssText = `
-      position: absolute;
-      pointer-events: none;
-      background: rgba(30, 30, 30, 0.95);
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      border-radius: 6px;
-      padding: 8px 12px;
-      font-size: 11px;
-      color: rgba(255, 255, 255, 0.9);
-      backdrop-filter: blur(10px);
-      display: none;
-      z-index: 1000;
-      max-width: 280px;
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
-    `;
-    document.body.appendChild(this.infoPanel);
-  }
+    // Chromium/Electron lazy init: retry on next frame if we got a fallback
+    if (element.is_fallback) {
+      const x = e.clientX;
+      const y = e.clientY;
+      requestAnimationFrame(async () => {
+        try {
+          const retried = await allio.elementAt(x, y);
+          if (!retried?.bounds) return;
 
-  private async onPortHoverEnter(port: Port) {
-    this.hoveredPort = port;
-
-    // Refresh element data from AXIO
-    try {
-      const freshElement = await this.axio.refresh(port.element.id);
-      port.element = freshElement;
-    } catch {
-      // Element might be gone, use cached data
-    }
-
-    this.showHoverOverlay(port);
-  }
-
-  private onPortHoverLeave() {
-    this.hoveredPort = null;
-    this.hideHoverOverlay();
-  }
-
-  private showHoverOverlay(port: Port) {
-    const { element } = port;
-    if (!element.bounds || !this.boundsOverlay || !this.infoPanel) return;
-
-    // Position bounds overlay
-    const { x, y, w, h } = element.bounds;
-    this.boundsOverlay.style.left = `${x}px`;
-    this.boundsOverlay.style.top = `${y}px`;
-    this.boundsOverlay.style.width = `${w}px`;
-    this.boundsOverlay.style.height = `${h}px`;
-    this.boundsOverlay.style.display = "block";
-
-    // Build info content
-    const lines: string[] = [];
-    lines.push(
-      `<div style="color: var(--port-output); font-weight: 600; margin-bottom: 4px;">${
-        element.role
-      }${element.subrole ? ` / ${element.subrole}` : ""}</div>`
-    );
-
-    if (element.label) {
-      lines.push(
-        `<div><span style="opacity: 0.6;">Label:</span> ${this.escapeHtml(
-          element.label
-        )}</div>`
-      );
-    }
-    if (element.value) {
-      const val = element.value.value;
-      const displayVal = typeof val === "string" ? `"${val}"` : String(val);
-      lines.push(
-        `<div><span style="opacity: 0.6;">Value:</span> <span style="color: var(--port-input);">${this.escapeHtml(
-          displayVal
-        )}</span></div>`
-      );
-    }
-    if (element.description) {
-      lines.push(
-        `<div style="opacity: 0.7; font-style: italic; margin-top: 2px;">${this.escapeHtml(
-          element.description
-        )}</div>`
-      );
-    }
-    if (element.enabled === false) {
-      lines.push(
-        `<div style="color: #ff6b6b; margin-top: 2px;">Disabled</div>`
-      );
-    }
-    if (element.actions.length > 0) {
-      lines.push(
-        `<div style="opacity: 0.5; margin-top: 4px; font-size: 10px;">Actions: ${element.actions.join(
-          ", "
-        )}</div>`
-      );
-    }
-
-    this.infoPanel.innerHTML = lines.join("");
-
-    // Position info panel near bounds (below or above depending on space)
-    const panelHeight = 100; // estimate
-    const belowY = y + h + 8;
-    const aboveY = y - panelHeight - 8;
-
-    this.infoPanel.style.left = `${x}px`;
-    this.infoPanel.style.top =
-      belowY + panelHeight < window.innerHeight
-        ? `${belowY}px`
-        : `${Math.max(8, aboveY)}px`;
-    this.infoPanel.style.display = "block";
-
-    // Draw internal wiring from element to port
-    this.drawWiringLine(port, element.bounds);
-  }
-
-  private drawWiringLine(
-    port: Port,
-    bounds: { x: number; y: number; w: number; h: number }
-  ) {
-    if (!this.wiringSvg || !this.wiringPath) return;
-
-    const { x, y, w, h } = bounds;
-
-    // Calculate connection points
-    // Element side: edge of bounds closest to port
-    // Port side: port position
-    const portX = port.x;
-    const portY = port.y;
-
-    let elemX: number, elemY: number;
-    if (port.type === "input") {
-      // Input port is on left, connect from left edge of element
-      elemX = x;
-      elemY = Math.max(y, Math.min(y + h, portY)); // Clamp to element vertical range
-    } else {
-      // Output port is on right, connect from right edge of element
-      elemX = x + w;
-      elemY = Math.max(y, Math.min(y + h, portY));
-    }
-
-    // Only show wiring if there's meaningful distance (at least 20px)
-    const distance = Math.abs(portX - elemX);
-    if (distance < 20) {
-      this.wiringSvg.style.display = "none";
+          state.dragging = {
+            sourceElement: retried,
+            sourceWindow: window,
+            targetElement: null,
+            targetWindow: null,
+          };
+          showDragSource(retried);
+        } catch {
+          // Ignore retry errors
+        }
+      });
       return;
     }
 
-    // Draw bezier curve
-    const curve = Math.min(distance / 2, 50);
-    const d =
-      port.type === "input"
-        ? `M ${elemX} ${elemY} C ${elemX - curve} ${elemY} ${
-            portX + curve
-          } ${portY} ${portX} ${portY}`
-        : `M ${elemX} ${elemY} C ${elemX + curve} ${elemY} ${
-            portX - curve
-          } ${portY} ${portX} ${portY}`;
-
-    this.wiringPath.setAttribute("d", d);
-
-    // Set class for animation direction and color based on port type
-    // Input: data flows IN to element (animate towards element), green
-    // Output: data flows OUT from element (animate towards port), blue
-    if (port.type === "input") {
-      this.wiringPath.setAttribute("class", "wiring-path-input");
-      this.wiringPath.setAttribute("stroke", "var(--port-input)");
-    } else {
-      this.wiringPath.setAttribute("class", "wiring-path-output");
-      this.wiringPath.setAttribute("stroke", "var(--port-output)");
-    }
-
-    this.wiringSvg.style.display = "block";
-  }
-
-  private hideHoverOverlay() {
-    if (this.boundsOverlay) this.boundsOverlay.style.display = "none";
-    if (this.infoPanel) this.infoPanel.style.display = "none";
-    if (this.wiringSvg) this.wiringSvg.style.display = "none";
-  }
-
-  private escapeHtml(str: string): string {
-    return str
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
-  }
-
-  private async init() {
-    // Window updates
-    const render = () => this.render();
-    this.axio.on("sync:init", render);
-    this.axio.on("window:added", render);
-    this.axio.on("window:removed", render);
-    this.axio.on("window:changed", render);
-
-    // Element updates for value propagation
-    this.axio.on("element:changed", ({ element }) =>
-      this.handleElementUpdate(element)
-    );
-
-    // Mouse tracking for drag connections and port hover
-    // (Passthrough is handled declaratively by AxioPassthrough)
-    this.axio.on("mouse:position", ({ x, y }) => {
-      // Update temp connection line if dragging
-      if (this.connectingFrom && this.tempLine) {
-        this.updateTempLine(x, y);
-      }
-
-      // Port hover detection
-      const el = document.elementFromPoint(x, y);
-      const portEl = el?.closest(".port") as HTMLElement | null;
-
-      if (portEl) {
-        // Find which port this element belongs to
-        const portId = [...this.portElements.entries()].find(
-          ([, element]) => element === portEl
-        )?.[0];
-        const port = portId ? this.ports.get(portId) : null;
-
-        if (port && port !== this.hoveredPort) {
-          this.onPortHoverEnter(port);
-        }
-      } else if (this.hoveredPort) {
-        this.onPortHoverLeave();
-      }
-    });
-
-    // Menu bar click - toggle creation mode
-    this.menuBar.addEventListener("click", () => this.toggleCreationMode());
-
-    // Global click - create ports when in creation mode
-    document.addEventListener("click", (e) => this.onGlobalClick(e));
-
-    // Escape to exit creation mode
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        if (this.creationMode) {
-          this.toggleCreationMode();
-        } else if (this.connectingFrom) {
-          this.cancelConnection();
-        }
-      }
-    });
-
-    // Mouse for drag connections
-    document.addEventListener("mouseup", (e) => this.onMouseUp(e));
-
-    await this.axio.connect();
-    this.updateMenuBar();
-  }
-
-  private toggleCreationMode() {
-    this.creationMode = !this.creationMode;
-    // In creation mode, capture all clicks for port creation
-    // Otherwise, use auto mode (axio-opaque elements capture, rest passes through)
-    this.passthrough.mode = this.creationMode ? "opaque" : "auto";
-    this.updateMenuBar();
-  }
-
-  private updateMenuBar() {
-    if (this.creationMode) {
-      this.menuBar.classList.add("active");
-      this.menuBar.innerHTML = `<span class="mode-indicator">●</span> Creating ports — click elements | <kbd>Esc</kbd> to exit`;
-    } else {
-      this.menuBar.classList.remove("active");
-      this.menuBar.innerHTML = `Click to create ports | Drag output → input to connect | <kbd>Shift</kbd>+click to delete`;
-    }
-  }
-
-  private async onGlobalClick(e: MouseEvent) {
-    // Only handle in creation mode
-    if (!this.creationMode) return;
-
-    // Ignore clicks on the menu bar itself
-    if ((e.target as Element)?.closest("#menuBar")) return;
-
-    // Ignore clicks on ports (those are for connecting)
-    if ((e.target as Element)?.closest(".port")) return;
-
-    await this.createPortsAtPosition(e.clientX, e.clientY);
-  }
-
-  private async createPortsAtPosition(x: number, y: number) {
-    const window = this.getWindowAt(x, y);
-    if (!window) return;
-
-    try {
-      // elementAt now uses tracked windows (which exclude our overlay) so no clickthrough dance needed
-      const element = await this.axio.elementAt(x, y);
-      if (!element?.bounds) return;
-
-      // Create both input and output ports for this element
-      this.createPort(window.id, element, "input");
-      this.createPort(window.id, element, "output");
-
-      // Watch for value changes
-      this.axio.watch(element.id);
-
-      this.showFeedback(x, y);
-    } catch (err) {
-      console.error("Failed to get element:", err);
-    }
-  }
-
-  /** Get all windows sorted by z-order (frontmost first) */
-  private get windows(): AXWindow[] {
-    return this.axio.depthOrder
-      .map((id) => this.axio.windows.get(id))
-      .filter((w): w is AXWindow => !!w);
-  }
-
-  private getWindowAt(x: number, y: number): AXWindow | null {
-    // Iterate frontmost-first due to z-order sorting
-    for (const w of this.windows) {
-      const b = w.bounds;
-      if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
-        return w;
-      }
-    }
-    return null;
-  }
-
-  private render() {
-    const windows = this.windows;
-
-    // Clean up closed windows
-    const currentIds = new Set(windows.map((w) => w.id));
-    for (const [id, container] of this.windowContainers) {
-      if (!currentIds.has(id)) {
-        container.remove();
-        this.windowContainers.delete(id);
-        this.edgeGroups.delete(id);
-        // Remove ports for this window
-        for (const [portId, port] of this.ports) {
-          if (port.windowId === id) this.deletePort(portId);
-        }
-      }
-    }
-
-    // Update/create window containers
-    for (const window of windows) {
-      this.updateWindowContainer(window);
-    }
-
-    this.updatePortPositions();
-    this.redrawConnections();
-  }
-
-  private updateWindowContainer(window: AXWindow) {
-    let container = this.windowContainers.get(window.id);
-
-    if (!container) {
-      container = document.createElement("div");
-      container.className = "window-container";
-
-      const left = document.createElement("div");
-      left.className = "edge-group left";
-
-      const right = document.createElement("div");
-      right.className = "edge-group right";
-
-      container.appendChild(left);
-      container.appendChild(right);
-      this.container.appendChild(container);
-
-      this.windowContainers.set(window.id, container);
-      this.edgeGroups.set(window.id, { left, right });
-    }
-
-    const { x, y, w, h } = window.bounds;
-    const zIndex = this.occlusion.getZIndex(window.id);
-    const clipPath = this.occlusion.getClipPath(window.id);
-
-    Object.assign(container.style, {
-      left: `${x}px`,
-      top: `${y}px`,
-      width: `${w}px`,
-      height: `${h}px`,
-      zIndex: zIndex.toString(),
-      clipPath: clipPath,
-    });
-  }
-
-  private createPort(windowId: string, element: AXElement, type: PortType) {
-    // Check if already exists
-    const exists = [...this.ports.values()].some(
-      (p) => p.element.id === element.id && p.type === type
-    );
-    if (exists) return;
-
-    const window = this.windows.find((w) => w.id === windowId);
-    if (!window) return;
-
-    const port: Port = {
-      id: `port-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-      windowId,
-      element,
-      type,
-      x: type === "input" ? window.bounds.x : window.bounds.x + window.bounds.w,
-      y: window.bounds.y + window.bounds.h / 2,
+    state.dragging = {
+      sourceElement: element,
+      sourceWindow: window,
+      targetElement: null,
+      targetWindow: null,
     };
 
-    this.ports.set(port.id, port);
-    this.createPortElement(port);
-    this.updatePortPositions();
+    showDragSource(element);
+  } catch (err) {
+    console.error("Failed to start drag:", err);
   }
+}
 
-  private createPortElement(port: Port) {
-    const el = document.createElement("div");
-    el.className = `port ${port.type}`;
-    el.setAttribute("ax-io", "opaque"); // Capture pointer events on ports
-    const displayText =
-      port.element.label ||
-      (port.element.value ? String(port.element.value.value) : null) ||
-      "(no label)";
-    el.title = `${port.element.role}: ${displayText}`;
+async function updateDragPreview(x: number, y: number) {
+  if (!state.dragging) return;
 
-    el.addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (e.shiftKey) {
-        this.deletePort(port.id);
-      } else if (port.type === "input" && this.connectingFrom) {
-        this.completeConnection(port);
-      }
-    });
+  const source = state.dragging.sourceElement;
+  if (!source.bounds) return;
 
-    el.addEventListener("mousedown", (e) => {
-      if (e.shiftKey) return;
-      e.stopPropagation();
-      if (port.type === "output") {
-        this.startConnection(port);
-      }
-    });
+  // Update drag line from source to cursor
+  const sourceX = source.bounds.x + source.bounds.w;
+  const sourceY = source.bounds.y + source.bounds.h / 2;
+  updateDragLine(sourceX, sourceY, x, y);
 
-    const edges = this.edgeGroups.get(port.windowId);
-    if (edges) {
-      (port.type === "input" ? edges.left : edges.right).appendChild(el);
-    }
+  // Check what element is under cursor
+  try {
+    const targetElement = await allio.elementAt(x, y);
+    const targetWindow = getWindowAt(x, y);
 
-    this.portElements.set(port.id, el);
-  }
+    // Skip fallback elements - next mouse move will retry naturally
+    if (targetElement?.is_fallback) return;
 
-  private deletePort(portId: string) {
-    const port = this.ports.get(portId);
-    if (!port) return;
+    // Update target if changed
+    if (targetElement?.id !== state.dragging.targetElement?.id) {
+      state.dragging.targetElement = targetElement ?? null;
+      state.dragging.targetWindow = targetWindow;
 
-    // Clear hover if this port is hovered
-    if (this.hoveredPort?.id === portId) {
-      this.onPortHoverLeave();
-    }
-
-    this.portElements.get(portId)?.remove();
-    this.portElements.delete(portId);
-    this.ports.delete(portId);
-
-    // Remove connections
-    this.connections = this.connections.filter(
-      (c) => c.sourcePort.id !== portId && c.targetPort.id !== portId
-    );
-
-    this.axio.unwatch(port.element.id).catch(() => {});
-    this.redrawConnections();
-  }
-
-  private startConnection(port: Port) {
-    this.connectingFrom = port;
-    this.portElements.get(port.id)?.classList.add("connecting");
-
-    this.tempLine = document.createElementNS(
-      "http://www.w3.org/2000/svg",
-      "path"
-    );
-    this.tempLine.classList.add("temp-connection");
-
-    // Apply absolute clip-path for SVG element
-    const clipPath = this.occlusion.getAbsoluteClipPath(port.windowId);
-    if (clipPath) {
-      this.tempLine.style.clipPath = clipPath;
-    }
-
-    this.svg.appendChild(this.tempLine);
-  }
-
-  private completeConnection(targetPort: Port) {
-    if (!this.connectingFrom) return;
-
-    // Don't connect same element or existing connection
-    const exists = this.connections.some(
-      (c) =>
-        c.sourcePort.id === this.connectingFrom!.id &&
-        c.targetPort.id === targetPort.id
-    );
-    if (!exists && this.connectingFrom.element.id !== targetPort.element.id) {
-      const connection: Connection = {
-        id: `conn-${Date.now()}`,
-        sourcePort: this.connectingFrom,
-        targetPort,
-      };
-      this.connections.push(connection);
-      this.propagateValue(connection);
-    }
-
-    this.cancelConnection();
-  }
-
-  private cancelConnection() {
-    if (this.connectingFrom) {
-      this.portElements
-        .get(this.connectingFrom.id)
-        ?.classList.remove("connecting");
-    }
-    this.tempLine?.remove();
-    this.tempLine = null;
-    this.connectingFrom = null;
-    this.redrawConnections();
-  }
-
-  private onMouseUp(e: MouseEvent) {
-    if (!this.connectingFrom) return;
-
-    const el = document.elementFromPoint(e.clientX, e.clientY);
-    if (el?.classList.contains("port")) {
-      const portId = [...this.portElements.entries()].find(
-        ([_, v]) => v === el
-      )?.[0];
-      if (portId) {
-        const port = this.ports.get(portId);
-        if (port?.type === "input") {
-          this.completeConnection(port);
-          return;
-        }
+      if (targetElement?.bounds && targetElement.id !== source.id) {
+        showDragTarget(targetElement);
+      } else {
+        hideDragTarget();
       }
     }
-    this.cancelConnection();
+  } catch {
+    // Ignore errors during preview
+  }
+}
+
+async function onMouseUp(e: MouseEvent) {
+  // Handle drag-to-connect completion
+  if (state.dragging) {
+    const isTransform = e.shiftKey;
+    await completeDrag(isTransform);
+    return;
   }
 
-  private updateTempLine(x: number, y: number) {
-    if (!this.tempLine || !this.connectingFrom) return;
-    this.tempLine.setAttribute(
-      "d",
-      this.makePath(this.connectingFrom.x, this.connectingFrom.y, x, y)
+  // Handle port connection completion
+  if (!state.connectingFrom) return;
+
+  const el = document.elementFromPoint(e.clientX, e.clientY);
+  const portEl = el?.closest(".port") as HTMLElement | null;
+
+  if (portEl) {
+    const portId = findPortIdByElement(portEl);
+    const port = portId ? state.ports.get(portId) : null;
+    if (port?.type === "input") {
+      completeConnection(port);
+      return;
+    }
+  }
+
+  cancelConnection();
+}
+
+async function completeDrag(isTransform: boolean) {
+  if (!state.dragging) return;
+
+  const { sourceElement, sourceWindow, targetElement, targetWindow } =
+    state.dragging;
+
+  // Clean up drag visuals
+  cancelDrag();
+
+  // Need valid different elements
+  if (
+    !targetElement ||
+    !targetWindow ||
+    sourceElement.id === targetElement.id
+  ) {
+    return;
+  }
+
+  // Create port pairs for both elements (if they don't exist)
+  const sourceExists = [...state.ports.values()].some(
+    (p) => p.element.id === sourceElement.id
+  );
+  const targetExists = [...state.ports.values()].some(
+    (p) => p.element.id === targetElement.id
+  );
+
+  if (!sourceExists) {
+    createPortPair(sourceWindow.id, sourceElement, false);
+    allio.watch(sourceElement.id);
+  }
+
+  if (!targetExists) {
+    createPortPair(targetWindow.id, targetElement, isTransform);
+    allio.watch(targetElement.id);
+  }
+
+  // Find output port of source and input port of target
+  const sourceOutputPort = [...state.ports.values()].find(
+    (p) => p.element.id === sourceElement.id && p.type === "output"
+  );
+  const targetInputPort = [...state.ports.values()].find(
+    (p) => p.element.id === targetElement.id && p.type === "input"
+  );
+
+  if (!sourceOutputPort || !targetInputPort) return;
+
+  // Create connection
+  const exists = state.connections.some(
+    (c) =>
+      c.sourceId === sourceOutputPort.id && c.targetId === targetInputPort.id
+  );
+
+  if (!exists) {
+    const connection: Connection = {
+      id: `conn-${Date.now()}`,
+      sourceId: sourceOutputPort.id,
+      targetId: targetInputPort.id,
+    };
+    state.connections.push(connection);
+    redrawConnections();
+    propagateValue(connection);
+  }
+
+  showFeedback(
+    targetElement.bounds!.x + targetElement.bounds!.w / 2,
+    targetElement.bounds!.y + targetElement.bounds!.h / 2
+  );
+}
+
+function cancelDrag() {
+  state.dragging = null;
+  hideDragSource();
+  hideDragTarget();
+  hideDragLine();
+}
+
+// --- Drag Overlay Management ---
+
+function createDragOverlays() {
+  dom.dragSourceOverlay = createOverlayElement(`
+    position: absolute;
+    pointer-events: none;
+    border: 2px solid rgba(255, 255, 255, 0.6);
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.1);
+    box-sizing: border-box;
+    display: none;
+    z-index: 997;
+  `);
+
+  dom.dragTargetOverlay = createOverlayElement(`
+    position: absolute;
+    pointer-events: none;
+    border: 2px dashed rgba(255, 255, 255, 0.6);
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.08);
+    box-sizing: border-box;
+    display: none;
+    z-index: 997;
+  `);
+
+  dom.dragLine = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  dom.dragLine.classList.add("temp-connection");
+  dom.dragLine.style.display = "none";
+  dom.svg.appendChild(dom.dragLine);
+
+  document.body.append(dom.dragSourceOverlay, dom.dragTargetOverlay);
+}
+
+function showDragSource(element: AX.TypedElement) {
+  if (!dom.dragSourceOverlay || !element.bounds || !state.dragging) return;
+  const { x, y, w, h } = element.bounds;
+  const window = state.dragging.sourceWindow;
+  const container = dom.windowContainers.get(window.id);
+  if (!container) return;
+
+  // Move overlay into window container so it inherits the container's clip-path
+  container.appendChild(dom.dragSourceOverlay);
+
+  // Position with window-relative coordinates
+  Object.assign(dom.dragSourceOverlay.style, {
+    left: `${x - window.bounds.x}px`,
+    top: `${y - window.bounds.y}px`,
+    width: `${w}px`,
+    height: `${h}px`,
+    display: "block",
+  });
+}
+
+function hideDragSource() {
+  if (dom.dragSourceOverlay) dom.dragSourceOverlay.style.display = "none";
+}
+
+function showDragTarget(element: AX.TypedElement) {
+  if (!dom.dragTargetOverlay || !element.bounds) return;
+  const targetWindow = state.dragging?.targetWindow;
+  if (!targetWindow) return;
+
+  const container = dom.windowContainers.get(targetWindow.id);
+  if (!container) return;
+
+  // Move overlay into window container so it inherits the container's clip-path
+  container.appendChild(dom.dragTargetOverlay);
+
+  const { x, y, w, h } = element.bounds;
+  // Position with window-relative coordinates
+  Object.assign(dom.dragTargetOverlay.style, {
+    left: `${x - targetWindow.bounds.x}px`,
+    top: `${y - targetWindow.bounds.y}px`,
+    width: `${w}px`,
+    height: `${h}px`,
+    display: "block",
+  });
+}
+
+function hideDragTarget() {
+  if (dom.dragTargetOverlay) dom.dragTargetOverlay.style.display = "none";
+}
+
+function updateDragLine(x1: number, y1: number, x2: number, y2: number) {
+  if (!dom.dragLine) return;
+  dom.dragLine.setAttribute("d", makeBezierPath(x1, y1, x2, y2));
+  dom.dragLine.style.display = "block";
+}
+
+function hideDragLine() {
+  if (dom.dragLine) dom.dragLine.style.display = "none";
+}
+
+// --- Port Creation ---
+
+function createPortPair(
+  windowId: AX.WindowId,
+  element: AX.TypedElement,
+  isTransform: boolean
+) {
+  // Skip if ports already exist for this element
+  const exists = [...state.ports.values()].some(
+    (p) => p.element.id === element.id
+  );
+  if (exists) return;
+
+  const baseId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+  const inputPort: Port = {
+    id: `${baseId}-in`,
+    windowId,
+    element,
+    type: "input",
+    isTransform,
+  };
+
+  const outputPort: Port = {
+    id: `${baseId}-out`,
+    windowId,
+    element,
+    type: "output",
+    isTransform,
+  };
+
+  state.ports.set(inputPort.id, inputPort);
+  state.ports.set(outputPort.id, outputPort);
+
+  createPortElement(inputPort);
+  createPortElement(outputPort);
+  updatePortPositions();
+}
+
+function createPortElement(port: Port) {
+  const el = document.createElement("div");
+  const typeClass = getValueTypeClass(port.element.role);
+  el.className = `port ${port.type} ${typeClass}${
+    port.isTransform ? " transform" : ""
+  }`;
+  el.setAttribute("ax-io", "opaque");
+  el.title = formatPortTitle(port);
+
+  el.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (e.shiftKey) {
+      deletePort(port.id);
+    } else if (port.type === "input" && state.connectingFrom) {
+      completeConnection(port);
+    }
+  });
+
+  const edges = dom.edgeGroups.get(port.windowId);
+  if (edges) {
+    (port.type === "input" ? edges.left : edges.right).appendChild(el);
+  }
+
+  dom.portElements.set(port.id, el);
+}
+
+function formatPortTitle(port: Port): string {
+  const displayText =
+    port.element.label ||
+    (port.element.value ? String(port.element.value.value) : null) ||
+    "(no label)";
+  return port.isTransform
+    ? `Transform: ${port.element.role} (text → function)`
+    : `${port.element.role}: ${displayText}`;
+}
+
+function deletePort(portId: string) {
+  const port = state.ports.get(portId);
+  if (!port) return;
+
+  // Clear hover state
+  if (state.hoveredPort?.id === portId) {
+    clearHoverOverlay();
+    state.hoveredPort = null;
+  }
+
+  // Remove DOM element
+  dom.portElements.get(portId)?.remove();
+  dom.portElements.delete(portId);
+  state.ports.delete(portId);
+
+  // Remove related connections
+  state.connections = state.connections.filter(
+    (c) => c.sourceId !== portId && c.targetId !== portId
+  );
+
+  // Clear transform cache and unwatch if no more ports for this element
+  const hasOtherPorts = [...state.ports.values()].some(
+    (p) => p.element.id === port.element.id
+  );
+  if (!hasOtherPorts) {
+    transformInputCache.delete(port.element.id);
+    allio.unwatch(port.element.id).catch(() => {});
+  }
+
+  redrawConnections();
+}
+
+// --- Connections ---
+
+function startConnection(port: Port) {
+  state.connectingFrom = port;
+  dom.portElements.get(port.id)?.classList.add("connecting");
+
+  dom.tempLine = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  dom.tempLine.classList.add("temp-connection");
+
+  const clipPath = occlusion.getAbsoluteClipPath(port.windowId);
+  if (clipPath) dom.tempLine.style.clipPath = clipPath;
+
+  dom.svg.appendChild(dom.tempLine);
+}
+
+function completeConnection(targetPort: Port) {
+  if (!state.connectingFrom) return;
+  if (state.connectingFrom.element.id === targetPort.element.id) {
+    cancelConnection();
+    return;
+  }
+
+  const exists = state.connections.some(
+    (c) =>
+      c.sourceId === state.connectingFrom!.id && c.targetId === targetPort.id
+  );
+
+  if (!exists) {
+    const connection: Connection = {
+      id: `conn-${Date.now()}`,
+      sourceId: state.connectingFrom.id,
+      targetId: targetPort.id,
+    };
+    state.connections.push(connection);
+    propagateValue(connection);
+  }
+
+  cancelConnection();
+}
+
+function cancelConnection() {
+  if (state.connectingFrom) {
+    dom.portElements
+      .get(state.connectingFrom.id)
+      ?.classList.remove("connecting");
+  }
+  dom.tempLine?.remove();
+  dom.tempLine = null;
+  state.connectingFrom = null;
+  redrawConnections();
+}
+
+function updateTempLine(x: number, y: number) {
+  if (!dom.tempLine || !state.connectingFrom) return;
+  const pos = portPositions.get(state.connectingFrom.id);
+  if (pos) {
+    dom.tempLine.setAttribute("d", makeBezierPath(pos.x, pos.y, x, y));
+  }
+}
+
+// --- Rendering ---
+
+function renderAll() {
+  const windows = getWindowsSorted();
+
+  // Clean up removed windows
+  const currentIds = new Set(windows.map((w) => w.id));
+  for (const [id, container] of dom.windowContainers) {
+    if (!currentIds.has(id)) {
+      container.remove();
+      dom.windowContainers.delete(id);
+      dom.edgeGroups.delete(id);
+      // Remove orphaned ports
+      for (const [portId, port] of state.ports) {
+        if (port.windowId === id) deletePort(portId);
+      }
+    }
+  }
+
+  // Update window containers
+  for (const window of windows) {
+    renderWindowContainer(window);
+  }
+
+  updatePortPositions();
+  redrawConnections();
+}
+
+function renderWindowContainer(window: AX.Window) {
+  let container = dom.windowContainers.get(window.id);
+
+  if (!container) {
+    container = document.createElement("div");
+    container.className = "window-container";
+
+    const left = document.createElement("div");
+    left.className = "edge-group left";
+
+    const right = document.createElement("div");
+    right.className = "edge-group right";
+
+    container.append(left, right);
+    dom.container.appendChild(container);
+
+    dom.windowContainers.set(window.id, container);
+    dom.edgeGroups.set(window.id, { left, right });
+  }
+
+  const { x, y, w, h } = window.bounds;
+  Object.assign(container.style, {
+    left: `${x}px`,
+    top: `${y}px`,
+    width: `${w}px`,
+    height: `${h}px`,
+    zIndex: String(occlusion.getZIndex(window.id)),
+    clipPath: occlusion.getClipPath(window.id),
+  });
+}
+
+function updatePortPositions() {
+  const windows = getWindowsSorted();
+
+  for (const port of state.ports.values()) {
+    const window = windows.find((w) => w.id === port.windowId);
+    if (!window) continue;
+
+    const portsOnEdge = [...state.ports.values()].filter(
+      (p) => p.windowId === port.windowId && p.type === port.type
     );
-  }
 
-  private updatePortPositions() {
-    for (const port of this.ports.values()) {
-      const window = this.windows.find((w) => w.id === port.windowId);
-      if (!window) continue;
+    const idx = portsOnEdge.indexOf(port);
+    const spacing = 26;
+    const totalHeight = portsOnEdge.length * spacing;
+    const startY =
+      window.bounds.y + (window.bounds.h - totalHeight) / 2 + spacing / 2;
 
-      // Get ports on same edge, sorted by DOM order
-      const portsOnEdge = [...this.ports.values()].filter(
-        (p) => p.windowId === port.windowId && p.type === port.type
-      );
-
-      const idx = portsOnEdge.indexOf(port);
-      const spacing = 26; // port height (20px) + gap (6px)
-      const totalHeight = portsOnEdge.length * spacing;
-      const startY =
-        window.bounds.y + (window.bounds.h - totalHeight) / 2 + spacing / 2;
-
-      port.x =
+    portPositions.set(port.id, {
+      x:
         port.type === "input"
           ? window.bounds.x
-          : window.bounds.x + window.bounds.w;
-      port.y = startY + idx * spacing;
+          : window.bounds.x + window.bounds.w,
+      y: startY + idx * spacing,
+    });
+  }
+}
+
+function redrawConnections() {
+  dom.svg.querySelectorAll(".connection-line").forEach((el) => el.remove());
+
+  for (const conn of state.connections) {
+    const sourcePos = portPositions.get(conn.sourceId);
+    const targetPos = portPositions.get(conn.targetId);
+    const sourcePort = state.ports.get(conn.sourceId);
+    const targetPort = state.ports.get(conn.targetId);
+
+    if (!sourcePos || !targetPos || !sourcePort || !targetPort) continue;
+
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.classList.add("connection-line");
+    path.setAttribute(
+      "d",
+      makeBezierPath(sourcePos.x, sourcePos.y, targetPos.x, targetPos.y)
+    );
+
+    // Clip by backmost window
+    const sourceZ = occlusion.getZIndex(sourcePort.windowId);
+    const targetZ = occlusion.getZIndex(targetPort.windowId);
+    const backmostId =
+      sourceZ < targetZ ? sourcePort.windowId : targetPort.windowId;
+    const clipPath = occlusion.getAbsoluteClipPath(backmostId);
+    if (clipPath) path.style.clipPath = clipPath;
+
+    dom.svg.appendChild(path);
+  }
+}
+
+function makeBezierPath(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number
+): string {
+  const curve = Math.min(Math.abs(x2 - x1) / 2, 80);
+  return `M ${x1},${y1} C ${x1 + curve},${y1} ${x2 - curve},${y2} ${x2},${y2}`;
+}
+
+// --- Hover Overlay ---
+
+function createHoverOverlay() {
+  dom.hoverOverlay = createOverlayElement(`
+    position: absolute;
+    pointer-events: none;
+    border: 2px solid rgba(255, 255, 255, 0.5);
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.08);
+    box-sizing: border-box;
+    display: none;
+    z-index: 999;
+  `);
+
+  dom.wiringSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  Object.assign(dom.wiringSvg.style, {
+    position: "absolute",
+    inset: "0",
+    width: "100%",
+    height: "100%",
+    pointerEvents: "none",
+    zIndex: "998",
+    display: "none",
+  });
+
+  const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
+  style.textContent = `
+    @keyframes wiringFlowOut { to { stroke-dashoffset: -10; } }
+    @keyframes wiringFlowIn { to { stroke-dashoffset: 10; } }
+    .wiring-out { animation: wiringFlowOut 0.4s linear infinite; }
+    .wiring-in { animation: wiringFlowIn 0.4s linear infinite; }
+  `;
+  dom.wiringSvg.appendChild(style);
+
+  dom.wiringPath = document.createElementNS(
+    "http://www.w3.org/2000/svg",
+    "path"
+  );
+  dom.wiringPath.setAttribute("fill", "none");
+  dom.wiringPath.setAttribute("stroke-width", "2");
+  dom.wiringPath.setAttribute("stroke-dasharray", "6,4");
+  dom.wiringPath.setAttribute("opacity", "0.7");
+  dom.wiringSvg.appendChild(dom.wiringPath);
+
+  dom.infoPanel = createOverlayElement(`
+    position: absolute;
+    pointer-events: none;
+    background: rgba(30, 30, 30, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.9);
+    backdrop-filter: blur(10px);
+    display: none;
+    z-index: 1000;
+    max-width: 280px;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
+  `);
+
+  document.body.append(dom.hoverOverlay, dom.wiringSvg, dom.infoPanel);
+}
+
+function createOverlayElement(styles: string): HTMLElement {
+  const el = document.createElement("div");
+  el.style.cssText = styles;
+  return el;
+}
+
+function updatePortHover(x: number, y: number) {
+  const el = document.elementFromPoint(x, y);
+  const portEl = el?.closest(".port") as HTMLElement | null;
+
+  if (portEl) {
+    const portId = findPortIdByElement(portEl);
+    const port = portId ? state.ports.get(portId) : null;
+    if (port && port !== state.hoveredPort) {
+      state.hoveredPort = port;
+      showHoverOverlay(port);
+    }
+  } else if (state.hoveredPort) {
+    state.hoveredPort = null;
+    clearHoverOverlay();
+  }
+}
+
+async function showHoverOverlay(port: Port) {
+  // Refresh element data
+  try {
+    port.element = await allio.getElement(port.element.id, "current");
+  } catch {
+    // Use cached data if refresh fails
+  }
+
+  const { element } = port;
+  const bounds = element.bounds;
+  if (!bounds || !dom.hoverOverlay || !dom.infoPanel) return;
+
+  // Get window container to inherit its clip-path
+  const axWindow = allio.windows.get(port.windowId);
+  const container = dom.windowContainers.get(port.windowId);
+  if (!axWindow || !container) return;
+
+  // Move overlay into window container so it inherits the container's clip-path
+  container.appendChild(dom.hoverOverlay);
+
+  // Get type color for this element
+  const typeClass = getValueTypeClass(element.role);
+  const typeColor = getTypeColor(typeClass);
+
+  // Position with window-relative coordinates
+  Object.assign(dom.hoverOverlay.style, {
+    left: `${bounds.x - axWindow.bounds.x}px`,
+    top: `${bounds.y - axWindow.bounds.y}px`,
+    width: `${bounds.w}px`,
+    height: `${bounds.h}px`,
+    borderColor: typeColor,
+    display: "block",
+  });
+
+  // Build info content
+  dom.infoPanel.innerHTML = buildInfoPanelHtml(element, port.isTransform);
+
+  // Position info panel below or above bounds
+  const panelHeight = 100;
+  const belowY = bounds.y + bounds.h + 8;
+  const aboveY = bounds.y - panelHeight - 8;
+
+  Object.assign(dom.infoPanel.style, {
+    left: `${bounds.x}px`,
+    top:
+      belowY + panelHeight < window.innerHeight
+        ? `${belowY}px`
+        : `${Math.max(8, aboveY)}px`,
+    display: "block",
+  });
+
+  // Draw wiring line
+  drawWiringLine(port, bounds);
+}
+
+/** Get CSS color for a value type class */
+function getTypeColor(typeClass: ValueTypeClass): string {
+  switch (typeClass) {
+    case "type-string":
+      return "var(--type-string)";
+    case "type-number":
+      return "var(--type-number)";
+    case "type-boolean":
+      return "var(--type-boolean)";
+    case "type-color":
+      return "var(--type-color)";
+    default:
+      return "var(--type-none)";
+  }
+}
+
+function buildInfoPanelHtml(
+  element: AX.TypedElement,
+  isTransform: boolean
+): string {
+  const lines: string[] = [];
+  const typeClass = getValueTypeClass(element.role);
+  const typeColor = getTypeColor(typeClass);
+
+  lines.push(
+    `<div style="color: ${typeColor}; font-weight: 600; margin-bottom: 4px;">${element.role} <span style="opacity: 0.5">(${element.platform_role})</span></div>`
+  );
+
+  if (element.label) {
+    lines.push(
+      `<div><span style="opacity: 0.6;">Label:</span> ${escapeHtml(
+        element.label
+      )}</div>`
+    );
+  }
+
+  if (element.value) {
+    const val = element.value.value;
+    const displayVal = typeof val === "string" ? `"${val}"` : String(val);
+    lines.push(
+      `<div><span style="opacity: 0.6;">Value:</span> <span style="color: ${typeColor};">${escapeHtml(
+        displayVal
+      )}</span></div>`
+    );
+  }
+
+  // Show cached input for transforms
+  if (isTransform) {
+    const cachedInput = transformInputCache.get(element.id);
+    if (cachedInput !== undefined) {
+      const displayInput =
+        typeof cachedInput === "string"
+          ? `"${cachedInput}"`
+          : String(cachedInput);
+      lines.push(
+        `<div><span style="opacity: 0.6;">Last input:</span> <span style="color: var(--port-transform);">${escapeHtml(
+          displayInput
+        )}</span></div>`
+      );
     }
   }
 
-  private redrawConnections() {
-    this.svg
-      .querySelectorAll(".connection-line, .connection-arrow")
-      .forEach((el) => el.remove());
+  if (element.description) {
+    lines.push(
+      `<div style="opacity: 0.7; font-style: italic; margin-top: 2px;">${escapeHtml(
+        element.description
+      )}</div>`
+    );
+  }
 
-    for (const conn of this.connections) {
-      const path = document.createElementNS(
-        "http://www.w3.org/2000/svg",
-        "path"
-      );
-      path.classList.add("connection-line");
-      path.setAttribute(
-        "d",
-        this.makePath(
-          conn.sourcePort.x,
-          conn.sourcePort.y,
-          conn.targetPort.x,
-          conn.targetPort.y
-        )
-      );
+  if (element.disabled) {
+    lines.push(`<div style="color: #ff6b6b; margin-top: 2px;">Disabled</div>`);
+  }
 
-      // Clip connection by windows in front of BOTH endpoints
-      // Use the backmost window's clip-path (more restrictive)
-      const sourceZ = this.occlusion.getZIndex(conn.sourcePort.windowId);
-      const targetZ = this.occlusion.getZIndex(conn.targetPort.windowId);
-      const backmostWindowId =
-        sourceZ < targetZ ? conn.sourcePort.windowId : conn.targetPort.windowId;
-      const clipPath = this.occlusion.getAbsoluteClipPath(backmostWindowId);
-      if (clipPath) {
-        path.style.clipPath = clipPath;
+  if (element.actions.length > 0) {
+    lines.push(
+      `<div style="opacity: 0.5; margin-top: 4px; font-size: 10px;">Actions: ${element.actions.join(
+        ", "
+      )}</div>`
+    );
+  }
+
+  return lines.join("");
+}
+
+function drawWiringLine(
+  port: Port,
+  bounds: { x: number; y: number; w: number; h: number }
+) {
+  if (!dom.wiringSvg || !dom.wiringPath) return;
+
+  const portPos = portPositions.get(port.id);
+  if (!portPos) return;
+
+  const elemX = port.type === "input" ? bounds.x : bounds.x + bounds.w;
+  const elemY = Math.max(bounds.y, Math.min(bounds.y + bounds.h, portPos.y));
+
+  const distance = Math.abs(portPos.x - elemX);
+  if (distance < 20) {
+    dom.wiringSvg.style.display = "none";
+    return;
+  }
+
+  const curve = Math.min(distance / 2, 50);
+  const d =
+    port.type === "input"
+      ? `M ${elemX} ${elemY} C ${elemX - curve} ${elemY} ${portPos.x + curve} ${
+          portPos.y
+        } ${portPos.x} ${portPos.y}`
+      : `M ${elemX} ${elemY} C ${elemX + curve} ${elemY} ${portPos.x - curve} ${
+          portPos.y
+        } ${portPos.x} ${portPos.y}`;
+
+  dom.wiringPath.setAttribute("d", d);
+  dom.wiringPath.setAttribute(
+    "class",
+    port.type === "input" ? "wiring-in" : "wiring-out"
+  );
+  const typeClass = getValueTypeClass(port.element.role);
+  dom.wiringPath.setAttribute("stroke", getTypeColor(typeClass));
+  dom.wiringSvg.style.display = "block";
+}
+
+function clearHoverOverlay() {
+  if (dom.hoverOverlay) dom.hoverOverlay.style.display = "none";
+  if (dom.infoPanel) dom.infoPanel.style.display = "none";
+  if (dom.wiringSvg) dom.wiringSvg.style.display = "none";
+}
+
+// --- Value Propagation ---
+
+function handleElementUpdate(element: AX.TypedElement) {
+  for (const port of state.ports.values()) {
+    if (port.element.id === element.id) {
+      port.element = element;
+
+      // If this is a transform element and its value changed, re-evaluate with cached input
+      if (port.isTransform && port.type === "input") {
+        const cachedInput = transformInputCache.get(element.id);
+        if (cachedInput !== undefined) {
+          reEvaluateTransform(port, cachedInput);
+        }
       }
 
-      this.svg.appendChild(path);
-    }
-  }
-
-  private makePath(x1: number, y1: number, x2: number, y2: number): string {
-    const dx = x2 - x1;
-    const curve = Math.min(Math.abs(dx) / 2, 80);
-    return `M ${x1},${y1} C ${x1 + curve},${y1} ${
-      x2 - curve
-    },${y2} ${x2},${y2}`;
-  }
-
-  private handleElementUpdate(element: AXElement) {
-    // Update port element reference and propagate
-    for (const port of this.ports.values()) {
-      if (port.element.id === element.id) {
-        port.element = element;
-        if (port.type === "output") {
-          for (const conn of this.connections) {
-            if (conn.sourcePort.id === port.id) {
-              this.propagateValue(conn);
-            }
+      // Normal output propagation
+      if (port.type === "output" && !port.isTransform) {
+        for (const conn of state.connections) {
+          if (conn.sourceId === port.id) {
+            propagateValue(conn);
           }
         }
       }
     }
   }
+}
 
-  private async propagateValue(conn: Connection) {
-    const value = conn.sourcePort.element.value;
-    if (!value) return;
+async function reEvaluateTransform(inputPort: Port, inputValue: unknown) {
+  try {
+    const freshElement = await allio.getElement(
+      inputPort.element.id,
+      "current"
+    );
+    const functionCode = freshElement.value?.value;
 
-    try {
-      await this.axio.write(conn.targetPort.element.id, String(value.value));
-    } catch (err) {
-      console.error("Failed to propagate:", err);
+    if (typeof functionCode !== "string") return;
+
+    const transformFn = parseTransformFunction(functionCode);
+    const normalizedInput =
+      typeof inputValue === "bigint" ? Number(inputValue) : inputValue;
+    const outputValue = transformFn(normalizedInput);
+
+    // Find output port and propagate downstream
+    const outputPort = [...state.ports.values()].find(
+      (p) => p.element.id === inputPort.element.id && p.type === "output"
+    );
+    if (!outputPort) return;
+
+    for (const conn of state.connections) {
+      if (conn.sourceId === outputPort.id) {
+        const downstreamTarget = state.ports.get(conn.targetId);
+        if (!downstreamTarget) continue;
+
+        if (downstreamTarget.isTransform) {
+          await propagateThroughTransform(downstreamTarget, outputValue);
+        } else {
+          await writeValueToElement(downstreamTarget.element, outputValue);
+        }
+      }
     }
-  }
-
-  private showFeedback(x: number, y: number) {
-    const el = document.createElement("div");
-    el.className = "feedback";
-    el.style.left = `${x - 15}px`;
-    el.style.top = `${y - 15}px`;
-    this.container.appendChild(el);
-    setTimeout(() => el.remove(), 400);
+  } catch (err) {
+    console.error("Transform re-evaluation error:", err);
   }
 }
 
-document.addEventListener("DOMContentLoaded", () => new PortsDemo());
+async function propagateValue(conn: Connection) {
+  const sourcePort = state.ports.get(conn.sourceId);
+  const targetPort = state.ports.get(conn.targetId);
+  if (!sourcePort || !targetPort) return;
+
+  const value = sourcePort.element.value;
+  if (!value) return;
+
+  if (targetPort.isTransform) {
+    await propagateThroughTransform(targetPort, value.value);
+  } else {
+    await writeValueToElement(targetPort.element, value.value);
+  }
+}
+
+async function propagateThroughTransform(
+  targetPort: Port,
+  inputValue: unknown
+) {
+  // Cache the input value for re-evaluation when transform text changes
+  transformInputCache.set(targetPort.element.id, inputValue);
+
+  try {
+    const freshElement = await allio.getElement(
+      targetPort.element.id,
+      "current"
+    );
+    const functionCode = freshElement.value?.value;
+
+    if (typeof functionCode !== "string") {
+      console.warn("Transform element has no text value");
+      return;
+    }
+
+    const transformFn = parseTransformFunction(functionCode);
+    const normalizedInput =
+      typeof inputValue === "bigint" ? Number(inputValue) : inputValue;
+    const outputValue = transformFn(normalizedInput);
+
+    // Find output port for this transform element
+    const outputPort = [...state.ports.values()].find(
+      (p) => p.element.id === targetPort.element.id && p.type === "output"
+    );
+    if (!outputPort) return;
+
+    // Propagate to downstream connections
+    for (const conn of state.connections) {
+      if (conn.sourceId === outputPort.id) {
+        const downstreamTarget = state.ports.get(conn.targetId);
+        if (!downstreamTarget) continue;
+
+        if (downstreamTarget.isTransform) {
+          await propagateThroughTransform(downstreamTarget, outputValue);
+        } else {
+          await writeValueToElement(downstreamTarget.element, outputValue);
+        }
+      }
+    }
+  } catch (err) {
+    console.error("Transform error:", err);
+  }
+}
+
+function parseTransformFunction(code: string): (val: unknown) => unknown {
+  let cleanCode = code.trim();
+
+  if (cleanCode.startsWith("export default")) {
+    cleanCode = cleanCode.replace(/^export\s+default\s+/, "");
+  }
+
+  if (cleanCode.startsWith("function") || cleanCode.includes("=>")) {
+    return new Function(`return (${cleanCode})`)() as (val: unknown) => unknown;
+  }
+
+  return new Function("val", cleanCode) as (val: unknown) => unknown;
+}
+
+/** Parse a value into a Color object (0.0-1.0 RGBA components) */
+function parseColorValue(value: unknown): AX.Color | null {
+  // Already a Color object with r, g, b properties
+  if (
+    value &&
+    typeof value === "object" &&
+    "r" in value &&
+    "g" in value &&
+    "b" in value
+  ) {
+    const c = value as { r: number; g: number; b: number; a?: number };
+    return { r: c.r, g: c.g, b: c.b, a: c.a ?? 1.0 };
+  }
+
+  if (typeof value === "string") {
+    // Parse rgba(r, g, b, a) or rgb(r, g, b) CSS format (0-255 integers)
+    const rgbaMatch = value.match(
+      /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)/
+    );
+    if (rgbaMatch) {
+      return {
+        r: parseInt(rgbaMatch[1], 10) / 255,
+        g: parseInt(rgbaMatch[2], 10) / 255,
+        b: parseInt(rgbaMatch[3], 10) / 255,
+        a: rgbaMatch[4] ? parseFloat(rgbaMatch[4]) : 1.0,
+      };
+    }
+
+    // Parse #RRGGBB or #RRGGBBAA hex format
+    const hexMatch = value.match(
+      /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})?$/i
+    );
+    if (hexMatch) {
+      return {
+        r: parseInt(hexMatch[1], 16) / 255,
+        g: parseInt(hexMatch[2], 16) / 255,
+        b: parseInt(hexMatch[3], 16) / 255,
+        a: hexMatch[4] ? parseInt(hexMatch[4], 16) / 255 : 1.0,
+      };
+    }
+
+    // Parse #RGB short hex format
+    const shortHexMatch = value.match(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/i);
+    if (shortHexMatch) {
+      return {
+        r: parseInt(shortHexMatch[1] + shortHexMatch[1], 16) / 255,
+        g: parseInt(shortHexMatch[2] + shortHexMatch[2], 16) / 255,
+        b: parseInt(shortHexMatch[3] + shortHexMatch[3], 16) / 255,
+        a: 1.0,
+      };
+    }
+  }
+
+  return null;
+}
+
+/** Format a value as a CSS color string if it's a color, otherwise stringify */
+function formatColorAsString(value: unknown): string {
+  // Check if it's a Color object with r, g, b properties (0.0-1.0 range)
+  if (
+    value &&
+    typeof value === "object" &&
+    "r" in value &&
+    "g" in value &&
+    "b" in value
+  ) {
+    const c = value as { r: number; g: number; b: number; a?: number };
+    const r = Math.round(c.r * 255);
+    const g = Math.round(c.g * 255);
+    const b = Math.round(c.b * 255);
+    const a = c.a ?? 1.0;
+    return a === 1.0 ? `rgb(${r}, ${g}, ${b})` : `rgba(${r}, ${g}, ${b}, ${a})`;
+  }
+
+  return String(value);
+}
+
+async function writeValueToElement(element: AX.TypedElement, value: unknown) {
+  try {
+    if (accepts(element, "string")) {
+      // If value is a Color, format it as CSS; otherwise stringify normally
+      const stringValue = formatColorAsString(value);
+      await allio.set(element, stringValue);
+    } else if (accepts(element, "number")) {
+      await allio.set(element, Number(value));
+    } else if (accepts(element, "boolean")) {
+      await allio.set(element, Boolean(value));
+    } else if (accepts(element, "color")) {
+      const color = parseColorValue(value);
+      if (color) await allio.set(element, color);
+    }
+  } catch (err) {
+    console.error("Failed to propagate:", err);
+  }
+}
+
+// --- Utilities ---
+
+function getWindowsSorted(): AX.Window[] {
+  return allio.zOrder
+    .map((id) => allio.windows.get(id))
+    .filter((w): w is AX.Window => !!w);
+}
+
+function getWindowAt(x: number, y: number): AX.Window | null {
+  for (const w of getWindowsSorted()) {
+    const b = w.bounds;
+    if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
+      return w;
+    }
+  }
+  return null;
+}
+
+function findPortIdByElement(el: HTMLElement): string | undefined {
+  for (const [id, portEl] of dom.portElements) {
+    if (portEl === el) return id;
+  }
+  return undefined;
+}
+
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function showFeedback(x: number, y: number) {
+  const el = document.createElement("div");
+  el.className = "feedback";
+  el.style.left = `${x - 15}px`;
+  el.style.top = `${y - 15}px`;
+  dom.container.appendChild(el);
+  setTimeout(() => el.remove(), 400);
+}
+
+// --- Bootstrap ---
+
+document.addEventListener("DOMContentLoaded", init);

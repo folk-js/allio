@@ -1,0 +1,53 @@
+[package]
+name = "allio"
+version = "0.1.0"
+edition = "2021"
+description = "Accessibility (A11y) I/O layer"
+authors = ["Orion Reed"]
+license = "MIT"
+repository = "https://github.com/folk-js/allio"
+readme = "README.md"
+keywords = ["accessibility", "interoperability", "ui-automation"]
+categories = ["accessibility", "api-bindings"]
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+derive_more = { version = "1", features = ["display", "from", "into"] }
+log = "0.4"
+parking_lot = "0.12"
+thiserror = "2"
+async-broadcast = "0.7"
+ts-rs = "10"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-core-foundation = "0.3.2"
+objc2-core-graphics = { version = "0.3.2", features = [
+  "CGDirectDisplay",
+  "CGEventTypes",
+  "CGEventSource",
+  "CGEvent",
+] }
+objc2-foundation = { version = "0.3.2", features = ["NSString"] }
+objc2-app-kit = { version = "0.3.2", features = ["NSRunningApplication"] }
+objc2-application-services = { version = "0.3.2", features = [
+  "AXUIElement",
+  "AXError",
+  "AXValue",
+  "AXAttributeConstants",
+  "AXNotificationConstants",
+  "AXTextAttributedString",
+  "libc",
+] }
+objc2-core-video = { version = "0.3.2", features = [
+  "CVBase",
+  "CVDisplayLink",
+  "CVReturn",
+] }
+
+[dev-dependencies]
+proptest = "1"

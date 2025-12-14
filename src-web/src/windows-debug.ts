@@ -1,11 +1,11 @@
-import { AXIO } from "@axio/client";
+import { Allio } from "allio";
 
-const axio = new AXIO();
+const allio = new Allio();
 const output = document.getElementById("output")!;
 
 function renderFocusAndSelection(): string {
-  const focused = axio.focusedElement;
-  const selection = axio.selection;
+  const focused = allio.focusedElement;
+  const selection = allio.selection;
 
   let html = '<div class="tier1-section">';
   html += '<div class="section-title">Tier 1: Focus & Selection</div>';
@@ -41,9 +41,7 @@ function renderFocusAndSelection(): string {
         <div class="selection-text">"${escapeHtml(selection.text)}"</div>
         ${
           selection.range
-            ? `<div class="property"><span class="property-key">range</span><span class="property-value">${
-                selection.range.start
-              }..${selection.range.start + selection.range.length}</span></div>`
+            ? `<div class="property"><span class="property-key">range</span><span class="property-value">${selection.range.start}..${selection.range.end}</span></div>`
             : ""
         }
       </div>
@@ -65,7 +63,7 @@ function escapeHtml(str: string): string {
 }
 
 function render() {
-  const windows = [...axio.windows.values()];
+  const windows = [...allio.windows.values()];
 
   let html = renderFocusAndSelection();
 
@@ -98,8 +96,8 @@ function render() {
 }
 
 // Single pattern: connect, then render on any window/focus change
-axio.connect().then(() => {
-  // sync:init already populated axio.windows, just render
+allio.connect().then(() => {
+  // sync:init already populated allio.windows, just render
   render();
 
   // Re-render on any change
@@ -108,10 +106,9 @@ axio.connect().then(() => {
     "window:added",
     "window:changed",
     "window:removed",
-    "focus:changed",
-    "active:changed",
+    "focus:window",
     "focus:element",
     "selection:changed",
   ] as const;
-  events.forEach((e) => axio.on(e, render));
+  events.forEach((e) => allio.on(e, render));
 });

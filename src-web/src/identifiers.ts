@@ -1,4 +1,4 @@
-import { AXIO, AXWindow } from "@axio/client";
+import { Allio, AX } from "allio";
 
 interface Rectangle {
   x: number;
@@ -12,11 +12,11 @@ interface Point {
 }
 
 class WindowOverlay {
-  private axio = new AXIO();
+  private allio = new Allio();
   private container = document.getElementById("windowContainer")!;
-  private labels = new Map<string, HTMLElement>();
+  private labels = new Map<AX.WindowId, HTMLElement>();
   private svg: SVGSVGElement;
-  private borders = new Map<string, SVGPathElement>();
+  private borders = new Map<AX.WindowId, SVGPathElement>();
 
   constructor() {
     this.svg = this.createSVG();
@@ -39,16 +39,16 @@ class WindowOverlay {
   }
 
   private async connect() {
-    await this.axio.connect();
+    await this.allio.connect();
 
-    const render = () => this.render([...this.axio.windows.values()]);
+    const render = () => this.render([...this.allio.windows.values()]);
     render();
     (["window:added", "window:changed", "window:removed"] as const).forEach(
-      (e) => this.axio.on(e, render)
+      (e) => this.allio.on(e, render)
     );
   }
 
-  private render(windows: AXWindow[]) {
+  private render(windows: AX.Window[]) {
     const visible = windows.filter((w) => w.bounds.w >= 50 && w.bounds.h >= 50);
     const currentIds = new Set(visible.map((w) => w.id));
 
@@ -67,7 +67,7 @@ class WindowOverlay {
     this.updateBorders(visible);
   }
 
-  private updateLabel(w: AXWindow) {
+  private updateLabel(w: AX.Window) {
     let el = this.labels.get(w.id);
     if (!el) {
       el = document.createElement("div");
@@ -86,7 +86,7 @@ class WindowOverlay {
     });
   }
 
-  private updateBorders(windows: AXWindow[]) {
+  private updateBorders(windows: AX.Window[]) {
     this.borders.forEach((p) => p.remove());
     this.borders.clear();
 
@@ -108,7 +108,7 @@ class WindowOverlay {
           group.some((w) => w.focused)
         );
         this.svg.appendChild(path);
-        this.borders.set(`group-${i}`, path);
+        this.borders.set(i, path);
 
         // Hide labels inside polygon (except focused)
         if (group.length > 1) {
@@ -127,9 +127,9 @@ class WindowOverlay {
     });
   }
 
-  private groupOverlapping(windows: AXWindow[]): AXWindow[][] {
-    const groups: AXWindow[][] = [];
-    const visited = new Set<string>();
+  private groupOverlapping(windows: AX.Window[]): AX.Window[][] {
+    const groups: AX.Window[][] = [];
+    const visited = new Set<AX.WindowId>();
 
     for (const w of windows) {
       if (visited.has(w.id)) continue;
@@ -153,7 +153,7 @@ class WindowOverlay {
     return groups;
   }
 
-  private overlaps(a: AXWindow, b: AXWindow): boolean {
+  private overlaps(a: AX.Window, b: AX.Window): boolean {
     return !(
       a.bounds.x + a.bounds.w <= b.bounds.x ||
       b.bounds.x + b.bounds.w <= a.bounds.x ||

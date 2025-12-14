@@ -1,3 +1,43 @@
 [workspace]
 resolver = "2"
-members = ["crates/axio", "crates/axio-ws", "src-tauri"]
+members = ["crates/allio", "crates/allio-ws", "src-tauri"]
+
+[workspace.lints.rust]
+future_incompatible = { level = "warn", priority = -1 }
+let_underscore = { level = "warn", priority = -1 }
+missing_copy_implementations = "warn"
+missing_debug_implementations = "warn"
+missing_docs = "warn"
+nonstandard_style = { level = "warn", priority = -1 }
+rust_2021_compatibility = { level = "warn", priority = -1 }
+
+rust_2018_idioms = { level = "deny", priority = -1 }
+unreachable_pub = "warn"
+unused_extern_crates = "deny"
+
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+expect_used = "warn"
+fallible_impl_from = "warn"
+fn_params_excessive_bools = "warn"
+indexing_slicing = "warn"
+missing_const_for_fn = "warn"
+must_use_candidate = "allow"
+panic = "warn"
+todo = "warn"
+unneeded_field_pattern = "warn"
+unwrap_used = "warn"
+wildcard_enum_match_arm = "warn"
+
+# Documentation lints - will add incrementally
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+
+# Transitive dependency conflicts we can't control (Tauri ecosystem)
+multiple_crate_versions = "allow"
+
+all = { level = "deny", priority = -1 }
+cargo = { level = "warn", priority = -1 }
+pedantic = { level = "deny", priority = -1 }

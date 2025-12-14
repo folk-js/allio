@@ -1,22 +1,27 @@
 [package]
-name = "axio-app"
+name = "allio-app"
 version = "0.0.1"
-description = "AXIO Tauri Application"
+description = "Allio Tauri Application"
 authors = ["Orion Reed"]
 edition = "2021"
+license = "MIT"
+repository = "https://github.com/folk-js/allio"
+readme = "../README.md"
+keywords = ["accessibility", "tauri", "desktop"]
+categories = ["gui"]
+publish = false
 
-# Binary name stays "axio" for user convenience
+
 [[bin]]
-name = "axio"
+name = "allio"
 path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# AXIO crates (local workspace members)
-axio = { path = "../crates/axio" }
-axio-ws = { path = "../crates/axio-ws" }
+allio = { path = "../crates/allio" }
+allio-ws = { path = "../crates/allio-ws" }
 
 # Tauri framework
 tauri = { version = "2", features = [
@@ -28,11 +33,9 @@ tauri = { version = "2", features = [
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 
-# Async runtime (needed for WebSocket server)
 tokio = { version = "1", features = ["full"] }
-
-# Serialization (for mouse position broadcast)
 serde_json = "1"
+env_logger = "0.11"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.23"

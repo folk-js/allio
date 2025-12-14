@@ -1,5 +1,5 @@
 {
-  "name": "axio",
+  "name": "allio",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -7,16 +7,19 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "tauri dev",
+    "dev": "RUST_LOG=allio=debug tauri dev",
+    "dev:debug": "RUST_LOG=allio=debug tauri dev",
     "build": "tsc && vite build",
     "check": "cargo check",
-    "docs": "cargo doc -p axio --open",
-    "typegen": "TS_RS_EXPORT_DIR=$PWD cargo test -p axio -p axio-ws export_bindings",
-    "profile:leaks": "./scripts/check-leaks.sh",
-    "profile:watch": "./scripts/watch-memory.sh"
+    "docs": "cargo doc -p allio --no-deps --open",
+    "typegen": "rm -rf packages/allio-client/src/types/generated && cargo test -p allio -p allio-ws export_bindings"
+  },
+  "dependencies": {
+    "d3-force": "^3.0.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.5.0",
+    "@types/d3-force": "^3.0.10",
     "@types/node": "^20.0.0",
     "typescript": "^5.2.2",
     "vite": "^5.3.1"

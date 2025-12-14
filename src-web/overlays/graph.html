@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AX Graph</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 0;
+        background: transparent;
+        font-family: "SF Mono", Menlo, Monaco, monospace;
+        overflow: hidden;
+        color: #e0e0e0;
+        pointer-events: none;
+      }
+
+      #graph-container {
+        position: absolute;
+        left: 0;
+        top: 36px;
+        width: 100vw;
+        height: calc(100vh - 36px);
+        background: transparent;
+        pointer-events: auto;
+      }
+
+      svg {
+        width: 100%;
+        height: 100%;
+        pointer-events: all;
+      }
+
+      /* Node styling */
+      .node {
+        cursor: pointer;
+        transition: filter 0.15s ease;
+        pointer-events: all;
+      }
+
+      .node:hover {
+        filter: brightness(1.2);
+      }
+
+      .node circle {
+        stroke-width: 2;
+        transition: all 0.15s ease;
+        pointer-events: all;
+        fill: currentColor;
+      }
+
+      .node.root circle {
+        stroke: #ff6b6b;
+        fill: #2a1a1a;
+      }
+
+      .node.linked circle {
+        stroke: #4ecdc4;
+        fill: #1a2a2a;
+      }
+
+      .node.orphan circle {
+        stroke: #ffe66d;
+        fill: #2a2a1a;
+        stroke-dasharray: 4 2;
+      }
+
+      .node text {
+        font-size: 9px;
+        fill: #888;
+        pointer-events: none;
+        text-anchor: middle;
+      }
+
+      .node.root text {
+        fill: #ff6b6b;
+      }
+
+      .node.linked text {
+        fill: #4ecdc4;
+      }
+
+      .node.orphan text {
+        fill: #ffe66d;
+      }
+
+      /* Link styling */
+      .link {
+        stroke: rgba(255, 255, 255, 0.15);
+        stroke-width: 1;
+        fill: none;
+      }
+
+      .link.parent-child {
+        stroke: rgba(78, 205, 196, 0.4);
+        stroke-width: 1.5;
+      }
+
+      .link.pending {
+        stroke: rgba(255, 230, 109, 0.3);
+        stroke-dasharray: 5 5;
+      }
+
+      /* Controls */
+      #controls {
+        position: absolute;
+        top: 52px;
+        right: 16px;
+        background: rgba(20, 20, 28, 0.95);
+        padding: 12px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(20px);
+        z-index: 100;
+        min-width: 140px;
+        pointer-events: auto;
+      }
+
+      #controls h3 {
+        margin: 0 0 8px 0;
+        font-size: 9px;
+        font-weight: 600;
+        color: #4ecdc4;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .control-group {
+        margin-bottom: 12px;
+      }
+
+      .control-group:last-child {
+        margin-bottom: 0;
+      }
+
+      .control-label {
+        font-size: 10px;
+        color: #666;
+        margin-bottom: 4px;
+      }
+
+      #stats {
+        font-size: 9px;
+        line-height: 1.5;
+      }
+
+      #stats .stat-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 2px 0;
+      }
+
+      #stats .stat-label {
+        color: #666;
+      }
+
+      #stats .stat-value {
+        color: #4ecdc4;
+        font-weight: 500;
+      }
+
+      #stats .stat-value.root {
+        color: #ff6b6b;
+      }
+
+      #stats .stat-value.orphan {
+        color: #ffe66d;
+      }
+
+      /* Element info panel */
+      #element-info h3 {
+        margin: 8px 0 4px 0;
+        font-size: 10px;
+      }
+
+      #element-details {
+        font-size: 9px;
+        line-height: 1.5;
+        max-width: 200px;
+        word-break: break-word;
+      }
+
+      #element-details .detail-row {
+        display: flex;
+        gap: 6px;
+      }
+
+      #element-details .detail-label {
+        color: #666;
+        flex-shrink: 0;
+      }
+
+      #element-details .detail-value {
+        color: #e0e0e0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      /* Info panel (legend + instructions) */
+      #info {
+        position: absolute;
+        bottom: 16px;
+        right: 16px;
+        background: rgba(20, 20, 28, 0.95);
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(20px);
+        font-size: 9px;
+        z-index: 100;
+        pointer-events: auto;
+      }
+
+      .legend-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 3px 0;
+      }
+
+      .legend-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        border: 2px solid;
+        flex-shrink: 0;
+      }
+
+      .legend-dot.root {
+        border-color: #ff6b6b;
+        background: #2a1a1a;
+      }
+
+      .legend-dot.linked {
+        border-color: #4ecdc4;
+        background: #1a2a2a;
+      }
+
+      .legend-dot.orphan {
+        border-color: #ffe66d;
+        background: #2a2a1a;
+      }
+
+      #info .divider {
+        height: 1px;
+        background: rgba(255, 255, 255, 0.1);
+        margin: 8px 0;
+      }
+
+      #info .instructions {
+        color: #666;
+        line-height: 1.5;
+      }
+
+      #info .instructions span {
+        color: #4ecdc4;
+      }
+
+      /* Toast notifications */
+      #toast {
+        position: fixed;
+        bottom: 120px;
+        right: 16px;
+        background: rgba(78, 205, 196, 0.95);
+        color: #0a0a0f;
+        padding: 6px 12px;
+        border-radius: 6px;
+        font-size: 10px;
+        font-weight: 500;
+        z-index: 1000;
+        transform: translateY(100px);
+        opacity: 0;
+        transition: all 0.3s ease;
+        pointer-events: none;
+      }
+
+      #toast.show {
+        transform: translateY(0);
+        opacity: 1;
+      }
+
+      #toast.error {
+        background: rgba(255, 107, 107, 0.95);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="graph-container">
+      <svg id="graph"></svg>
+    </div>
+
+    <div id="controls" ax-io="opaque">
+      <h3>Graph Stats</h3>
+      <div id="stats">
+        <div class="stat-row">
+          <span class="stat-label">Nodes</span>
+          <span class="stat-value" id="stat-nodes">0</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Root</span>
+          <span class="stat-value root" id="stat-roots">0</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Linked</span>
+          <span class="stat-value" id="stat-linked">0</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Orphan</span>
+          <span class="stat-value orphan" id="stat-orphans">0</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-label">Edges</span>
+          <span class="stat-value" id="stat-edges">0</span>
+        </div>
+      </div>
+
+      <div id="element-info" style="display: none">
+        <div class="divider"></div>
+        <h3>Hovered Element</h3>
+        <div id="element-details"></div>
+      </div>
+    </div>
+
+    <div id="info" ax-io="opaque">
+      <div class="legend-item">
+        <div class="legend-dot root"></div>
+        <span>Root</span>
+      </div>
+      <div class="legend-item">
+        <div class="legend-dot linked"></div>
+        <span>Linked</span>
+      </div>
+      <div class="legend-item">
+        <div class="legend-dot orphan"></div>
+        <span>Orphan</span>
+      </div>
+      <div class="divider"></div>
+      <div class="instructions">
+        <span>Shift ⌘ E</span> Toggle Passthrough<br />
+        <span>Click screen</span> → register<br />
+        <span>Click node</span> → expand ±1
+      </div>
+    </div>
+
+    <div id="toast"></div>
+
+    <script type="module" src="../src/graph.ts"></script>
+  </body>
+</html>

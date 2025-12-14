@@ -1,0 +1,24 @@
+[package]
+name = "allio-ws"
+version = "0.1.0"
+edition = "2021"
+description = "WebSocket server for Allio accessibility layer"
+authors = ["Orion Reed"]
+license = "MIT"
+repository = "https://github.com/folk-js/allio"
+readme = "../../README.md"
+keywords = ["accessibility", "websocket", "rpc"]
+categories = ["accessibility", "network-programming"]
+
+[lints]
+workspace = true
+
+[dependencies]
+allio = { path = "../allio" }
+axum = { version = "0.7", features = ["ws"] }
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "rt-multi-thread", "net"] }
+tower-http = { version = "0.5", features = ["cors"] }
+ts-rs = "10"
