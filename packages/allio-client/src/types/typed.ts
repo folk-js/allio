@@ -58,6 +58,7 @@ export const ROLE_VALUES = {
   listitem: null,
   table: null,
   row: null,
+  column: null,
   cell: null,
   tree: null,
   treeitem: null,

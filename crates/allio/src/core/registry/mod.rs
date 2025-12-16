@@ -310,11 +310,6 @@ impl Registry {
     self.tree.has_children(id)
   }
 
-  /// Set children for a tree node.
-  pub(crate) fn tree_set_children(&mut self, parent: ElementId, children: Vec<ElementId>) {
-    self.tree.set_children(parent, children);
-  }
-
   /// Refresh an element's attributes and return whether it changed.
   /// Returns None if the element doesn't exist.
   pub(crate) fn refresh_element(

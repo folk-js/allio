@@ -186,7 +186,7 @@ pub(in crate::platform) fn role_from_macos(platform_role: &str) -> Role {
     // Collections
     ax_role::LIST => Role::List,
     ax_role::ROW => Role::ListItem, // Rows in lists are list items
-    ax_role::COLUMN => Role::GenericGroup, // Table columns are structural containers
+    ax_role::COLUMN => Role::Column,
     ax_role::TABLE => Role::Table,
     ax_role::CELL => Role::Cell,
     ax_role::OUTLINE => Role::Tree,
@@ -260,6 +260,7 @@ const fn role_to_macos(r: Role) -> &'static str {
     // Collections
     Role::List => ax_role::LIST,
     Role::ListItem | Role::Row => ax_role::ROW,
+    Role::Column => ax_role::COLUMN,
     Role::Table => ax_role::TABLE,
     Role::Cell => ax_role::CELL,
     Role::Tree => ax_role::OUTLINE,

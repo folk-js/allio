@@ -39,6 +39,7 @@ pub enum Role {
   ListItem,
   Table,
   Row,
+  Column,
   Cell,
   Tree,
   TreeItem,
@@ -135,6 +136,7 @@ impl Role {
       | Self::ListItem
       | Self::Table
       | Self::Row
+      | Self::Column
       | Self::Cell
       | Self::Tree
       | Self::TreeItem
@@ -204,6 +206,7 @@ impl Role {
         | Self::Table
         | Self::Tree
         | Self::Row
+        | Self::Column
         | Self::GenericGroup
         | Self::GenericElement // May contain children (e.g., scrollbar with buttons)
     )

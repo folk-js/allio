@@ -3,40 +3,38 @@ import {
   AX,
   AllioOcclusion,
   AllioPassthrough,
-  query,
+  queryString,
   accepts,
 } from "allio";
 
-// --- TODO Query Demo ---
+// --- Window Interface System ---
 
-interface TodoItem {
-  text: string;
-  completed: boolean;
+interface WindowInterface {
+  windowId: AX.WindowId;
+  queryStr: string; // e.g. "(tree) listitem { checkbox:completed textfield:text }"
+  observedRootId?: AX.ElementId;
+  outputPortId?: string;
 }
 
-/** Extract TODOs using the query API (synchronous, cache-only) */
-function extractTodosWithQuery(treeId: AX.ElementId): TodoItem[] {
-  const results = query(allio, treeId, {
-    selector: "tree listitem",
-    extract: {
-      completed: "checkbox",
-      text: "textfield",
-    },
-  });
+/** Execute a window interface query and return results */
+function executeInterfaceQuery(iface: WindowInterface): unknown[] {
+  if (!iface.observedRootId) return [];
 
-  return results.map((r) => ({
-    completed: r.completed === true,
-    text: typeof r.text === "string" ? r.text : "",
-  }));
-}
+  // Get the window root element
+  const rootElement = allio.getRootElement(iface.windowId);
+  if (!rootElement) return [];
 
-/** Set up tree observation using observe() API */
-async function observeTree(treeId: AX.ElementId) {
-  await allio.observe(treeId, {
-    depth: 10,
-    wait_between_ms: 100,
-  });
-  console.log("[observe] Started observing tree:", treeId);
+  try {
+    const results = queryString(allio, rootElement.id, iface.queryStr);
+    return results.map((r) => {
+      // Return extracted fields without the element reference
+      const { element: _el, ...data } = r;
+      return data;
+    });
+  } catch (err) {
+    console.error("[interface] Query error:", err);
+    return [];
+  }
 }
 
 /** Propagate a value from a port to all its connections */
@@ -110,6 +108,13 @@ async function findTreeAncestor(
   return null;
 }
 
+// Port drag state
+interface PortDragState {
+  port: Port;
+  startX: number;
+  startY: number;
+}
+
 // State
 const state = {
   ports: new Map<string, Port>(),
@@ -119,6 +124,10 @@ const state = {
   hoveredPort: null as Port | null,
   // Drag-to-connect state (creation mode)
   dragging: null as DragState | null,
+  // Port drag state (for dragging from output ports)
+  portDragging: null as PortDragState | null,
+  // Window interfaces (queried windows)
+  interfaces: new Map<AX.WindowId, WindowInterface>(),
 };
 
 // Transform input cache: elementId -> last input value
@@ -129,8 +138,10 @@ const dom = {
   container: document.getElementById("portContainer")!,
   svg: document.getElementById("connections") as unknown as SVGSVGElement,
   menuBar: document.getElementById("menuBar")!,
+  dropOverlay: document.getElementById("dropOverlay")!,
   portElements: new Map<string, HTMLElement>(),
   windowContainers: new Map<AX.WindowId, HTMLElement>(),
+  queryBars: new Map<AX.WindowId, HTMLElement>(),
   edgeGroups: new Map<AX.WindowId, { left: HTMLElement; right: HTMLElement }>(),
   tempLine: null as SVGPathElement | null,
   hoverOverlay: null as HTMLElement | null,
@@ -176,16 +187,38 @@ function setupEventListeners() {
 
   // Listen to subtree:changed for observed trees
   allio.on("subtree:changed", ({ root_id }) => {
-    console.log("[subtree:changed] Tree changed:", root_id);
-    const todos = extractTodosWithQuery(root_id);
-    console.log("[subtree:changed] TODOs:", todos);
+    // Check interfaces first
+    for (const iface of state.interfaces.values()) {
+      if (iface.observedRootId === root_id) {
+        const results = executeInterfaceQuery(iface);
+        console.log("[interface] Query results:", results);
 
-    // Find output port for this tree and propagate
+        if (iface.outputPortId) {
+          const outputPort = state.ports.get(iface.outputPortId);
+          if (outputPort) {
+            propagateValueFromPort(outputPort, results);
+          }
+        }
+        return; // Interface handled it
+      }
+    }
+
+    // Fallback: legacy tree ports (from drag-to-connect)
     const outputPort = [...state.ports.values()].find(
       (p) => p.treeElementId === root_id && p.type === "output"
     );
     if (outputPort) {
-      propagateValueFromPort(outputPort, todos);
+      const results = queryString(
+        allio,
+        root_id,
+        "listitem { checkbox:completed textfield:text }"
+      );
+      const data = results.map((r) => {
+        const { element: _el, ...fields } = r;
+        return fields;
+      });
+      console.log("[subtree:changed] Legacy tree results:", data);
+      propagateValueFromPort(outputPort, data);
     }
   });
 
@@ -204,13 +237,15 @@ function setupEventListeners() {
 
   // Mouse tracking for connections, hover, and drag preview
   allio.on("mouse:position", ({ x, y }) => {
-    if (state.connectingFrom && dom.tempLine) {
+    if (state.portDragging) {
+      updatePortDrag(x, y);
+    } else if (state.connectingFrom && dom.tempLine) {
       updateTempLine(x, y);
     }
     if (state.dragging) {
       updateDragPreview(x, y);
     }
-    if (!state.dragging) {
+    if (!state.dragging && !state.portDragging) {
       updatePortHover(x, y);
     }
   });
@@ -221,7 +256,8 @@ function setupEventListeners() {
   // Keyboard shortcuts
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
-      if (state.dragging) cancelDrag();
+      if (state.portDragging) cancelPortDrag();
+      else if (state.dragging) cancelDrag();
       else if (state.creationMode) toggleCreationMode();
       else if (state.connectingFrom) cancelConnection();
     }
@@ -243,71 +279,46 @@ function toggleCreationMode() {
 function updateMenuBar() {
   dom.menuBar.classList.toggle("active", state.creationMode);
   dom.menuBar.innerHTML = state.creationMode
-    ? `<span class="mode-indicator">●</span> Drag from TODO list to text field | <kbd>Esc</kbd> to exit`
-    : `Click to enter creation mode | Drag from TODO → target | <kbd>Shift</kbd>+click to delete`;
+    ? `<span style="color:#5eead4;margin-right:4px">●</span> Click element → transform | <kbd>Shift</kbd>+click window → query | <kbd>Esc</kbd> exit`
+    : `Click to enter creation mode`;
 }
 
 // --- Drag-to-Connect (Creation Mode) ---
 
 async function onMouseDown(e: MouseEvent) {
-  // Handle port connection start (output ports)
-  const portEl = (e.target as Element)?.closest(".port") as HTMLElement | null;
-  if (portEl) {
-    const portId = findPortIdByElement(portEl);
-    const port = portId ? state.ports.get(portId) : null;
-    if (port?.type === "output" && !e.shiftKey) {
-      e.stopPropagation();
-      startConnection(port);
-      return;
-    }
-  }
+  // Skip if clicked on port (handled by port's own mousedown)
+  if ((e.target as Element)?.closest(".port")) return;
 
-  // Start drag-to-connect in creation mode
+  // Skip if clicked on query bar
+  if ((e.target as Element)?.closest(".query-bar")) return;
+
+  // Creation mode actions
   if (!state.creationMode) return;
-  if ((e.target as Element)?.closest("#menuBar, .port")) return;
-
-  const window = getWindowAt(e.clientX, e.clientY);
-  if (!window) return;
+  if ((e.target as Element)?.closest("#menuBar")) return;
 
   try {
+    // Get the element at click position to determine its window
     const element = await allio.elementAt(e.clientX, e.clientY);
-
-    // No tracked window at this position, or no bounds
     if (!element?.bounds) return;
+    if (element.is_fallback) return;
 
-    // Chromium/Electron lazy init: retry on next frame if we got a fallback
-    if (element.is_fallback) {
-      const x = e.clientX;
-      const y = e.clientY;
-      requestAnimationFrame(async () => {
-        try {
-          const retried = await allio.elementAt(x, y);
-          if (!retried?.bounds) return;
+    const windowId = element.window_id;
 
-          state.dragging = {
-            sourceElement: retried,
-            sourceWindow: window,
-            targetElement: null,
-            targetWindow: null,
-          };
-          showDragSource(retried);
-        } catch {
-          // Ignore retry errors
-        }
-      });
+    // Shift+click: make the element's window queried
+    if (e.shiftKey) {
+      makeWindowQueried(windowId);
+      showFeedback(e.clientX, e.clientY);
       return;
     }
 
-    state.dragging = {
-      sourceElement: element,
-      sourceWindow: window,
-      targetElement: null,
-      targetWindow: null,
-    };
-
-    showDragSource(element);
+    // Regular click: make clicked element a transform (if it's a textarea)
+    if (element.role === "textarea") {
+      createPortPair(windowId, element, true);
+      allio.watch(element.id);
+      showFeedback(e.clientX, e.clientY);
+    }
   } catch (err) {
-    console.error("Failed to start drag:", err);
+    console.error("Failed to handle creation mode click:", err);
   }
 }
 
@@ -347,6 +358,25 @@ async function updateDragPreview(x: number, y: number) {
 }
 
 async function onMouseUp(e: MouseEvent) {
+  // Handle port drag completion
+  if (state.portDragging) {
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const portEl = el?.closest(".port") as HTMLElement | null;
+
+    if (portEl) {
+      const portId = findPortIdByElement(portEl);
+      const port = portId ? state.ports.get(portId) : null;
+      if (port?.type === "input") {
+        completePortDrag(port);
+        return;
+      }
+    }
+
+    // Drop on element (create port if needed)
+    await dropPortOnElement(e.clientX, e.clientY);
+    return;
+  }
+
   // Handle drag-to-connect completion
   if (state.dragging) {
     const isTransform = e.shiftKey;
@@ -354,7 +384,7 @@ async function onMouseUp(e: MouseEvent) {
     return;
   }
 
-  // Handle port connection completion
+  // Handle legacy port connection completion (startConnection flow)
   if (!state.connectingFrom) return;
 
   const el = document.elementFromPoint(e.clientX, e.clientY);
@@ -414,7 +444,7 @@ async function completeDrag(isTransform: boolean) {
     );
     if (treeElementId) {
       // Set up observation for the entire tree structure
-      await observeTree(treeElementId);
+      await allio.observe(treeElementId, { depth: 10, wait_between_ms: 100 });
     } else {
       allio.watch(effectiveSourceElement.id);
     }
@@ -455,10 +485,19 @@ async function completeDrag(isTransform: boolean) {
 
     // If this is a tree, do initial propagation; future updates via subtree:changed
     if (treeElementId) {
-      const todos = extractTodosWithQuery(treeElementId);
+      // Use generic todo-style query for trees created via drag
+      const results = queryString(
+        allio,
+        treeElementId,
+        "listitem { checkbox:completed textfield:text }"
+      );
+      const data = results.map((r) => {
+        const { element: _el, ...fields } = r;
+        return fields;
+      });
       const outputPort = state.ports.get(connection.sourceId);
       if (outputPort) {
-        await propagateValueFromPort(outputPort, todos);
+        await propagateValueFromPort(outputPort, data);
       }
     } else {
       propagateValue(connection);
@@ -473,7 +512,7 @@ async function completeDrag(isTransform: boolean) {
 
 function cancelDrag() {
   state.dragging = null;
-  hideDragSource();
+  if (dom.dragSourceOverlay) dom.dragSourceOverlay.style.display = "none";
   hideDragTarget();
   hideDragLine();
 }
@@ -509,30 +548,6 @@ function createDragOverlays() {
   dom.svg.appendChild(dom.dragLine);
 
   document.body.append(dom.dragSourceOverlay, dom.dragTargetOverlay);
-}
-
-function showDragSource(element: AX.TypedElement) {
-  if (!dom.dragSourceOverlay || !element.bounds || !state.dragging) return;
-  const { x, y, w, h } = element.bounds;
-  const window = state.dragging.sourceWindow;
-  const container = dom.windowContainers.get(window.id);
-  if (!container) return;
-
-  // Move overlay into window container so it inherits the container's clip-path
-  container.appendChild(dom.dragSourceOverlay);
-
-  // Position with window-relative coordinates
-  Object.assign(dom.dragSourceOverlay.style, {
-    left: `${x - window.bounds.x}px`,
-    top: `${y - window.bounds.y}px`,
-    width: `${w}px`,
-    height: `${h}px`,
-    display: "block",
-  });
-}
-
-function hideDragSource() {
-  if (dom.dragSourceOverlay) dom.dragSourceOverlay.style.display = "none";
 }
 
 function showDragTarget(element: AX.TypedElement) {
@@ -615,18 +630,61 @@ function createPortPair(
   updatePortPositions();
 }
 
+/** Create just an input port for an element (for receiving values from connections) */
+function createInputPort(
+  windowId: AX.WindowId,
+  element: AX.TypedElement
+): Port | null {
+  // Skip if input port already exists for this element
+  const exists = [...state.ports.values()].some(
+    (p) => p.element.id === element.id && p.type === "input"
+  );
+  if (exists) return null;
+
+  const portId = `port-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2, 7)}-in`;
+
+  const inputPort: Port = {
+    id: portId,
+    windowId,
+    element,
+    type: "input",
+    isTransform: false,
+  };
+
+  state.ports.set(inputPort.id, inputPort);
+  createPortElement(inputPort);
+  updatePortPositions();
+
+  return inputPort;
+}
+
 function createPortElement(port: Port) {
   const el = document.createElement("div");
   el.className = `port ${port.type}${port.isTransform ? " transform" : ""}`;
   el.setAttribute("ax-io", "opaque");
   el.title = formatPortTitle(port);
 
-  el.addEventListener("click", (e) => {
+  // Mousedown: start drag for output ports, handle input ports during active drag
+  el.addEventListener("mousedown", (e) => {
     e.stopPropagation();
+    e.preventDefault();
+
     if (e.shiftKey) {
       deletePort(port.id);
-    } else if (port.type === "input" && state.connectingFrom) {
-      completeConnection(port);
+      return;
+    }
+
+    // Clicking input port while dragging -> complete connection
+    if (port.type === "input" && state.portDragging) {
+      completePortDrag(port);
+      return;
+    }
+
+    // Start dragging from output port
+    if (port.type === "output") {
+      startPortDrag(port, e.clientX, e.clientY);
     }
   });
 
@@ -693,7 +751,8 @@ function deletePort(portId: string) {
 
 // --- Connections ---
 
-function startConnection(port: Port) {
+// Legacy connection start (kept for reference, now handled by port drag)
+function _startConnection(port: Port) {
   state.connectingFrom = port;
   dom.portElements.get(port.id)?.classList.add("connecting");
 
@@ -705,6 +764,7 @@ function startConnection(port: Port) {
 
   dom.svg.appendChild(dom.tempLine);
 }
+void _startConnection; // Suppress unused warning
 
 function completeConnection(targetPort: Port) {
   if (!state.connectingFrom) return;
@@ -751,6 +811,188 @@ function updateTempLine(x: number, y: number) {
   }
 }
 
+// --- Port Dragging ---
+
+function startPortDrag(port: Port, x: number, y: number) {
+  state.portDragging = { port, startX: x, startY: y };
+  dom.portElements.get(port.id)?.classList.add("dragging");
+
+  // Create temp line
+  dom.tempLine = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  dom.tempLine.classList.add("temp-connection");
+  dom.svg.appendChild(dom.tempLine);
+
+  // Enable passthrough for hover detection
+  passthrough.mode = "opaque";
+}
+
+async function updatePortDrag(x: number, y: number) {
+  if (!state.portDragging || !dom.tempLine) return;
+
+  // Update temp line
+  const pos = portPositions.get(state.portDragging.port.id);
+  if (pos) {
+    dom.tempLine.setAttribute("d", makeBezierPath(pos.x, pos.y, x, y));
+  }
+
+  // Update hover overlay on target element
+  try {
+    const element = await allio.elementAt(x, y);
+    if (element?.bounds && element.id !== state.portDragging.port.element.id) {
+      showDragHoverOverlay(element);
+    } else {
+      hideDragHoverOverlay();
+    }
+  } catch {
+    hideDragHoverOverlay();
+  }
+}
+
+async function completePortDrag(targetPort?: Port) {
+  if (!state.portDragging) return;
+
+  const sourcePort = state.portDragging.port;
+
+  // If target port provided, connect directly
+  if (targetPort) {
+    if (sourcePort.id !== targetPort.id) {
+      const exists = state.connections.some(
+        (c) => c.sourceId === sourcePort.id && c.targetId === targetPort.id
+      );
+      if (!exists) {
+        const connection: Connection = {
+          id: `conn-${Date.now()}`,
+          sourceId: sourcePort.id,
+          targetId: targetPort.id,
+        };
+        state.connections.push(connection);
+        propagateValue(connection);
+      }
+    }
+    cancelPortDrag();
+    return;
+  }
+
+  // Try to drop onto an element under cursor (checked elsewhere)
+  cancelPortDrag();
+}
+
+async function dropPortOnElement(x: number, y: number) {
+  if (!state.portDragging) return;
+
+  const sourcePort = state.portDragging.port;
+
+  try {
+    const element = await allio.elementAt(x, y);
+    if (!element?.bounds) {
+      cancelPortDrag();
+      return;
+    }
+
+    const targetWindow = getWindowAt(x, y);
+    if (!targetWindow) {
+      cancelPortDrag();
+      return;
+    }
+
+    // Check if element already has ports
+    const existingInputPort = [...state.ports.values()].find(
+      (p) => p.element.id === element.id && p.type === "input"
+    );
+
+    if (existingInputPort) {
+      // Connect to existing port
+      const exists = state.connections.some(
+        (c) =>
+          c.sourceId === sourcePort.id && c.targetId === existingInputPort.id
+      );
+      if (!exists) {
+        const connection: Connection = {
+          id: `conn-${Date.now()}`,
+          sourceId: sourcePort.id,
+          targetId: existingInputPort.id,
+        };
+        state.connections.push(connection);
+        propagateValue(connection);
+      }
+    } else {
+      // Check if element accepts value writes (for creating new port)
+      // Elements with string/number/boolean values can be written to
+      const canWrite =
+        accepts(element, "string") ||
+        accepts(element, "number") ||
+        accepts(element, "boolean");
+
+      if (canWrite) {
+        // Create just an input port for this target (NOT a transform)
+        const newInputPort = createInputPort(targetWindow.id, element);
+        allio.watch(element.id);
+
+        if (newInputPort) {
+          const connection: Connection = {
+            id: `conn-${Date.now()}`,
+            sourceId: sourcePort.id,
+            targetId: newInputPort.id,
+          };
+          state.connections.push(connection);
+          propagateValue(connection);
+        }
+      }
+    }
+
+    showFeedback(x, y);
+  } catch (err) {
+    console.error("Failed to drop port:", err);
+  }
+
+  cancelPortDrag();
+}
+
+function cancelPortDrag() {
+  if (state.portDragging) {
+    dom.portElements
+      .get(state.portDragging.port.id)
+      ?.classList.remove("dragging");
+  }
+  dom.tempLine?.remove();
+  dom.tempLine = null;
+  state.portDragging = null;
+  hideDragHoverOverlay();
+
+  if (!state.creationMode) {
+    passthrough.mode = "auto";
+  }
+  redrawConnections();
+}
+
+function showDragHoverOverlay(element: AX.TypedElement) {
+  if (!dom.hoverOverlay || !element.bounds) return;
+
+  // Find the window for this element
+  const axWindow = allio.windows.get(element.window_id);
+  const container = dom.windowContainers.get(element.window_id);
+  if (!axWindow || !container) return;
+
+  // Move overlay into window container so it inherits the container's clip-path
+  container.appendChild(dom.hoverOverlay);
+
+  const { x, y, w, h } = element.bounds;
+  // Position with window-relative coordinates
+  Object.assign(dom.hoverOverlay.style, {
+    left: `${x - axWindow.bounds.x}px`,
+    top: `${y - axWindow.bounds.y}px`,
+    width: `${w}px`,
+    height: `${h}px`,
+    display: "block",
+  });
+}
+
+function hideDragHoverOverlay() {
+  if (dom.hoverOverlay) {
+    dom.hoverOverlay.style.display = "none";
+  }
+}
+
 // --- Rendering ---
 
 function renderAll() {
@@ -763,6 +1005,14 @@ function renderAll() {
       container.remove();
       dom.windowContainers.delete(id);
       dom.edgeGroups.delete(id);
+      // Remove query bar
+      const queryBar = dom.queryBars.get(id);
+      if (queryBar) {
+        queryBar.remove();
+        dom.queryBars.delete(id);
+      }
+      // Remove interface
+      state.interfaces.delete(id);
       // Remove orphaned ports
       for (const [portId, port] of state.ports) {
         if (port.windowId === id) deletePort(portId);
@@ -780,6 +1030,8 @@ function renderAll() {
 }
 
 function renderWindowContainer(window: AX.Window) {
+  const isQueried = state.interfaces.has(window.id);
+  const queryBarHeight = 28;
   let container = dom.windowContainers.get(window.id);
 
   if (!container) {
@@ -799,6 +1051,9 @@ function renderWindowContainer(window: AX.Window) {
     dom.edgeGroups.set(window.id, { left, right });
   }
 
+  // Update queried class
+  container.classList.toggle("queried", isQueried);
+
   const { x, y, w, h } = window.bounds;
   Object.assign(container.style, {
     left: `${x}px`,
@@ -808,6 +1063,130 @@ function renderWindowContainer(window: AX.Window) {
     zIndex: String(occlusion.getZIndex(window.id)),
     clipPath: occlusion.getClipPath(window.id),
   });
+
+  // Render query bar for queried windows
+  renderQueryBar(window, queryBarHeight);
+}
+
+function renderQueryBar(window: AX.Window, height: number) {
+  const isQueried = state.interfaces.has(window.id);
+  let queryBar = dom.queryBars.get(window.id);
+
+  if (isQueried) {
+    if (!queryBar) {
+      queryBar = document.createElement("div");
+      queryBar.className = "query-bar";
+      queryBar.setAttribute("ax-io", "opaque");
+
+      const input = document.createElement("input");
+      input.type = "text";
+      input.placeholder = "(tree) listitem { checkbox:done textfield:text }";
+
+      input.addEventListener("keydown", (e) => {
+        e.stopPropagation();
+        if (e.key === "Enter") {
+          updateInterfaceQuery(window.id, input.value);
+        }
+      });
+      input.addEventListener("blur", () => {
+        updateInterfaceQuery(window.id, input.value);
+      });
+
+      queryBar.appendChild(input);
+      dom.container.appendChild(queryBar);
+      dom.queryBars.set(window.id, queryBar);
+
+      // Set initial value
+      const iface = state.interfaces.get(window.id);
+      if (iface) input.value = iface.queryStr;
+    }
+
+    // Position query bar exactly matching window width, above window
+    const { x, y, w } = window.bounds;
+    queryBar.style.left = `${x}px`;
+    queryBar.style.top = `${y - height}px`;
+    queryBar.style.width = `${w}px`;
+    queryBar.style.zIndex = String(occlusion.getZIndex(window.id) + 1);
+  } else if (queryBar) {
+    queryBar.remove();
+    dom.queryBars.delete(window.id);
+  }
+}
+
+async function updateInterfaceQuery(windowId: AX.WindowId, queryStr: string) {
+  const iface = state.interfaces.get(windowId);
+  if (!iface) return;
+
+  const trimmed = queryStr.trim();
+  if (trimmed === iface.queryStr) return;
+
+  iface.queryStr = trimmed;
+
+  // Re-find observed root
+  const rootElement = allio.getRootElement(windowId);
+  if (rootElement) {
+    const findMatch = trimmed.match(/^\(([^)]+)\)/);
+    if (findMatch) {
+      const { findFirst } = await import("allio");
+      const found = findFirst(allio, rootElement.id, findMatch[1].trim());
+      if (found && found.id !== iface.observedRootId) {
+        if (iface.observedRootId) await allio.unobserve(iface.observedRootId);
+        iface.observedRootId = found.id;
+        await allio.observe(found.id, { depth: 10, wait_between_ms: 100 });
+      }
+    }
+  }
+
+  // Execute query immediately
+  const results = executeInterfaceQuery(iface);
+  console.log("[interface] Query updated:", results);
+  if (iface.outputPortId) {
+    const port = state.ports.get(iface.outputPortId);
+    if (port) propagateValueFromPort(port, results);
+  }
+}
+
+/** Make a window into a queried window (shift+click in creation mode) */
+async function makeWindowQueried(windowId: AX.WindowId) {
+  if (state.interfaces.has(windowId)) return; // Already queried
+
+  const window = allio.windows.get(windowId);
+  if (!window) return;
+
+  // Fetch root element from OS (not just local cache)
+  const rootElement = await allio.windowRoot(windowId);
+  if (!rootElement) return;
+
+  // Create interface with default query (finds tree, then extracts from listitems)
+  const defaultQuery = "(tree) listitem { checkbox:completed textfield:text }";
+  const iface: WindowInterface = {
+    windowId,
+    queryStr: defaultQuery,
+    observedRootId: rootElement.id,
+  };
+
+  // Create output port
+  const portId = crypto.randomUUID();
+  const port: Port = {
+    id: portId,
+    windowId,
+    element: rootElement,
+    type: "output",
+    isTransform: false,
+    treeElementId: rootElement.id,
+  };
+
+  state.ports.set(portId, port);
+  iface.outputPortId = portId;
+  createPortElement(port);
+
+  state.interfaces.set(windowId, iface);
+
+  // Start observing
+  await allio.observe(rootElement.id, { depth: 10, wait_between_ms: 100 });
+  console.log("[interface] Window queried:", windowId);
+
+  renderAll();
 }
 
 function updatePortPositions() {
@@ -883,9 +1262,9 @@ function createHoverOverlay() {
   dom.hoverOverlay = createOverlayElement(`
     position: absolute;
     pointer-events: none;
-    border: 2px solid rgba(255, 255, 255, 0.5);
+    border: 2px solid var(--accent);
     border-radius: 4px;
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(91, 155, 213, 0.15);
     box-sizing: border-box;
     display: none;
     z-index: 999;

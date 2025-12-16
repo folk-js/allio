@@ -6,17 +6,14 @@
     <title>Query</title>
     <style>
       :root {
-        /* Accent color for ports and highlights */
         --accent: #5b9bd5;
-        --accent-glow: rgba(91, 155, 213, 0.4);
-        /* Transform overlay */
+        --accent-glow: rgba(91, 155, 213, 0.3);
         --port-transform: #2dd4bf;
-        --port-transform-glow: rgba(45, 212, 191, 0.4);
-        /* UI chrome */
+        --port-transform-glow: rgba(45, 212, 191, 0.3);
         --port-border: rgba(255, 255, 255, 0.25);
         --port-border-hover: rgba(255, 255, 255, 0.5);
-        --connection-color: rgba(255, 255, 255, 0.6);
-        --menu-bg: rgba(40, 40, 40, 0.95);
+        --menu-bg: rgba(30, 30, 30, 0.92);
+        --query-bar-height: 28px;
       }
 
       body {
@@ -46,10 +43,9 @@
         z-index: 9999;
         cursor: pointer;
         pointer-events: auto;
-        transition: all 0.15s ease;
       }
       #menuBar:hover {
-        background: rgba(55, 55, 55, 0.95);
+        background: rgba(50, 50, 50, 0.95);
         border-color: rgba(255, 255, 255, 0.12);
       }
       #menuBar.active {
@@ -57,29 +53,12 @@
         color: white;
         border-color: var(--port-transform);
       }
-      #menuBar.active:hover {
-        background: rgba(45, 212, 191, 0.92);
-      }
       #menuBar kbd {
         background: rgba(255, 255, 255, 0.1);
         padding: 2px 5px;
         border-radius: 3px;
         font-family: inherit;
         font-size: 10px;
-      }
-      #menuBar .mode-indicator {
-        color: #5eead4;
-        margin-right: 4px;
-        animation: glow 2s ease-in-out infinite;
-      }
-      @keyframes glow {
-        0%,
-        100% {
-          opacity: 1;
-        }
-        50% {
-          opacity: 0.6;
-        }
       }
 
       /* Window container - inherits clip-path */
@@ -89,46 +68,75 @@
         overflow: visible;
       }
 
-      /* Edge groups */
+      /* Queried window outline - thin border, no padding */
+      .window-container.queried {
+        border: 1px solid var(--accent);
+        box-sizing: border-box;
+      }
+
+      /* Query bar - sits above window, matches width exactly */
+      .query-bar {
+        position: absolute;
+        height: var(--query-bar-height);
+        background: var(--menu-bg);
+        backdrop-filter: blur(12px);
+        display: flex;
+        align-items: center;
+        pointer-events: auto;
+        box-sizing: border-box;
+      }
+      .query-bar input {
+        flex: 1;
+        height: 100%;
+        padding: 0 10px;
+        background: transparent;
+        border: none;
+        color: white;
+        font-family: "SF Mono", "Menlo", monospace;
+        font-size: 11px;
+        outline: none;
+      }
+      .query-bar input::placeholder {
+        color: rgba(255, 255, 255, 0.3);
+      }
+
+      /* Edge groups - positioned at vertical center */
       .edge-group {
         position: absolute;
+        top: 50%;
         display: flex;
         flex-direction: column;
         align-items: center;
         gap: 6px;
-        top: 50%;
-        transform: translateY(-50%);
       }
       .edge-group.left {
-        left: 0;
-        transform: translate(-50%, -50%);
+        left: -6px;
+        transform: translateY(-50%);
       }
       .edge-group.right {
-        right: 0;
-        transform: translate(50%, -50%);
+        right: -6px;
+        transform: translateY(-50%);
       }
 
-      /* Ports - vertical pill shape */
+      /* Ports */
       .port {
         width: 12px;
         height: 20px;
         border-radius: 6px;
         border: 1px solid var(--port-border);
         box-sizing: border-box;
-        cursor: pointer;
+        cursor: grab;
         pointer-events: auto;
-        transition: border-color 0.15s ease, box-shadow 0.15s ease,
-          filter 0.15s ease;
         position: relative;
         background: var(--accent);
-        box-shadow: 0 0 8px var(--accent-glow);
+        box-shadow: 0 0 6px var(--accent-glow);
       }
-
-      /* Transform ports - teal ring overlay */
+      .port:active {
+        cursor: grabbing;
+      }
       .port.transform {
         border: 2px solid var(--port-transform);
-        box-shadow: 0 0 8px var(--port-transform-glow),
-          inset 0 0 4px rgba(45, 212, 191, 0.3);
+        box-shadow: 0 0 6px var(--port-transform-glow);
       }
       .port.transform::after {
         content: "ƒ";
@@ -141,33 +149,15 @@
         color: rgba(0, 0, 0, 0.5);
         pointer-events: none;
       }
-
-      /* Input ports get a subtle inset to distinguish direction */
       .port.input {
         border-style: dashed;
       }
-
       .port:hover {
         border-color: var(--port-border-hover);
-        box-shadow: 0 0 12px var(--accent-glow), 0 0 20px var(--accent-glow);
+        box-shadow: 0 0 10px var(--accent-glow);
       }
-      .port.transform:hover {
-        box-shadow: 0 0 12px var(--port-transform-glow),
-          0 0 20px var(--port-transform-glow);
-      }
-
-      .port.connecting {
-        animation: connectPulse 1.2s ease-in-out infinite;
-      }
-      @keyframes connectPulse {
-        0%,
-        100% {
-          box-shadow: 0 0 8px var(--accent-glow);
-        }
-        50% {
-          box-shadow: 0 0 16px rgba(255, 255, 255, 0.4),
-            0 0 24px rgba(255, 255, 255, 0.3);
-        }
+      .port.dragging {
+        opacity: 0.5;
       }
 
       /* Connections */
@@ -181,10 +171,9 @@
         z-index: 1000;
       }
       .connection-line {
-        stroke: var(--connection-color);
-        stroke-width: 2.5;
+        stroke: var(--accent);
+        stroke-width: 2;
         fill: none;
-        filter: drop-shadow(0 0 3px rgba(107, 143, 199, 0.5));
       }
       .temp-connection {
         stroke: rgba(255, 255, 255, 0.5);
@@ -193,31 +182,27 @@
         fill: none;
         animation: flowDash 0.5s linear infinite;
       }
-
-      /* Animated flowing dashes for data direction */
       @keyframes flowDash {
         to {
           stroke-dashoffset: -10;
         }
       }
 
-      /* Click feedback - subtle ring */
-      .feedback {
+      /* Hover overlay for drop target */
+      .drop-overlay {
         position: absolute;
-        width: 24px;
-        height: 24px;
-        border-radius: 50%;
-        border: 1px solid rgba(255, 255, 255, 0.5);
+        border: 2px solid var(--accent);
+        border-radius: 4px;
         pointer-events: none;
+        display: none;
       }
     </style>
   </head>
   <body>
-    <div id="menuBar" ax-io="opaque">
-      TODO Query Demo | Click to enter creation mode | Drag from TODO → target
-    </div>
+    <div id="menuBar" ax-io="opaque">Click to enter creation mode</div>
     <div id="portContainer"></div>
     <svg class="connections" id="connections"></svg>
+    <div id="dropOverlay" class="drop-overlay"></div>
     <script type="module" src="../src/query.ts"></script>
   </body>
 </html>

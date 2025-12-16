@@ -343,7 +343,7 @@ fn sweep_element_recursive(
 
   // Update tree structure if children changed
   if cached_children != current_set {
-    allio.write(|r| r.tree_set_children(element_id, current_children));
+    allio.write(|r| r.set_children(element_id, current_children));
   }
 }
 
