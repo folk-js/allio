@@ -11,7 +11,7 @@ import {
 
 interface WindowInterface {
   windowId: AX.WindowId;
-  queryStr: string; // e.g. "(tree) listitem { checkbox:completed textfield:text }"
+  queryStr: string; // e.g. "(tree) listitem { checkbox:done textfield:text }"
   observedRootId?: AX.ElementId;
   outputPortId?: string;
 }
@@ -211,7 +211,7 @@ function setupEventListeners() {
       const results = queryString(
         allio,
         root_id,
-        "listitem { checkbox:completed textfield:text }"
+        "listitem { checkbox:done textfield:text }"
       );
       const data = results.map((r) => {
         const { element: _el, ...fields } = r;
@@ -489,7 +489,7 @@ async function completeDrag(isTransform: boolean) {
       const results = queryString(
         allio,
         treeElementId,
-        "listitem { checkbox:completed textfield:text }"
+        "listitem { checkbox:done textfield:text }"
       );
       const data = results.map((r) => {
         const { element: _el, ...fields } = r;
@@ -699,7 +699,7 @@ function createPortElement(port: Port) {
 function formatPortTitle(port: Port): string {
   const displayText =
     port.element.label ||
-    (port.element.value ? String(port.element.value.value) : null) ||
+    (port.element.value != null ? String(port.element.value) : null) ||
     "(no label)";
   return port.isTransform
     ? `Transform: ${port.element.role} (text → function)`
@@ -1158,7 +1158,7 @@ async function makeWindowQueried(windowId: AX.WindowId) {
   if (!rootElement) return;
 
   // Create interface with default query (finds tree, then extracts from listitems)
-  const defaultQuery = "(tree) listitem { checkbox:completed textfield:text }";
+  const defaultQuery = "(tree) listitem { checkbox:done textfield:text }";
   const iface: WindowInterface = {
     windowId,
     queryStr: defaultQuery,
@@ -1411,8 +1411,8 @@ function buildInfoPanelHtml(
     );
   }
 
-  if (element.value) {
-    const val = element.value.value;
+  if (element.value != null) {
+    const val = element.value;
     const displayVal = typeof val === "string" ? `"${val}"` : String(val);
     lines.push(
       `<div><span style="opacity: 0.6;">Value:</span> <span style="color: var(--accent);">${escapeHtml(
@@ -1536,7 +1536,7 @@ async function reEvaluateTransform(inputPort: Port, inputValue: unknown) {
       inputPort.element.id,
       "current"
     );
-    const functionCode = freshElement.value?.value;
+    const functionCode = freshElement.value;
 
     if (typeof functionCode !== "string") return;
 
@@ -1574,12 +1574,12 @@ async function propagateValue(conn: Connection) {
   if (!sourcePort || !targetPort) return;
 
   const value = sourcePort.element.value;
-  if (!value) return;
+  if (value == null) return;
 
   if (targetPort.isTransform) {
-    await propagateThroughTransform(targetPort, value.value);
+    await propagateThroughTransform(targetPort, value);
   } else {
-    await writeValueToElement(targetPort.element, value.value);
+    await writeValueToElement(targetPort.element, value);
   }
 }
 
@@ -1595,7 +1595,7 @@ async function propagateThroughTransform(
       targetPort.element.id,
       "current"
     );
-    const functionCode = freshElement.value?.value;
+    const functionCode = freshElement.value;
 
     if (typeof functionCode !== "string") {
       console.warn("Transform element has no text value");

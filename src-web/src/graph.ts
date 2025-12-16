@@ -694,13 +694,8 @@ class AXGraph {
         row("children", el.children.length > 0 ? el.children.join(", ") : "[]")
       );
     if (el.label) rows.push(row("label", this.escapeHtml(el.label)));
-    if (el.value)
-      rows.push(
-        row(
-          "value",
-          `${el.value.type}: ${this.escapeHtml(String(el.value.value))}`
-        )
-      );
+    if (el.value != null)
+      rows.push(row("value", this.escapeHtml(String(el.value))));
     if (el.description) rows.push(row("desc", this.escapeHtml(el.description)));
     if (el.placeholder)
       rows.push(row("placeholder", this.escapeHtml(el.placeholder)));

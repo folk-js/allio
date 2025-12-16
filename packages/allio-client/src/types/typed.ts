@@ -7,7 +7,7 @@ Check `el.role === "..."` to narrow value type, or use `accepts(el, kind)` for p
 ```ts
 // Role-specific
 if (el.role === "slider") {
-  const num = el.value?.value; // number
+  const num = el.value; // number | null
 }
 
 // Value-type polymorphic  
@@ -75,22 +75,22 @@ export const ROLE_VALUES = {
 
 // === Derived types ===
 
-/** Value envelope for a value kind */
-type ValueEnvelope<K extends ValueKind> = K extends "string"
-  ? { type: "String"; value: string }
+/** Primitive value type for a value kind */
+type ValuePrimitive<K extends ValueKind> = K extends "string"
+  ? string
   : K extends "number"
-  ? { type: "Number"; value: number }
+  ? number
   : K extends "boolean"
-  ? { type: "Boolean"; value: boolean }
+  ? boolean
   : K extends "color"
-  ? { type: "Color"; value: Color }
+  ? Color
   : never;
 
 /** Element narrowed by role */
 type ElementWithRole<R extends Role> = Omit<Element, "role" | "value"> & {
   role: R;
   value: (typeof ROLE_VALUES)[R] extends ValueKind
-    ? ValueEnvelope<(typeof ROLE_VALUES)[R]> | null
+    ? ValuePrimitive<(typeof ROLE_VALUES)[R]> | null
     : null;
 };
 

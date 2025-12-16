@@ -9,12 +9,12 @@
  *
  * - `(tree)` - Find first element matching selector from root, cache it
  * - `listitem` - Match descendants of the found root
- * - `{ checkbox:completed textfield:text }` - Extract values, `:` for rename
+ * - `{ checkbox:done textfield:text }` - Extract values, `:` for rename
  *
  * @example
  * ```ts
  * // Find tree, get listitems, extract checkbox->completed and textfield->text
- * const todos = queryString(allio, windowRootId, "(tree) listitem { checkbox:completed textfield:text }");
+ * const todos = queryString(allio, windowRootId, "(tree) listitem { checkbox:done textfield:text }");
  *
  * // Simple selector without find
  * const items = query(allio, treeId, { selector: "listitem" });
@@ -63,7 +63,7 @@ export type ExtractedResult = Record<string, unknown> & {
  * Syntax: `(find_selector) match_selector { field:rename field2 }`
  *
  * @example
- * parseQuerySyntax("(tree) listitem { checkbox:completed textfield:text }")
+ * parseQuerySyntax("(tree) listitem { checkbox:done textfield:text }")
  * // => { find: "tree", match: "listitem", extract: { completed: "checkbox", text: "textfield" } }
  *
  * parseQuerySyntax("tree > listitem")
@@ -308,19 +308,18 @@ function findDescendantByRole(
  */
 function extractValue(element: TypedElement): unknown {
   if (element.role === "checkbox") {
-    return element.value?.value === true;
+    return element.value === true;
   }
 
   if (element.role === "textfield") {
-    return element.value?.value ?? element.label ?? "";
+    return element.value ?? element.label ?? "";
   }
 
   if (element.role === "statictext") {
     return element.label ?? "";
   }
 
-  const val = element.value as { value: unknown } | null;
-  return val?.value ?? element.label ?? null;
+  return element.value ?? element.label ?? null;
 }
 
 /**
@@ -328,7 +327,7 @@ function extractValue(element: TypedElement): unknown {
  *
  * @param allio - Allio client instance
  * @param rootId - Root element to start from (window root typically)
- * @param queryStr - Query string like "(tree) listitem { checkbox:completed textfield:text }"
+ * @param queryStr - Query string like "(tree) listitem { checkbox:done textfield:text }"
  * @returns Array of matched elements with extracted fields
  */
 export function queryString(
@@ -355,17 +354,28 @@ export function queryString(
     return matches.map((element) => ({ element }));
   }
 
-  // Extract fields from each match
-  return matches.map((element) => {
+  // Extract fields from each match (all-or-nothing: exclude if any field missing)
+  const results: ExtractedResult[] = [];
+
+  for (const element of matches) {
     const result: ExtractedResult = { element };
+    let allFieldsFound = true;
 
     for (const [fieldName, role] of Object.entries(parsed.extract!)) {
       const descendant = findDescendantByRole(allio, element.id, role);
-      result[fieldName] = descendant ? extractValue(descendant) : null;
+      if (!descendant) {
+        allFieldsFound = false;
+        break;
+      }
+      result[fieldName] = extractValue(descendant);
     }
 
-    return result;
-  });
+    if (allFieldsFound) {
+      results.push(result);
+    }
+  }
+
+  return results;
 }
 
 /**
@@ -384,8 +394,12 @@ export function query(
     return matches.map((element) => ({ element }));
   }
 
-  return matches.map((element) => {
+  // All-or-nothing: exclude if any field missing
+  const results: ExtractedResult[] = [];
+
+  for (const element of matches) {
     const result: ExtractedResult = { element };
+    let allFieldsFound = true;
 
     for (const [fieldName, roleSelector] of Object.entries(options.extract!)) {
       const descendant = findDescendantByRole(
@@ -393,11 +407,19 @@ export function query(
         element.id,
         roleSelector.toLowerCase()
       );
-      result[fieldName] = descendant ? extractValue(descendant) : null;
+      if (!descendant) {
+        allFieldsFound = false;
+        break;
+      }
+      result[fieldName] = extractValue(descendant);
     }
 
-    return result;
-  });
+    if (allFieldsFound) {
+      results.push(result);
+    }
+  }
+
+  return results;
 }
 
 /**

@@ -12,5 +12,8 @@ import type { Color } from "./Color";
  *
  * Number is unified f64 for JSON/TypeScript compatibility.
  * Use `Role::expects_integer()` to know if display should truncate.
+ *
+ * Serializes directly to the primitive value (untagged).
+ * TypeScript: `element.value` is `string | number | boolean | Color | null`.
  */
-export type Value = { "type": "String", "value": string } | { "type": "Number", "value": number } | { "type": "Boolean", "value": boolean } | { "type": "Color", "value": Color };
+export type Value = boolean | number | string | Color;

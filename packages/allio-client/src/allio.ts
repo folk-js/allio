@@ -187,26 +187,13 @@ export class Allio extends EventEmitter<AllioEvents> {
     value: PrimitiveForRole<R>
   ): Promise<boolean> {
     const valueType = ROLE_VALUES[element.role];
-    let envelope: AX.Value;
-
-    switch (valueType) {
-      case "string":
-        envelope = { type: "String", value: value as string };
-        break;
-      case "number":
-        envelope = { type: "Number", value: value as number };
-        break;
-      case "boolean":
-        envelope = { type: "Boolean", value: value as boolean };
-        break;
-      case "color":
-        envelope = { type: "Color", value: value as AX.Color };
-        break;
-      default:
-        throw new Error(`Role ${element.role} does not accept values`);
+    if (!valueType) {
+      throw new Error(`Role ${element.role} does not accept values`);
     }
-
-    return this.call("set", { element_id: element.id, value: envelope });
+    return this.call("set", {
+      element_id: element.id,
+      value: value as AX.Value,
+    });
   }
 
   /**

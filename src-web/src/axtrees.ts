@@ -163,8 +163,8 @@ class AXTreeOverlay {
 
     // Format value
     let valueStr = "";
-    if (el.value) {
-      const v = el.value.value;
+    if (el.value != null) {
+      const v = el.value;
       valueStr = typeof v === "string" ? `"${v}"` : String(v);
     }
 
@@ -208,7 +208,7 @@ class AXTreeOverlay {
               ? `
             <input class="tree-text-input" 
                    data-action="write" 
-                   value="${this.escapeHtml(String(el.value?.value ?? ""))}"
+                   value="${this.escapeHtml(String(el.value ?? ""))}"
                    placeholder="Enter text..." />
           `
               : ""

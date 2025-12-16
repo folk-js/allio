@@ -49,19 +49,23 @@ impl Color {
 ///
 /// Number is unified f64 for JSON/TypeScript compatibility.
 /// Use `Role::expects_integer()` to know if display should truncate.
+///
+/// Serializes directly to the primitive value (untagged).
+/// TypeScript: `element.value` is `string | number | boolean | Color | null`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
-#[serde(tag = "type", content = "value")]
+#[serde(untagged)]
 #[ts(export)]
 pub enum Value {
-  /// Text content (text fields, labels)
-  String(String),
+  /// Boolean state (checkboxes, switches)
+  /// Note: Boolean must come before Number due to serde untagged parsing order
+  Boolean(bool),
 
   /// Numeric value (sliders, steppers, progress bars)
   /// Integers are stored as whole f64 values.
   Number(f64),
 
-  /// Boolean state (checkboxes, switches)
-  Boolean(bool),
+  /// Text content (text fields, labels)
+  String(String),
 
   /// Color value (color wells/pickers)
   Color(Color),

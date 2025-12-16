@@ -22,7 +22,7 @@ function renderFocusAndSelection(): string {
           focused.label || "(none)"
         }</span></div>
         <div class="property"><span class="property-key">value</span><span class="property-value">${
-          focused.value ? JSON.stringify(focused.value.value) : "(none)"
+          focused.value != null ? JSON.stringify(focused.value) : "(none)"
         }</span></div>
         <div class="property"><span class="property-key">id</span><span class="property-value mono">${
           focused.id
