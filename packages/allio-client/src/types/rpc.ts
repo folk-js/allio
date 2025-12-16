@@ -27,6 +27,8 @@ export type RpcReturns = {
   perform: boolean;
   watch: void;
   unwatch: void;
+  observe: void;
+  unobserve: void;
 };
 
 // Event types derived from ServerEvent

@@ -29,6 +29,7 @@ drop(allio);
 */
 
 mod core;
+mod observation;
 mod platform;
 mod polling;
 
@@ -38,3 +39,4 @@ mod types;
 pub use types::*;
 
 pub use crate::core::{Allio, AllioBuilder};
+pub use crate::observation::{ObservationHandle, ObserveConfig};

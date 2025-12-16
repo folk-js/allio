@@ -5,3 +5,4 @@ export * from "./types";
 export { Allio } from "./allio";
 export { AllioOcclusion } from "./occlusion";
 export { AllioPassthrough, type PassthroughMode } from "./passthrough";
+export { query, queryAs, type QueryOptions, type ExtractedResult } from "./query";

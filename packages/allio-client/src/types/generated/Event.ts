@@ -14,4 +14,4 @@ export type Event = { "event": "sync:init", "data": Snapshot } | { "event": "win
 /**
  * Character range. None if range is unknown.
  */
-range: TextRange | null, } } | { "event": "mouse:position", "data": Point };
+range: TextRange | null, } } | { "event": "mouse:position", "data": Point } | { "event": "subtree:changed", "data": { root_id: ElementId, added: Array<ElementId>, removed: Array<ElementId>, modified: Array<ElementId>, } };

@@ -116,6 +116,7 @@ pub(in crate::platform::macos) mod ax_role {
   // Collections
   pub(super) const LIST: &str = "AXList";
   pub(super) const ROW: &str = "AXRow";
+  pub(super) const COLUMN: &str = "AXColumn";
   pub(super) const TABLE: &str = "AXTable";
   pub(super) const CELL: &str = "AXCell";
   pub(super) const OUTLINE: &str = "AXOutline"; // Tree
@@ -185,6 +186,7 @@ pub(in crate::platform) fn role_from_macos(platform_role: &str) -> Role {
     // Collections
     ax_role::LIST => Role::List,
     ax_role::ROW => Role::ListItem, // Rows in lists are list items
+    ax_role::COLUMN => Role::GenericGroup, // Table columns are structural containers
     ax_role::TABLE => Role::Table,
     ax_role::CELL => Role::Cell,
     ax_role::OUTLINE => Role::Tree,

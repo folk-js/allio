@@ -6,17 +6,9 @@
     <title>Query</title>
     <style>
       :root {
-        /* Value type colors - semantic palette */
-        --type-string: #e8a854;
-        --type-string-glow: rgba(232, 168, 84, 0.4);
-        --type-number: #5b9bd5;
-        --type-number-glow: rgba(91, 155, 213, 0.4);
-        --type-boolean: #b57edc;
-        --type-boolean-glow: rgba(181, 126, 220, 0.4);
-        --type-color: #e85d8c;
-        --type-color-glow: rgba(232, 93, 140, 0.4);
-        --type-none: #7a8a99;
-        --type-none-glow: rgba(122, 138, 153, 0.35);
+        /* Accent color for ports and highlights */
+        --accent: #5b9bd5;
+        --accent-glow: rgba(91, 155, 213, 0.4);
         /* Transform overlay */
         --port-transform: #2dd4bf;
         --port-transform-glow: rgba(45, 212, 191, 0.4);
@@ -128,31 +120,8 @@
         transition: border-color 0.15s ease, box-shadow 0.15s ease,
           filter 0.15s ease;
         position: relative;
-        /* Default to none type */
-        background: var(--type-none);
-        box-shadow: 0 0 8px var(--type-none-glow);
-      }
-
-      /* Value type colors */
-      .port.type-string {
-        background: var(--type-string);
-        box-shadow: 0 0 8px var(--type-string-glow);
-      }
-      .port.type-number {
-        background: var(--type-number);
-        box-shadow: 0 0 8px var(--type-number-glow);
-      }
-      .port.type-boolean {
-        background: var(--type-boolean);
-        box-shadow: 0 0 8px var(--type-boolean-glow);
-      }
-      .port.type-color {
-        background: var(--type-color);
-        box-shadow: 0 0 8px var(--type-color-glow);
-      }
-      .port.type-none {
-        background: var(--type-none);
-        box-shadow: 0 0 8px var(--type-none-glow);
+        background: var(--accent);
+        box-shadow: 0 0 8px var(--accent-glow);
       }
 
       /* Transform ports - teal ring overlay */
@@ -180,26 +149,7 @@
 
       .port:hover {
         border-color: var(--port-border-hover);
-      }
-      .port.type-string:hover {
-        box-shadow: 0 0 12px var(--type-string-glow),
-          0 0 20px var(--type-string-glow);
-      }
-      .port.type-number:hover {
-        box-shadow: 0 0 12px var(--type-number-glow),
-          0 0 20px var(--type-number-glow);
-      }
-      .port.type-boolean:hover {
-        box-shadow: 0 0 12px var(--type-boolean-glow),
-          0 0 20px var(--type-boolean-glow);
-      }
-      .port.type-color:hover {
-        box-shadow: 0 0 12px var(--type-color-glow),
-          0 0 20px var(--type-color-glow);
-      }
-      .port.type-none:hover {
-        box-shadow: 0 0 12px var(--type-none-glow),
-          0 0 20px var(--type-none-glow);
+        box-shadow: 0 0 12px var(--accent-glow), 0 0 20px var(--accent-glow);
       }
       .port.transform:hover {
         box-shadow: 0 0 12px var(--port-transform-glow),
@@ -212,7 +162,7 @@
       @keyframes connectPulse {
         0%,
         100% {
-          box-shadow: 0 0 8px var(--type-none-glow);
+          box-shadow: 0 0 8px var(--accent-glow);
         }
         50% {
           box-shadow: 0 0 16px rgba(255, 255, 255, 0.4),

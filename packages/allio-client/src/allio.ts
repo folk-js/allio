@@ -263,6 +263,37 @@ export class Allio extends EventEmitter<AllioEvents> {
     return this.rawCall("unwatch", { element_id }) as Promise<void>;
   }
 
+  // === Observation ===
+
+  /**
+   * Observe a subtree for changes.
+   *
+   * The subtree will be polled periodically and changes will fire:
+   * - Individual element:added/changed/removed events
+   * - One subtree:changed event per polling cycle (if anything changed)
+   *
+   * @param element_id - Root of subtree to observe
+   * @param options.depth - Maximum depth to traverse (undefined = infinite)
+   * @param options.wait_between_ms - Wait time between sweeps in ms (default: 100)
+   */
+  async observe(
+    element_id: AX.ElementId,
+    options: { depth?: number; wait_between_ms?: number } = {}
+  ): Promise<void> {
+    await this.rawCall("observe", {
+      element_id,
+      depth: options.depth,
+      wait_between_ms: options.wait_between_ms,
+    });
+  }
+
+  /**
+   * Stop observing a subtree.
+   */
+  async unobserve(element_id: AX.ElementId): Promise<void> {
+    await this.rawCall("unobserve", { element_id });
+  }
+
   /**
    * Set passthrough mode (for overlay apps).
    * When enabled (true), clicks pass through to underlying apps.
@@ -405,6 +436,10 @@ export class Allio extends EventEmitter<AllioEvents> {
 
       case "mouse:position":
         // No state update needed
+        break;
+
+      case "subtree:changed":
+        // No state update needed - elements already updated by individual events
         break;
     }
 

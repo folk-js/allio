@@ -41,7 +41,7 @@ pub(crate) enum ElementEvent<H> {
 }
 
 /// Attributes fetched from a platform element.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(crate) struct ElementAttributes {
   /// Semantic role (mapped from platform-specific role).
   pub role: crate::a11y::Role,

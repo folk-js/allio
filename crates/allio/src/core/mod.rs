@@ -34,10 +34,10 @@ while let Ok(event) = events.recv().await {
 */
 
 mod actions;
-mod adapters;
+pub(crate) mod adapters;
 mod handlers;
 mod queries;
-mod registry;
+pub(crate) mod registry;
 mod subscriptions;
 mod sync;
 
@@ -66,6 +66,8 @@ pub struct Allio {
   events_keepalive: InactiveReceiver<Event>,
   polling: Arc<Mutex<Option<PollingHandle>>>,
   screen_size: Arc<std::sync::OnceLock<(f64, f64)>>,
+  observation: Arc<crate::observation::ObservationState>,
+  observation_thread: Arc<Mutex<Option<crate::observation::ObservationThreadHandle>>>,
 }
 
 impl Clone for Allio {
@@ -76,6 +78,8 @@ impl Clone for Allio {
       events_keepalive: self.events_keepalive.clone(),
       polling: Arc::clone(&self.polling),
       screen_size: Arc::clone(&self.screen_size),
+      observation: Arc::clone(&self.observation),
+      observation_thread: Arc::clone(&self.observation_thread),
     }
   }
 }
@@ -193,11 +197,17 @@ impl Allio {
       events_keepalive: rx.deactivate(),
       polling: Arc::new(Mutex::new(None)),
       screen_size: Arc::new(std::sync::OnceLock::new()),
+      observation: Arc::new(crate::observation::ObservationState::new()),
+      observation_thread: Arc::new(Mutex::new(None)),
     };
 
     // Start polling with a clone (shares state via Arc)
     let polling_handle = polling::start_polling(allio.clone(), config);
     *allio.polling.lock() = Some(polling_handle);
+
+    // Start observation thread
+    let observation_handle = crate::observation::start_observation_thread(allio.clone());
+    *allio.observation_thread.lock() = Some(observation_handle);
 
     Ok(allio)
   }
@@ -217,6 +227,20 @@ impl Allio {
   #[inline]
   pub(crate) fn write<R>(&self, f: impl FnOnce(&mut Registry) -> R) -> R {
     f(&mut self.state.write())
+  }
+
+  /// Get the observation state (for internal use).
+  pub(crate) fn observation_state(&self) -> &crate::observation::ObservationState {
+    &self.observation
+  }
+
+  /// Emit an event directly (used by observation system).
+  pub(crate) fn emit_event(&self, event: Event) {
+    if let Err(e) = self.events_tx.try_broadcast(event) {
+      if e.is_full() {
+        log::error!("Event channel overflow in observation");
+      }
+    }
   }
 }
 

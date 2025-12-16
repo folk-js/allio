@@ -1,67 +1,61 @@
-import { Allio, AX, AllioOcclusion, AllioPassthrough, accepts } from "allio";
+import {
+  Allio,
+  AX,
+  AllioOcclusion,
+  AllioPassthrough,
+  query,
+  accepts,
+} from "allio";
 
-// --- TODO Query Demo Types ---
+// --- TODO Query Demo ---
 
 interface TodoItem {
   text: string;
   completed: boolean;
 }
 
-// Track which element IDs belong to which tree (for re-querying on changes)
-const treeWatchSets = new Map<AX.ElementId, Set<AX.ElementId>>();
+/** Extract TODOs using the query API (synchronous, cache-only) */
+function extractTodosWithQuery(treeId: AX.ElementId): TodoItem[] {
+  const results = query(allio, treeId, {
+    selector: "tree listitem",
+    extract: {
+      completed: "checkbox",
+      text: "textfield",
+    },
+  });
 
-// Pending tree propagations - debounce to next frame
-const pendingTreeUpdates = new Set<AX.ElementId>();
-let propagationScheduled = false;
+  return results.map((r) => ({
+    completed: r.completed === true,
+    text: typeof r.text === "string" ? r.text : "",
+  }));
+}
 
-/** Schedule a tree propagation for next frame (debounced) */
-function schedulePropagation(treeElementId: AX.ElementId) {
-  pendingTreeUpdates.add(treeElementId);
+/** Set up tree observation using observe() API */
+async function observeTree(treeId: AX.ElementId) {
+  await allio.observe(treeId, {
+    depth: 10,
+    wait_between_ms: 100,
+  });
+  console.log("[observe] Started observing tree:", treeId);
+}
 
-  if (!propagationScheduled) {
-    propagationScheduled = true;
-    requestAnimationFrame(async () => {
-      propagationScheduled = false;
-      const trees = [...pendingTreeUpdates];
-      pendingTreeUpdates.clear();
+/** Propagate a value from a port to all its connections */
+async function propagateValueFromPort(sourcePort: Port, value: unknown) {
+  for (const conn of state.connections) {
+    if (conn.sourceId === sourcePort.id) {
+      const targetPort = state.ports.get(conn.targetId);
+      if (!targetPort) continue;
 
-      for (const treeId of trees) {
-        await propagateTodosFromTree(treeId);
+      if (targetPort.isTransform) {
+        await propagateThroughTransform(targetPort, value);
+      } else {
+        await writeValueToElement(targetPort.element, value);
       }
-    });
+    }
   }
 }
 
 type PortType = "input" | "output";
-type ValueTypeClass =
-  | "type-string"
-  | "type-number"
-  | "type-boolean"
-  | "type-color"
-  | "type-none";
-
-/** Map element role to its value type CSS class */
-function getValueTypeClass(role: AX.Role): ValueTypeClass {
-  switch (role) {
-    case "textfield":
-    case "textarea":
-    case "searchfield":
-    case "combobox":
-      return "type-string";
-    case "slider":
-    case "progressbar":
-    case "stepper":
-      return "type-number";
-    case "checkbox":
-    case "switch":
-    case "radiobutton":
-      return "type-boolean";
-    case "colorwell":
-      return "type-color";
-    default:
-      return "type-none";
-  }
-}
 
 interface Port {
   id: string;
@@ -69,7 +63,7 @@ interface Port {
   element: AX.TypedElement;
   type: PortType;
   isTransform: boolean;
-  // For TODO query: the tree element we're watching
+  // For TODO query: the tree element we're observing
   treeElementId?: AX.ElementId;
 }
 
@@ -91,8 +85,6 @@ interface DragState {
   targetWindow: AX.Window | null;
 }
 
-// --- TODO Query Functions ---
-
 /** Walk up the tree from an element until we find a "tree" role */
 async function findTreeAncestor(
   elementId: AX.ElementId
@@ -106,7 +98,6 @@ async function findTreeAncestor(
 
     try {
       const element = await allio.getElement(currentId, "current");
-      // Check for tree role (outline is how macOS exposes it via AXOutline)
       if (element.role === "tree") {
         return element;
       }
@@ -117,141 +108,6 @@ async function findTreeAncestor(
     }
   }
   return null;
-}
-
-/** Extract TODO items from a tree element by recursing through its structure */
-async function extractTodosFromTree(
-  treeElementId: AX.ElementId
-): Promise<{ todos: TodoItem[]; watchIds: Set<AX.ElementId> }> {
-  const todos: TodoItem[] = [];
-  const watchIds = new Set<AX.ElementId>();
-
-  // Add tree itself to watch set
-  watchIds.add(treeElementId);
-
-  try {
-    // Get listitem children of the tree
-    const treeChildren = await allio.children(treeElementId);
-
-    for (const listitem of treeChildren) {
-      if (listitem.role !== "listitem") continue;
-      watchIds.add(listitem.id);
-
-      // Find cell child
-      const listitemChildren = await allio.children(listitem.id);
-      for (const cell of listitemChildren) {
-        if (cell.role !== "cell") continue;
-        watchIds.add(cell.id);
-
-        // Find genericgroup child
-        const cellChildren = await allio.children(cell.id);
-        for (const group of cellChildren) {
-          if (group.role !== "genericgroup" && group.role !== "group") continue;
-          watchIds.add(group.id);
-
-          // Find checkbox and textfield
-          const groupChildren = await allio.children(group.id);
-          let completed = false;
-          let text = "";
-          let hasCheckbox = false;
-
-          for (const child of groupChildren) {
-            watchIds.add(child.id);
-
-            if (child.role === "checkbox") {
-              // Check if the checkbox is checked - look for AXValue or toggle state
-              const val = child.value?.value;
-              completed = val === true || val === false ? val : false;
-              hasCheckbox = true;
-            } else if (
-              child.role === "textfield" ||
-              child.role === "statictext"
-            ) {
-              text = child.value?.value?.toString() || child.label || "";
-            }
-          }
-
-          if (hasCheckbox) {
-            todos.push({ text, completed });
-          }
-        }
-      }
-    }
-  } catch (err) {
-    console.error("Error extracting TODOs:", err);
-  }
-
-  return { todos, watchIds };
-}
-
-/** Set up watching for a tree and all its TODO descendants */
-async function setupTreeWatch(treeElementId: AX.ElementId) {
-  const { watchIds } = await extractTodosFromTree(treeElementId);
-
-  // Store the watch set for this tree
-  treeWatchSets.set(treeElementId, watchIds);
-
-  // Watch all relevant elements
-  for (const id of watchIds) {
-    try {
-      await allio.watch(id);
-    } catch {
-      // Element may already be watched or gone
-    }
-  }
-}
-
-/** Check if an element ID is part of any watched tree */
-function findTreeForElement(elementId: AX.ElementId): AX.ElementId | undefined {
-  for (const [treeId, watchSet] of treeWatchSets) {
-    if (watchSet.has(elementId)) {
-      return treeId;
-    }
-  }
-  return undefined;
-}
-
-/** Propagate TODO list through all connections from a tree's output port */
-async function propagateTodosFromTree(treeElementId: AX.ElementId) {
-  const { todos, watchIds } = await extractTodosFromTree(treeElementId);
-
-  // Update watch set (structure may have changed)
-  const oldWatchIds = treeWatchSets.get(treeElementId) || new Set();
-  treeWatchSets.set(treeElementId, watchIds);
-
-  // Watch any new IDs
-  for (const id of watchIds) {
-    if (!oldWatchIds.has(id)) {
-      try {
-        await allio.watch(id);
-      } catch {
-        // Ignore
-      }
-    }
-  }
-
-  // Find output port for this tree
-  const outputPort = [...state.ports.values()].find(
-    (p) => p.treeElementId === treeElementId && p.type === "output"
-  );
-  if (!outputPort) return;
-
-  console.log("Propagating TODOs:", todos);
-
-  // Find all connections from this output port and propagate
-  for (const conn of state.connections) {
-    if (conn.sourceId === outputPort.id) {
-      const targetPort = state.ports.get(conn.targetId);
-      if (!targetPort) continue;
-
-      // Pass the JS array through transforms, stringify only at final write
-      if (targetPort.isTransform) {
-        await propagateThroughTransform(targetPort, todos);
-      } else {
-        await writeValueToElement(targetPort.element, todos);
-      }
-    }
-  }
 }
 
 // State
@@ -318,15 +174,24 @@ function setupEventListeners() {
   allio.on("window:removed", render);
   allio.on("window:changed", render);
 
+  // Listen to subtree:changed for observed trees
+  allio.on("subtree:changed", ({ root_id }) => {
+    console.log("[subtree:changed] Tree changed:", root_id);
+    const todos = extractTodosWithQuery(root_id);
+    console.log("[subtree:changed] TODOs:", todos);
+
+    // Find output port for this tree and propagate
+    const outputPort = [...state.ports.values()].find(
+      (p) => p.treeElementId === root_id && p.type === "output"
+    );
+    if (outputPort) {
+      propagateValueFromPort(outputPort, todos);
+    }
+  });
+
   // Element value changes trigger propagation
   allio.on("element:changed", ({ element }) => {
     handleElementUpdate(element as AX.TypedElement);
-
-    // Check if this element is part of a watched tree - schedule for next frame
-    const treeId = findTreeForElement(element.id);
-    if (treeId) {
-      schedulePropagation(treeId);
-    }
   });
 
   // Clean up ports when elements are removed
@@ -335,12 +200,6 @@ function setupEventListeners() {
       .filter((p) => p.element.id === element_id)
       .map((p) => p.id);
     portsToRemove.forEach((portId) => deletePort(portId));
-
-    // Check if this element is part of a watched tree - schedule for next frame
-    const treeId = findTreeForElement(element_id);
-    if (treeId) {
-      schedulePropagation(treeId);
-    }
   });
 
   // Mouse tracking for connections, hover, and drag preview
@@ -554,8 +413,8 @@ async function completeDrag(isTransform: boolean) {
       treeElementId
     );
     if (treeElementId) {
-      // Set up watching for the entire tree structure
-      await setupTreeWatch(treeElementId);
+      // Set up observation for the entire tree structure
+      await observeTree(treeElementId);
     } else {
       allio.watch(effectiveSourceElement.id);
     }
@@ -594,9 +453,13 @@ async function completeDrag(isTransform: boolean) {
     state.connections.push(connection);
     redrawConnections();
 
-    // If this is a tree, propagate TODOs; otherwise normal value
+    // If this is a tree, do initial propagation; future updates via subtree:changed
     if (treeElementId) {
-      await propagateTodosFromTree(treeElementId);
+      const todos = extractTodosWithQuery(treeElementId);
+      const outputPort = state.ports.get(connection.sourceId);
+      if (outputPort) {
+        await propagateValueFromPort(outputPort, todos);
+      }
     } else {
       propagateValue(connection);
     }
@@ -754,10 +617,7 @@ function createPortPair(
 
 function createPortElement(port: Port) {
   const el = document.createElement("div");
-  const typeClass = getValueTypeClass(port.element.role);
-  el.className = `port ${port.type} ${typeClass}${
-    port.isTransform ? " transform" : ""
-  }`;
+  el.className = `port ${port.type}${port.isTransform ? " transform" : ""}`;
   el.setAttribute("ax-io", "opaque");
   el.title = formatPortTitle(port);
 
@@ -823,13 +683,8 @@ function deletePort(portId: string) {
       (p) => p.treeElementId === port.treeElementId
     );
     if (!hasOtherTreePorts) {
-      const watchSet = treeWatchSets.get(port.treeElementId);
-      if (watchSet) {
-        for (const id of watchSet) {
-          allio.unwatch(id).catch(() => {});
-        }
-        treeWatchSets.delete(port.treeElementId);
-      }
+      // Stop observing the tree when no ports reference it
+      allio.unobserve(port.treeElementId).catch(() => {});
     }
   }
 
@@ -1128,17 +983,13 @@ async function showHoverOverlay(port: Port) {
   // Move overlay into window container so it inherits the container's clip-path
   container.appendChild(dom.hoverOverlay);
 
-  // Get type color for this element
-  const typeClass = getValueTypeClass(element.role);
-  const typeColor = getTypeColor(typeClass);
-
   // Position with window-relative coordinates
   Object.assign(dom.hoverOverlay.style, {
     left: `${bounds.x - axWindow.bounds.x}px`,
     top: `${bounds.y - axWindow.bounds.y}px`,
     width: `${bounds.w}px`,
     height: `${bounds.h}px`,
-    borderColor: typeColor,
+    borderColor: "var(--accent)",
     display: "block",
   });
 
@@ -1163,32 +1014,14 @@ async function showHoverOverlay(port: Port) {
   drawWiringLine(port, bounds);
 }
 
-/** Get CSS color for a value type class */
-function getTypeColor(typeClass: ValueTypeClass): string {
-  switch (typeClass) {
-    case "type-string":
-      return "var(--type-string)";
-    case "type-number":
-      return "var(--type-number)";
-    case "type-boolean":
-      return "var(--type-boolean)";
-    case "type-color":
-      return "var(--type-color)";
-    default:
-      return "var(--type-none)";
-  }
-}
-
 function buildInfoPanelHtml(
   element: AX.TypedElement,
   isTransform: boolean
 ): string {
   const lines: string[] = [];
-  const typeClass = getValueTypeClass(element.role);
-  const typeColor = getTypeColor(typeClass);
 
   lines.push(
-    `<div style="color: ${typeColor}; font-weight: 600; margin-bottom: 4px;">${element.role} <span style="opacity: 0.5">(${element.platform_role})</span></div>`
+    `<div style="color: var(--accent); font-weight: 600; margin-bottom: 4px;">${element.role} <span style="opacity: 0.5">(${element.platform_role})</span></div>`
   );
 
   if (element.label) {
@@ -1203,7 +1036,7 @@ function buildInfoPanelHtml(
     const val = element.value.value;
     const displayVal = typeof val === "string" ? `"${val}"` : String(val);
     lines.push(
-      `<div><span style="opacity: 0.6;">Value:</span> <span style="color: ${typeColor};">${escapeHtml(
+      `<div><span style="opacity: 0.6;">Value:</span> <span style="color: var(--accent);">${escapeHtml(
         displayVal
       )}</span></div>`
     );
@@ -1281,8 +1114,7 @@ function drawWiringLine(
     "class",
     port.type === "input" ? "wiring-in" : "wiring-out"
   );
-  const typeClass = getValueTypeClass(port.element.role);
-  dom.wiringPath.setAttribute("stroke", getTypeColor(typeClass));
+  dom.wiringPath.setAttribute("stroke", "var(--accent)");
   dom.wiringSvg.style.display = "block";
 }
 

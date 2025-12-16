@@ -139,4 +139,13 @@ pub enum Event {
   // Input tracking
   #[serde(rename = "mouse:position")]
   MousePosition(Point),
+
+  // Subtree observation (from observation polling)
+  #[serde(rename = "subtree:changed")]
+  SubtreeChanged {
+    root_id: ElementId,
+    added: Vec<ElementId>,
+    removed: Vec<ElementId>,
+    modified: Vec<ElementId>,
+  },
 }

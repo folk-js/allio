@@ -72,6 +72,17 @@ pub enum RpcRequest {
   Watch { element_id: ElementId },
   /// Stop watching element.
   Unwatch { element_id: ElementId },
+  /// Observe a subtree for changes.
+  Observe {
+    element_id: ElementId,
+    #[serde(default)]
+    depth: Option<usize>,
+    /// Wait time between sweeps in milliseconds.
+    #[serde(default)]
+    wait_between_ms: Option<u64>,
+  },
+  /// Stop observing a subtree.
+  Unobserve { element_id: ElementId },
 }
 
 const fn default_max_children() -> usize {
@@ -180,6 +191,30 @@ pub fn dispatch(allio: &Allio, request: RpcRequest) -> Result<RpcResponse, Strin
 
     RpcRequest::Unwatch { element_id } => {
       allio.unwatch(element_id).map_err(|e| e.to_string())?;
+      Ok(RpcResponse::Null)
+    }
+
+    RpcRequest::Observe {
+      element_id,
+      depth,
+      wait_between_ms,
+    } => {
+      let config = allio::ObserveConfig {
+        depth,
+        wait_between: wait_between_ms.map(std::time::Duration::from_millis),
+      };
+      // Note: We don't return the handle - the observation stays active until Unobserve is called.
+      // This is a simplification for the RPC interface. The handle's Drop won't clean up
+      // because we std::mem::forget it.
+      let handle = allio
+        .observe(element_id, config)
+        .map_err(|e| e.to_string())?;
+      std::mem::forget(handle);
+      Ok(RpcResponse::Null)
+    }
+
+    RpcRequest::Unobserve { element_id } => {
+      allio.unobserve(element_id);
       Ok(RpcResponse::Null)
     }
   }

@@ -22,6 +22,7 @@ parking_lot = "0.12"
 thiserror = "2"
 async-broadcast = "0.7"
 ts-rs = "10"
+rayon = "1.10"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

@@ -288,8 +288,8 @@ impl Registry {
     }
   }
 
-  /// Emit `ElementChanged` event (used by elements.rs).
-  pub(super) fn emit_element_changed(&self, id: ElementId) {
+  /// Emit `ElementChanged` event.
+  pub(crate) fn emit_element_changed(&self, id: ElementId) {
     if let Some(element) = super::adapters::build_element(self, id) {
       self.emit(Event::ElementChanged { element });
     }
@@ -308,6 +308,44 @@ impl Registry {
   /// Check if element has children tracked in tree.
   pub(crate) fn tree_has_children(&self, id: ElementId) -> bool {
     self.tree.has_children(id)
+  }
+
+  /// Set children for a tree node.
+  pub(crate) fn tree_set_children(&mut self, parent: ElementId, children: Vec<ElementId>) {
+    self.tree.set_children(parent, children);
+  }
+
+  /// Refresh an element's attributes and return whether it changed.
+  /// Returns None if the element doesn't exist.
+  pub(crate) fn refresh_element(
+    &mut self,
+    id: ElementId,
+    attrs: crate::platform::ElementAttributes,
+  ) -> Option<bool> {
+    let elem = self.elements.get_mut(&id)?;
+
+    // Check for meaningful change
+    let old_value = elem.value.clone();
+    let old_label = elem.label.clone();
+    let old_bounds = elem.bounds;
+    let old_focused = elem.focused;
+    let old_selected = elem.selected;
+    let old_expanded = elem.expanded;
+
+    elem.refresh(attrs);
+
+    let changed = elem.value != old_value
+      || elem.label != old_label
+      || elem.bounds != old_bounds
+      || elem.focused != old_focused
+      || elem.selected != old_selected
+      || elem.expanded != old_expanded;
+
+    if changed {
+      self.emit_element_changed(id);
+    }
+
+    Some(changed)
   }
 }
 
