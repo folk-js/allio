@@ -102,6 +102,12 @@ export class AllioPassthrough {
    * Compute whether pointer events should pass through at the given coordinates.
    */
   private computePassthrough(x: number, y: number): boolean {
+    // If mouse is outside viewport (e.g., over devtools), don't pass through
+    // so clicks hit devtools instead of passing to desktop apps
+    if (this.isOutsideViewport(x, y)) {
+      return false;
+    }
+
     switch (this._mode) {
       case "opaque":
         return false; // Never pass through
@@ -121,6 +127,18 @@ export class AllioPassthrough {
       default:
         return this.computeAutoPassthrough(x, y);
     }
+  }
+
+  /**
+   * Check if point is outside the visible viewport (e.g., over devtools panel).
+   */
+  private isOutsideViewport(x: number, y: number): boolean {
+    return (
+      x < 0 ||
+      y < 0 ||
+      x > window.innerWidth ||
+      y > window.innerHeight
+    );
   }
 
   /**
