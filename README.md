@@ -1,4 +1,4 @@
-# Allio (Accessibility I/O)
+# Allio (Accessibility/A11y I/O)
 
 > [!IMPORTANT]
 > This is an experimental system to expose accessibility trees as read-write interfaces and augment existing apps with new UI affordances. Currently only macOS is supported but it is designed with cross-platform in mind.
