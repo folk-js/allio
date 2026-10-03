@@ -5,6 +5,15 @@ export * from "./types";
 export { Allio } from "./allio";
 export { AllioOcclusion } from "./occlusion";
 export { AllioPassthrough, type PassthroughMode } from "./passthrough";
+export type {
+  Shader,
+  ShaderOptions,
+  Region,
+  UniformType,
+  UniformValue,
+  UniformValues,
+  Uniforms,
+} from "./shader";
 export {
   query,
   queryAs,

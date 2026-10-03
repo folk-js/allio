@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Shader</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+        font: 12px/1.4 -apple-system, "SF Pro Text", sans-serif;
+        user-select: none;
+      }
+
+      /* Outline of the captured region. Pixels inside are drawn natively, not here. */
+      #frame {
+        position: fixed;
+        box-sizing: border-box;
+        border: 1px dashed rgba(255, 255, 255, 0.55);
+        outline: 1px solid rgba(0, 0, 0, 0.35);
+        pointer-events: none;
+      }
+      #frame.hidden {
+        border-color: transparent;
+        outline-color: transparent;
+      }
+      .grip,
+      .corner {
+        position: absolute;
+        background: rgba(20, 20, 24, 0.8);
+        color: #fff;
+        font-size: 10px;
+        letter-spacing: 0.04em;
+      }
+      .grip {
+        top: 0;
+        left: 0;
+        padding: 2px 8px;
+        border-bottom-right-radius: 6px;
+        cursor: grab;
+      }
+      .corner {
+        right: 0;
+        bottom: 0;
+        width: 14px;
+        height: 14px;
+        border-top-left-radius: 6px;
+        cursor: nwse-resize;
+      }
+      .hidden .grip,
+      .hidden .corner {
+        opacity: 0;
+      }
+
+      #panel {
+        position: fixed;
+        top: 12px;
+        right: 12px;
+        width: 230px;
+        padding: 10px 12px;
+        background: rgba(20, 20, 24, 0.86);
+        color: #fff;
+        border-radius: 8px;
+        backdrop-filter: blur(12px);
+      }
+      #panel h1 {
+        margin: 0 0 6px;
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        opacity: 0.7;
+      }
+      #panel label {
+        display: grid;
+        grid-template-columns: 52px 1fr 40px;
+        align-items: center;
+        gap: 6px;
+      }
+      #panel output {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        opacity: 0.7;
+      }
+      #panel input[type="range"] {
+        width: 100%;
+      }
+      #status {
+        margin-top: 6px;
+        min-height: 1.4em;
+        color: #ff8a80;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="frame">
+      <div class="grip" ax-io="opaque">move</div>
+      <div class="corner" ax-io="opaque"></div>
+    </div>
+    <div id="panel" ax-io="opaque">
+      <h1>Shader</h1>
+      <div id="controls"></div>
+      <label><span>frame</span><input id="show" type="checkbox" checked /><span></span></label>
+      <div id="status"></div>
+    </div>
+    <script type="module" src="../src/shader.ts"></script>
+  </body>
+</html>

@@ -31,6 +31,7 @@ There are 3 things in the way of a11y-as-interop which we are fighting against:
 | views     | Simplified tree projections     | ❌     |
 | windows   | all, focused, z-order           | ✅     |
 | TS client | rpc, occlusion, passthrough     | ✅     |
+| shaders   | [Redraw screen regions through WGSL](docs/SHADERS.md) | 🚧     |
 
 ## Architecture
 

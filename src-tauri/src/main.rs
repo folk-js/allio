@@ -23,6 +23,8 @@ use tauri_nspanel::{tauri_panel, ManagerExt as _, PanelLevel, StyleMask, Webview
 use allio::Allio;
 use allio_ws::WebSocketState;
 
+mod shaders;
+
 #[cfg(target_os = "macos")]
 tauri_panel! {
     panel!(AllioPanel {
@@ -79,6 +81,7 @@ const DEFAULT_OVERLAYS: &[&str] = &[
   "query.html",
   "sand.html",
   "windows-debug.html",
+  "shader.html",
 ];
 
 fn get_overlay_files() -> Vec<String> {
@@ -371,10 +374,21 @@ fn load_file(app: &AppHandle, path: &Path) -> Result<(), Box<dyn std::error::Err
   Ok(())
 }
 
-fn create_rpc_handler(app_handle: AppHandle) -> allio_ws::CustomRpcHandler {
+fn create_rpc_handler(
+  app_handle: AppHandle,
+) -> (allio_ws::CustomRpcHandler, allio_ws::DisconnectHandler) {
   let last_state = std::sync::Arc::new(AtomicBool::new(true));
+  let shaders = std::sync::Arc::new(shaders::Shaders::default());
 
-  std::sync::Arc::new(move |method, args| {
+  let on_disconnect: allio_ws::DisconnectHandler = {
+    let shaders = shaders.clone();
+    std::sync::Arc::new(move |conn| shaders.disconnected(conn))
+  };
+
+  let handler: allio_ws::CustomRpcHandler = std::sync::Arc::new(move |conn, method, args| {
+    if let Some(response) = shaders.handle(conn, method, args) {
+      return Some(response);
+    }
     if method != "set_passthrough" && method != "set_clickthrough" {
       return None;
     }
@@ -431,7 +445,9 @@ fn create_rpc_handler(app_handle: AppHandle) -> allio_ws::CustomRpcHandler {
         Err(e) => serde_json::json!({ "error": e }),
       })
     }
-  })
+  });
+
+  (handler, on_disconnect)
 }
 
 fn setup_main_window(app: &tauri::App, allio: &Allio) -> Result<(), Box<dyn std::error::Error>> {
@@ -528,8 +544,10 @@ fn main() {
       };
 
       // WebSocket setup
+      let (rpc_handler, on_disconnect) = create_rpc_handler(app.handle().clone());
       let ws_state = WebSocketState::new(allio.clone())
-        .with_custom_handler(create_rpc_handler(app.handle().clone()));
+        .with_custom_handler(rpc_handler)
+        .with_disconnect_handler(on_disconnect);
 
       // Window setup
       setup_main_window(app, &allio)?;

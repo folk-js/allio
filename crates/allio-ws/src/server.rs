@@ -14,6 +14,7 @@ use axum::{
 };
 use log::error;
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use tower_http::cors::{Any, CorsLayer};
@@ -22,8 +23,17 @@ use tower_http::cors::{Any, CorsLayer};
 pub const DEFAULT_WS_PORT: u16 = 3030;
 const DEFAULT_CHANNEL_CAPACITY: usize = 1000;
 
-/// Handler for app-specific RPC methods.
-pub type CustomRpcHandler = Arc<dyn Fn(&str, &Value) -> Option<Value> + Send + Sync>;
+/// Identifies one WebSocket connection for its lifetime.
+pub type ConnId = u64;
+
+/// Handler for app-specific RPC methods. Return `None` to fall through to the built-in methods.
+/// The [`ConnId`] lets handlers tie resources to the connection that created them.
+pub type CustomRpcHandler = Arc<dyn Fn(ConnId, &str, &Value) -> Option<Value> + Send + Sync>;
+
+/// Called once when a connection closes, however it closes (clean close, navigation, crash).
+pub type DisconnectHandler = Arc<dyn Fn(ConnId) + Send + Sync>;
+
+static NEXT_CONN_ID: AtomicU64 = AtomicU64::new(1);
 
 /// WebSocket state.
 #[derive(Clone)]
@@ -31,6 +41,7 @@ pub struct WebSocketState {
   allio: Allio,
   json_sender: Arc<broadcast::Sender<String>>,
   custom_handler: Option<CustomRpcHandler>,
+  disconnect_handler: Option<DisconnectHandler>,
   port: u16,
 }
 
@@ -55,8 +66,16 @@ impl WebSocketState {
       allio,
       json_sender: Arc::new(json_tx),
       custom_handler: None,
+      disconnect_handler: None,
       port,
     }
+  }
+
+  /// Add a handler called when a connection closes.
+  #[must_use]
+  pub fn with_disconnect_handler(mut self, handler: DisconnectHandler) -> Self {
+    self.disconnect_handler = Some(handler);
+    self
   }
 
   /// Add a custom RPC handler.
@@ -114,7 +133,15 @@ async fn websocket_handler(
   ws.on_upgrade(|socket| handle_websocket(socket, ws_state))
 }
 
-async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
+async fn handle_websocket(socket: WebSocket, ws_state: WebSocketState) {
+  let conn = NEXT_CONN_ID.fetch_add(1, Ordering::Relaxed);
+  serve_connection(socket, &ws_state, conn).await;
+  if let Some(ref handler) = ws_state.disconnect_handler {
+    handler(conn);
+  }
+}
+
+async fn serve_connection(mut socket: WebSocket, ws_state: &WebSocketState, conn: ConnId) {
   let mut rx = ws_state.json_sender.subscribe();
   let allio_for_init = ws_state.allio.clone();
   let init_result = tokio::task::spawn_blocking(move || allio_for_init.snapshot()).await;
@@ -135,7 +162,7 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
         msg = socket.recv() => {
             match msg {
                 Some(Ok(Message::Text(text))) => {
-                    let response = handle_request_async(&text, &ws_state).await;
+                    let response = handle_request_async(&text, ws_state, conn).await;
                     while let Ok(event_json) = rx.try_recv() {
                         drop(socket.send(Message::Text(event_json)).await);
                     }
@@ -174,7 +201,7 @@ async fn handle_websocket(mut socket: WebSocket, ws_state: WebSocketState) {
   }
 }
 
-async fn handle_request_async(request: &str, ws_state: &WebSocketState) -> String {
+async fn handle_request_async(request: &str, ws_state: &WebSocketState, conn: ConnId) -> String {
   let parsed: Result<Value, _> = serde_json::from_str(request);
 
   let req = match parsed {
@@ -191,7 +218,7 @@ async fn handle_request_async(request: &str, ws_state: &WebSocketState) -> Strin
   let args = req.get("args").cloned().unwrap_or(Value::Null);
 
   if let Some(ref handler) = ws_state.custom_handler {
-    if let Some(mut response) = handler(&method, &args) {
+    if let Some(mut response) = handler(conn, &method, &args) {
       if let Some(obj) = response.as_object_mut() {
         obj.insert("id".to_string(), id);
       }

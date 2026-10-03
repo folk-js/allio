@@ -21,12 +21,17 @@ import type {
   Recency,
 } from "./types";
 import { ROLE_VALUES } from "./types";
+import { ShaderSet, type Shader, type ShaderOptions, type Uniforms } from "./shader";
 
 export class Allio extends EventEmitter<AllioEvents> {
   private ws: WebSocket | null = null;
   private requestId = 0;
   private pending = new Map<number, Pending>();
   private watchCallbacks = new Map<AX.ElementId, Set<WatchCallback>>();
+  private shaders = new ShaderSet(
+    (method, args) => this.rawCall(method, args),
+    () => this.connected
+  );
 
   // === State (mirrors Registry) ===
   readonly windows = new Map<AX.WindowId, AX.Window>();
@@ -70,6 +75,7 @@ export class Allio extends EventEmitter<AllioEvents> {
       this.ws.onopen = () => {
         this.log("connected ✓");
         resolve();
+        this.shaders.sync();
       };
       this.ws.onerror = (e) => {
         this.logError("connection error", e);
@@ -289,6 +295,16 @@ export class Allio extends EventEmitter<AllioEvents> {
   async setPassthrough(enabled: boolean): Promise<void> {
     await this.rawCall("set_passthrough", { enabled });
     this.passthrough = enabled;
+  }
+
+  // === Shaders ===
+
+  /**
+   * Draws a screen region back through a WGSL fragment shader, natively on the GPU. The shader
+   * lives as long as this connection; see `./shader.ts` for the authoring model.
+   */
+  shader<U extends Uniforms = Record<string, never>>(options: ShaderOptions<U>): Shader<U> {
+    return this.shaders.create(options);
   }
 
   // === Raw RPC ===

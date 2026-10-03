@@ -1,0 +1,221 @@
+//! WGSL to MSL translation.
+//!
+//! From a spec's uniform declarations we generate a WGSL prelude (uniform struct, bindings,
+//! fullscreen vertex stage), so authors only write the fragment function. See
+//! `docs/SHADERS.md` for what the shader can read.
+
+use crate::spec::ShaderSpec;
+use crate::uniforms::Layout;
+use naga::back::msl;
+use std::fmt::Write as _;
+
+/// Entry point names: the generated vertex stage, and the one the author writes.
+pub(crate) const VERTEX_ENTRY: &str = "vs";
+pub(crate) const FRAGMENT_ENTRY: &str = "fs";
+
+/// A translated shader, ready to build a Metal pipeline from.
+#[derive(Debug, Clone)]
+pub(crate) struct Compiled {
+  pub(crate) msl: String,
+  pub(crate) layout: Layout,
+}
+
+const VERTEX_STAGE: &str = "
+struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f }
+@vertex fn vs(@builtin(vertex_index) i: u32) -> VsOut {
+  let p = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
+  var o: VsOut;
+  o.pos = vec4f(p * 2.0 - 1.0, 0.0, 1.0);
+  o.uv = vec2f(p.x, 1.0 - p.y);
+  return o;
+}
+";
+
+/// The WGSL prepended to user source.
+pub(crate) fn prelude(layout: &Layout) -> String {
+  let mut s = String::from("struct Uniforms {\n");
+  for f in &layout.fields {
+    let _ = writeln!(s, "  {}: {},", f.name, f.ty.wgsl());
+  }
+  s.push_str("}\n@group(0) @binding(0) var<uniform> u: Uniforms;\n");
+  s.push_str("@group(0) @binding(1) var samp: sampler;\n@group(0) @binding(2) var screen: texture_2d<f32>;\n");
+  s.push_str(VERTEX_STAGE);
+  s
+}
+
+/// Validates and translates a spec. Errors are human-readable WGSL diagnostics.
+pub(crate) fn compile(spec: &ShaderSpec) -> Result<Compiled, String> {
+  let layout = Layout::new(&spec.uniforms)?;
+  let source = format!("{}{}", prelude(&layout), spec.wgsl);
+  let module = naga::front::wgsl::parse_str(&source).map_err(|e| e.emit_to_string(&source))?;
+  let info = naga::valid::Validator::new(
+    naga::valid::ValidationFlags::all(),
+    naga::valid::Capabilities::empty(),
+  )
+  .validate(&module)
+  .map_err(|e| e.emit_to_string(&source))?;
+  let has_fragment = module
+    .entry_points
+    .iter()
+    .any(|ep| ep.stage == naga::ShaderStage::Fragment && ep.name == FRAGMENT_ENTRY);
+  if !has_fragment {
+    return Err(format!(
+      "WGSL must define `@fragment fn {FRAGMENT_ENTRY}(in: VsOut) -> @location(0) vec4f`"
+    ));
+  }
+
+  // The fragment stage gets the uniform buffer, sampler and screen texture at matching Metal slots.
+  let mut resources = msl::EntryPointResources::default();
+  let mut bind = |binding: u32, target: msl::BindTarget| {
+    resources
+      .resources
+      .insert(naga::ResourceBinding { group: 0, binding }, target);
+  };
+  bind(
+    0,
+    msl::BindTarget {
+      buffer: Some(0),
+      ..Default::default()
+    },
+  );
+  bind(
+    1,
+    msl::BindTarget {
+      sampler: Some(msl::BindSamplerTarget::Resource(0)),
+      ..Default::default()
+    },
+  );
+  bind(
+    2,
+    msl::BindTarget {
+      texture: Some(0),
+      ..Default::default()
+    },
+  );
+  let mut options = msl::Options {
+    lang_version: (2, 4),
+    ..Default::default()
+  };
+  options
+    .per_entry_point_map
+    .insert(FRAGMENT_ENTRY.into(), resources);
+  options
+    .per_entry_point_map
+    .insert(VERTEX_ENTRY.into(), msl::EntryPointResources::default());
+
+  let (msl, _) = msl::write_string(&module, &info, &options, &msl::PipelineOptions::default())
+    .map_err(|e| e.to_string())?;
+  Ok(Compiled { msl, layout })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
+mod tests {
+  use super::*;
+  use crate::spec::Region;
+  use crate::uniforms::UniformType;
+  use std::collections::BTreeMap;
+
+  fn spec(wgsl: &str, uniforms: &[(&str, UniformType)]) -> ShaderSpec {
+    ShaderSpec {
+      wgsl: wgsl.into(),
+      uniforms: uniforms
+        .iter()
+        .map(|(n, t)| ((*n).to_string(), *t))
+        .collect(),
+      values: BTreeMap::new(),
+      region: Region {
+        x: 0.0,
+        y: 0.0,
+        w: 100.0,
+        h: 100.0,
+      },
+    }
+  }
+
+  const PASSTHROUGH: &str =
+    "@fragment fn fs(in: VsOut) -> @location(0) vec4f { return textureSample(screen, samp, in.uv); }";
+
+  fn rich() -> ShaderSpec {
+    spec(
+      "@fragment fn fs(in: VsOut) -> @location(0) vec4f {
+        return textureSample(screen, samp, in.uv) * u.fade + vec4f(u.tint, u.after) * u.rects.x * u.aim.x * u.mouse.y;
+      }",
+      &[
+        ("fade", UniformType::F32),
+        ("aim", UniformType::Vec2),
+        ("tint", UniformType::Vec3),
+        ("rects", UniformType::Vec4),
+        ("after", UniformType::F32),
+      ],
+    )
+  }
+
+  #[test]
+  fn passthrough_compiles() {
+    let c = compile(&spec(PASSTHROUGH, &[])).unwrap();
+    assert!(c.msl.contains("fragment"), "{}", c.msl);
+  }
+
+  #[test]
+  fn layout_matches_naga() {
+    let s = rich();
+    let c = compile(&s).unwrap();
+    let source = format!("{}{}", prelude(&c.layout), s.wgsl);
+    let module = naga::front::wgsl::parse_str(&source).unwrap();
+    let (_, ty) = module
+      .types
+      .iter()
+      .find(|(_, t)| t.name.as_deref() == Some("Uniforms"))
+      .unwrap();
+    let naga::TypeInner::Struct { members, span } = &ty.inner else {
+      panic!("not a struct")
+    };
+    assert_eq!(members.len(), c.layout.fields.len());
+    for (m, f) in members.iter().zip(&c.layout.fields) {
+      assert_eq!(m.offset as usize, f.offset, "offset of {}", f.name);
+    }
+    assert!(*span as usize <= c.layout.size);
+  }
+
+  #[test]
+  fn shader_errors_are_readable() {
+    let e = compile(&spec(
+      "@fragment fn fs(in: VsOut) -> @location(0) vec4f { return nope; }",
+      &[],
+    ))
+    .unwrap_err();
+    assert!(e.contains("nope"), "{e}");
+  }
+
+  #[test]
+  fn bad_and_duplicate_uniform_names_rejected() {
+    assert!(compile(&spec(PASSTHROUGH, &[("bad name", UniformType::F32)])).is_err());
+    assert!(compile(&spec(PASSTHROUGH, &[("mouse", UniformType::Vec2)])).is_err());
+  }
+
+  #[test]
+  fn missing_fragment_function_is_explained() {
+    let e = compile(&spec("fn helper() {}", &[])).unwrap_err();
+    assert!(e.contains("@fragment fn fs"), "{e}");
+  }
+
+  #[test]
+  fn spec_round_trips_through_json() {
+    let json = r#"{"wgsl":"x","uniforms":{"a":"f32","b":"vec3f"},"values":{"a":[1.0]},"region":{"x":1,"y":2,"w":3,"h":4}}"#;
+    let s: ShaderSpec = serde_json::from_str(json).unwrap();
+    assert_eq!(s.uniforms["b"], UniformType::Vec3);
+    assert!(serde_json::from_str::<ShaderSpec>(&json.replace("vec3f", "mat4")).is_err());
+    assert_eq!(
+      s.region,
+      Region {
+        x: 1.0,
+        y: 2.0,
+        w: 3.0,
+        h: 4.0
+      }
+    );
+    let back: ShaderSpec = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+    assert_eq!(back, s);
+  }
+}
