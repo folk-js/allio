@@ -1,0 +1,250 @@
+@layer package {
+  :root,
+  :host,
+  [theme] {
+    --allio-frame-fill: var(--editor-fill, #f6f6f7);
+    --allio-frame-line: var(--editor-line, #1c1c1e);
+    --allio-frame-surface: color-mix(
+      in oklch,
+      var(--editor-fill, white),
+      var(--editor-line, black) 4%
+    );
+    --allio-frame-surface-2: color-mix(
+      in oklch,
+      var(--editor-fill, white),
+      var(--editor-line, black) 9%
+    );
+    --allio-frame-border: color-mix(
+      in oklch,
+      var(--editor-line, black),
+      transparent 88%
+    );
+    --allio-frame-border-strong: color-mix(
+      in oklch,
+      var(--editor-line, black),
+      transparent 76%
+    );
+    --allio-frame-muted: color-mix(
+      in oklch,
+      var(--editor-line, black),
+      transparent 45%
+    );
+    --allio-frame-dot: color-mix(
+      in oklch,
+      var(--editor-line, black),
+      transparent 85%
+    );
+    --allio-frame-accent: var(--studio-primary, #5b9bd5);
+    --allio-frame-accent-line: var(--studio-primary-line, white);
+    --allio-frame-accent-soft: color-mix(
+      in oklch,
+      var(--studio-primary, #5b9bd5),
+      var(--editor-fill, white) 82%
+    );
+    --allio-frame-ok: var(--studio-positive, #16a34a);
+    --allio-frame-bad: var(--studio-negative, #dc2626);
+    --allio-frame-radius: var(--studio-radius-md, 10px);
+    --allio-frame-shadow: var(
+      --studio-shadow-lg,
+      0 10px 30px color-mix(in oklch, var(--editor-line, black), transparent 82%)
+    );
+    --allio-frame-family: var(
+      --editor-font-family,
+      -apple-system,
+      BlinkMacSystemFont,
+      "Segoe UI",
+      sans-serif
+    );
+  }
+}
+
+.allio-frame {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  color: var(--allio-frame-line);
+  background:
+    radial-gradient(
+        circle at 1px 1px,
+        var(--allio-frame-dot) 1px,
+        transparent 0
+      )
+      0 0 / 24px 24px,
+    var(--allio-frame-fill);
+  font-family: var(--allio-frame-family);
+}
+
+.allio-frame .allio-frame-toolbar {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 10;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  background: color-mix(in oklch, var(--allio-frame-surface), transparent 8%);
+  border: 1px solid var(--allio-frame-border);
+  border-radius: var(--allio-frame-radius);
+  box-shadow: var(--allio-frame-shadow);
+  backdrop-filter: blur(12px);
+}
+
+.allio-frame .allio-frame-toolbar button {
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--allio-frame-border-strong);
+  background: var(--allio-frame-surface);
+  color: inherit;
+  cursor: pointer;
+}
+.allio-frame .allio-frame-toolbar button:hover {
+  background: var(--allio-frame-surface-2);
+}
+
+.allio-frame .allio-frame-status {
+  font-size: 12px;
+  color: var(--allio-frame-muted);
+  padding-left: 4px;
+}
+.allio-frame .allio-frame-status.connected {
+  color: var(--allio-frame-ok);
+}
+.allio-frame .allio-frame-status.disconnected {
+  color: var(--allio-frame-bad);
+}
+
+.allio-frame .allio-card {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  background: var(--allio-frame-fill);
+  border: 1px solid var(--allio-frame-border);
+  border-radius: 12px;
+  box-shadow: var(--allio-frame-shadow);
+  overflow: hidden;
+}
+.allio-frame .allio-card.linked {
+  border-color: color-mix(
+    in oklch,
+    var(--allio-frame-accent),
+    transparent 40%
+  );
+}
+
+.allio-frame .allio-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  cursor: grab;
+  background: var(--allio-frame-surface);
+  border-bottom: 1px solid var(--allio-frame-border);
+  font-size: 13px;
+  user-select: none;
+}
+.allio-frame .allio-card-header:active {
+  cursor: grabbing;
+}
+.allio-frame .allio-card-title {
+  flex: 1;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.allio-frame .allio-card-header button {
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--allio-frame-border-strong);
+  background: var(--allio-frame-fill);
+  color: inherit;
+  cursor: pointer;
+}
+.allio-frame .allio-card-header button.linked {
+  background: var(--allio-frame-accent);
+  color: var(--allio-frame-accent-line);
+  border-color: transparent;
+}
+
+.allio-frame .allio-card-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--allio-frame-fill);
+}
+.allio-frame .allio-card-body patchwork-view {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.allio-frame .allio-link-panel {
+  position: absolute;
+  top: 40px;
+  left: 8px;
+  right: 8px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--allio-frame-fill);
+  border: 1px solid var(--allio-frame-border);
+  border-radius: var(--allio-frame-radius);
+  box-shadow: var(--allio-frame-shadow);
+  font-size: 12px;
+}
+.allio-frame .allio-link-panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-weight: 600;
+  color: var(--allio-frame-muted);
+}
+.allio-frame .allio-link-panel select,
+.allio-frame .allio-link-panel input {
+  font: inherit;
+  font-weight: 400;
+  padding: 6px 8px;
+  border: 1px solid var(--allio-frame-border-strong);
+  border-radius: 6px;
+  background: var(--allio-frame-surface);
+  color: var(--allio-frame-line);
+}
+.allio-frame .allio-link-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  margin-top: 2px;
+}
+.allio-frame .allio-link-actions button {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 7px;
+  border: 1px solid var(--allio-frame-border-strong);
+  background: var(--allio-frame-surface);
+  color: inherit;
+  cursor: pointer;
+}
+.allio-frame .allio-link-actions button.primary {
+  background: var(--allio-frame-accent);
+  color: var(--allio-frame-accent-line);
+  border-color: transparent;
+}
+
+.allio-frame .allio-card-resize {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  color: var(--allio-frame-muted);
+}
