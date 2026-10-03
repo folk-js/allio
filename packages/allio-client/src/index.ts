@@ -6,6 +6,7 @@ export { Allio } from "./allio";
 export { AllioOcclusion } from "./occlusion";
 export { AllioPassthrough, type PassthroughMode } from "./passthrough";
 export type {
+  Hide,
   Shader,
   ShaderOptions,
   Region,

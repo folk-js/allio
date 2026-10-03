@@ -2,8 +2,13 @@
 //!
 //! The client owns shader state and pushes its complete desired set; we make the live set match
 //! it. Everything a client declared lives exactly as long as its connection.
+//!
+//! Some uniforms are bound by the host instead of the client: a shader that declares
+//! `windows: vec4f[N]` gets the on-screen windows' `(x, y, w, h)` in screen points, frontmost
+//! first, zero-padded; one that declares `focused: f32` gets the index of the focused window in
+//! that list, or -1. They are updated here as windows change, with no round trip to the page.
 
-use allio_shader::{Region, Shader, ShaderSpec};
+use allio_shader::{Hide, Region, Shader, ShaderSpec, UniformType};
 use allio_ws::ConnId;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -17,6 +22,9 @@ pub trait Live: Sized {
   fn update(&self, spec: &ShaderSpec) -> Result<(), String>;
   fn set_values(&self, values: &BTreeMap<String, Vec<f32>>) -> Result<(), String>;
   fn set_region(&self, region: Region);
+  fn set_hide(&self, hide: &Hide) -> Result<(), String>;
+  fn set_behind(&self, hide: &Hide) -> Result<(), String>;
+  fn probe(&self, x: f64, y: f64) -> Result<[f32; 4], String>;
 }
 
 impl Live for Shader {
@@ -32,23 +40,86 @@ impl Live for Shader {
   fn set_region(&self, region: Region) {
     Shader::set_region(self, region);
   }
+  fn set_hide(&self, hide: &Hide) -> Result<(), String> {
+    Shader::set_hide(self, hide)
+  }
+  fn set_behind(&self, hide: &Hide) -> Result<(), String> {
+    Shader::set_behind(self, hide)
+  }
+  fn probe(&self, x: f64, y: f64) -> Result<[f32; 4], String> {
+    Shader::probe(self, x, y)
+  }
+}
+
+/// The on-screen windows, front to back.
+#[derive(Default)]
+pub struct Windows {
+  /// `(x, y, w, h)` in screen points.
+  pub rects: Vec<[f32; 4]>,
+  /// Index into `rects` of the focused window.
+  pub focused: Option<usize>,
+}
+
+/// Reads the current windows.
+pub type WindowSource = Box<dyn Fn() -> Windows + Send + Sync>;
+
+/// Which host-bound uniforms a shader declared.
+#[derive(Default, PartialEq, Debug)]
+struct Binding {
+  /// Length of its `windows` array.
+  windows: Option<usize>,
+  focused: bool,
+}
+
+impl Binding {
+  fn of(spec: &ShaderSpec) -> Self {
+    Self {
+      windows: match spec.uniforms.get("windows") {
+        Some(UniformType::Vec4Array(n)) => Some(*n),
+        _ => None,
+      },
+      focused: spec.uniforms.get("focused") == Some(&UniformType::F32),
+    }
+  }
+
+  /// The values to set for the given windows.
+  fn values(&self, windows: &Windows) -> BTreeMap<String, Vec<f32>> {
+    let mut values = BTreeMap::new();
+    if let Some(n) = self.windows {
+      let mut flat = vec![0.0; n * 4];
+      for (slot, rect) in flat.chunks_mut(4).zip(&windows.rects) {
+        slot.copy_from_slice(rect);
+      }
+      values.insert("windows".to_string(), flat);
+    }
+    if self.focused {
+      // Index -1 when nothing is focused, or the focused window doesn't fit in the array.
+      let index = windows
+        .focused
+        .filter(|&i| self.windows.is_none_or(|n| i < n));
+      values.insert(
+        "focused".to_string(),
+        vec![index.map_or(-1.0, |i| i as f32)],
+      );
+    }
+    values
+  }
+}
+
+struct Entry<T> {
+  shader: T,
+  binding: Binding,
 }
 
 struct State<T> {
   owner: Option<ConnId>,
-  shaders: BTreeMap<String, T>,
+  shaders: BTreeMap<String, Entry<T>>,
 }
 
 /// The live shaders.
-pub struct Reconciler<T: Live = Shader>(Mutex<State<T>>);
-
-impl<T: Live> Default for Reconciler<T> {
-  fn default() -> Self {
-    Self(Mutex::new(State {
-      owner: None,
-      shaders: BTreeMap::new(),
-    }))
-  }
+pub struct Reconciler<T: Live = Shader> {
+  state: Mutex<State<T>>,
+  windows: WindowSource,
 }
 
 pub type Shaders = Reconciler<Shader>;
@@ -60,14 +131,35 @@ struct Patch {
   #[serde(default)]
   values: BTreeMap<String, Vec<f32>>,
   region: Option<Region>,
+  hide: Option<Hide>,
+  behind: Option<Hide>,
+}
+
+/// Where to read a shader's state.
+#[derive(Deserialize)]
+struct Probe {
+  id: String,
+  x: f64,
+  y: f64,
 }
 
 impl<T: Live> Reconciler<T> {
-  /// Handles `shaders_set` and `shader_patch`; anything else falls through.
+  pub fn new(windows: WindowSource) -> Self {
+    Self {
+      state: Mutex::new(State {
+        owner: None,
+        shaders: BTreeMap::new(),
+      }),
+      windows,
+    }
+  }
+
+  /// Handles `shaders_set`, `shader_patch` and `shader_probe`; anything else falls through.
   pub fn handle(&self, conn: ConnId, method: &str, args: &Value) -> Option<Value> {
     match method {
       "shaders_set" => Some(self.set(conn, args)),
       "shader_patch" => Some(self.patch(args)),
+      "shader_probe" => Some(self.probe(args)),
       _ => None,
     }
   }
@@ -79,47 +171,84 @@ impl<T: Live> Reconciler<T> {
       Ok(w) => w,
       Err(e) => return json!({ "error": e.to_string() }),
     };
-    let mut live = self.0.lock().unwrap();
+    let mut live = self.state.lock().unwrap();
     live.owner = Some(conn);
     live.shaders.retain(|id, _| want.contains_key(id));
 
     let mut errors = BTreeMap::new();
     for (id, spec) in &want {
-      let result = match live.shaders.get(id) {
-        Some(shader) => shader.update(spec),
+      let result = match live.shaders.get_mut(id) {
+        Some(entry) => {
+          entry.binding = Binding::of(spec);
+          entry.shader.update(spec)
+        }
         None => T::start(spec).map(|shader| {
-          live.shaders.insert(id.clone(), shader);
+          let binding = Binding::of(spec);
+          live.shaders.insert(id.clone(), Entry { shader, binding });
         }),
       };
       if let Err(e) = result {
         errors.insert(id, e);
       }
     }
+    bind(&live, &(self.windows)());
     json!({ "result": { "errors": errors } })
   }
 
-  /// Hot path: overwrite one shader's uniform values and/or region.
+  /// Hot path: overwrite one shader's uniform values, region and/or hidden windows.
   fn patch(&self, args: &Value) -> Value {
     let patch: Patch = match serde_json::from_value(args.clone()) {
       Ok(p) => p,
       Err(e) => return json!({ "error": e.to_string() }),
     };
-    let live = self.0.lock().unwrap();
-    let Some(shader) = live.shaders.get(&patch.id) else {
+    let live = self.state.lock().unwrap();
+    let Some(entry) = live.shaders.get(&patch.id) else {
       return json!({ "error": format!("no shader '{}'", patch.id) });
     };
     if let Some(region) = patch.region {
-      shader.set_region(region);
+      entry.shader.set_region(region);
     }
-    match shader.set_values(&patch.values) {
+    let hidden = patch
+      .hide
+      .map_or(Ok(()), |hide| entry.shader.set_hide(&hide));
+    let behind = patch
+      .behind
+      .map_or(Ok(()), |hide| entry.shader.set_behind(&hide));
+    match entry
+      .shader
+      .set_values(&patch.values)
+      .and(hidden)
+      .and(behind)
+    {
       Ok(()) => json!({ "result": null }),
       Err(e) => json!({ "error": e }),
     }
   }
 
+  /// Reads one cell of a shader's simulation state at a screen point.
+  fn probe(&self, args: &Value) -> Value {
+    let probe: Probe = match serde_json::from_value(args.clone()) {
+      Ok(p) => p,
+      Err(e) => return json!({ "error": e.to_string() }),
+    };
+    let live = self.state.lock().unwrap();
+    match live.shaders.get(&probe.id) {
+      None => json!({ "error": format!("no shader '{}'", probe.id) }),
+      Some(entry) => match entry.shader.probe(probe.x, probe.y) {
+        Ok(cell) => json!({ "result": cell }),
+        Err(e) => json!({ "error": e }),
+      },
+    }
+  }
+
+  /// Re-reads the windows and pushes them to the shaders that bound them.
+  pub fn windows_changed(&self) {
+    bind(&self.state.lock().unwrap(), &(self.windows)());
+  }
+
   /// Drops everything the closed connection declared.
   pub fn disconnected(&self, conn: ConnId) {
-    let mut live = self.0.lock().unwrap();
+    let mut live = self.state.lock().unwrap();
     if live.owner == Some(conn) {
       live.owner = None;
       live.shaders.clear();
@@ -127,23 +256,41 @@ impl<T: Live> Reconciler<T> {
   }
 }
 
+/// Sets the host-bound uniforms of every shader that declared them.
+fn bind<T: Live>(live: &State<T>, windows: &Windows) {
+  for entry in live.shaders.values() {
+    let values = entry.binding.values(windows);
+    if !values.is_empty() {
+      // Can only fail if the declaration changed under us; the next `set` fixes that.
+      let _ = entry.shader.set_values(&values);
+    }
+  }
+}
+
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
   use super::*;
   use std::sync::{Arc, Mutex as StdMutex};
 
+  type Log = Arc<StdMutex<Vec<String>>>;
+
   /// Records what the reconciler did to it.
   struct Fake {
-    log: Arc<StdMutex<Vec<String>>>,
+    log: Log,
     id: String,
   }
 
   thread_local! {
-    static LOG: Arc<StdMutex<Vec<String>>> = Arc::default();
+    static LOG: Log = Arc::default();
   }
 
-  fn log() -> Arc<StdMutex<Vec<String>>> {
+  fn log() -> Log {
     LOG.with(Arc::clone)
+  }
+
+  fn drain() -> Vec<String> {
+    std::mem::take(&mut *log().lock().unwrap())
   }
 
   impl Live for Fake {
@@ -166,11 +313,11 @@ mod tests {
       }
     }
     fn set_values(&self, values: &BTreeMap<String, Vec<f32>>) -> Result<(), String> {
-      self.log.lock().unwrap().push(format!(
-        "values {} {:?}",
-        self.id,
-        values.keys().collect::<Vec<_>>()
-      ));
+      self
+        .log
+        .lock()
+        .unwrap()
+        .push(format!("values {} {values:?}", self.id));
       Ok(())
     }
     fn set_region(&self, region: Region) {
@@ -180,6 +327,25 @@ mod tests {
         .unwrap()
         .push(format!("region {} {}", self.id, region.x));
     }
+    fn set_hide(&self, hide: &Hide) -> Result<(), String> {
+      self
+        .log
+        .lock()
+        .unwrap()
+        .push(format!("hide {} {hide:?}", self.id));
+      Ok(())
+    }
+    fn set_behind(&self, hide: &Hide) -> Result<(), String> {
+      self
+        .log
+        .lock()
+        .unwrap()
+        .push(format!("behind {} {hide:?}", self.id));
+      Ok(())
+    }
+    fn probe(&self, x: f64, y: f64) -> Result<[f32; 4], String> {
+      Ok([x as f32, y as f32, 0.0, 1.0])
+    }
   }
 
   impl Drop for Fake {
@@ -188,12 +354,12 @@ mod tests {
     }
   }
 
-  fn spec(wgsl: &str) -> Value {
-    json!({ "wgsl": wgsl, "uniforms": {}, "values": {}, "region": { "x": 0, "y": 0, "w": 1, "h": 1 } })
+  fn reconciler() -> Reconciler<Fake> {
+    Reconciler::new(Box::new(Windows::default))
   }
 
-  fn drain() -> Vec<String> {
-    std::mem::take(&mut *log().lock().unwrap())
+  fn spec(wgsl: &str) -> Value {
+    json!({ "wgsl": wgsl, "uniforms": {}, "values": {}, "region": { "x": 0, "y": 0, "w": 1, "h": 1 } })
   }
 
   fn set(r: &Reconciler<Fake>, conn: ConnId, shaders: Value) -> Value {
@@ -201,10 +367,14 @@ mod tests {
       .unwrap()
   }
 
+  fn live(r: &Reconciler<Fake>) -> bool {
+    !r.state.lock().unwrap().shaders.is_empty()
+  }
+
   #[test]
   fn set_starts_updates_and_removes() {
     drain();
-    let r = Reconciler::<Fake>::default();
+    let r = reconciler();
     set(&r, 1, json!({ "a": spec("A"), "b": spec("B") }));
     assert_eq!(drain(), ["start A", "start B"]);
 
@@ -216,20 +386,20 @@ mod tests {
   #[test]
   fn errors_are_reported_per_shader() {
     drain();
-    let r = Reconciler::<Fake>::default();
+    let r = reconciler();
     let reply = set(&r, 1, json!({ "a": spec("A"), "b": spec("bad") }));
     assert_eq!(reply["result"]["errors"], json!({ "b": "bad shader" }));
 
     // A failed edit leaves the shader in place.
     let reply = set(&r, 1, json!({ "a": spec("bad") }));
     assert_eq!(reply["result"]["errors"], json!({ "a": "bad edit" }));
-    assert!(r.0.lock().unwrap().shaders.contains_key("a"));
+    assert!(live(&r));
   }
 
   #[test]
   fn shaders_die_with_the_connection_that_declared_them() {
     drain();
-    let r = Reconciler::<Fake>::default();
+    let r = reconciler();
     set(&r, 1, json!({ "a": spec("A") }));
 
     // A different connection closing changes nothing.
@@ -239,26 +409,30 @@ mod tests {
     // A new connection takes over; the old one closing afterwards must not tear it down.
     set(&r, 3, json!({ "a": spec("A") }));
     r.disconnected(1);
-    assert!(r.0.lock().unwrap().shaders.contains_key("a"));
+    assert!(live(&r));
 
     r.disconnected(3);
-    assert!(r.0.lock().unwrap().shaders.is_empty());
+    assert!(!live(&r));
     assert!(drain().contains(&"drop A".to_string()));
   }
 
   #[test]
-  fn patch_applies_values_and_region() {
+  fn patch_applies_values_region_and_hide() {
     drain();
-    let r = Reconciler::<Fake>::default();
+    let r = reconciler();
     set(&r, 1, json!({ "a": spec("A") }));
     drain();
 
     r.handle(
       1,
       "shader_patch",
-      &json!({ "id": "a", "values": { "x": [1.0] }, "region": { "x": 5, "y": 0, "w": 1, "h": 1 } }),
+      &json!({ "id": "a", "values": { "x": [1.0] }, "region": { "x": 5, "y": 0, "w": 1, "h": 1 }, "hide": { "windows": [9] }, "behind": "all" }),
     );
-    assert_eq!(drain(), ["region A 5", "values A [\"x\"]"]);
+    let log = drain();
+    assert_eq!(log[0], "region A 5");
+    assert_eq!(log[1], "hide A Windows([9])");
+    assert_eq!(log[2], "behind A All");
+    assert!(log[3].starts_with("values A"));
 
     let reply = r
       .handle(1, "shader_patch", &json!({ "id": "missing" }))
@@ -267,8 +441,84 @@ mod tests {
   }
 
   #[test]
+  fn probe_reads_a_shaders_state() {
+    drain();
+    let r = reconciler();
+    set(&r, 1, json!({ "a": spec("A") }));
+    let reply = r
+      .handle(1, "shader_probe", &json!({ "id": "a", "x": 3.0, "y": 4.0 }))
+      .unwrap();
+    assert_eq!(reply["result"], json!([3.0, 4.0, 0.0, 1.0]));
+    let reply = r
+      .handle(1, "shader_probe", &json!({ "id": "nope", "x": 0, "y": 0 }))
+      .unwrap();
+    assert!(reply["error"].as_str().unwrap().contains("no shader"));
+  }
+
+  #[test]
   fn unknown_methods_fall_through() {
-    let r = Reconciler::<Fake>::default();
-    assert!(r.handle(1, "set_passthrough", &json!({})).is_none());
+    assert!(reconciler()
+      .handle(1, "set_passthrough", &json!({}))
+      .is_none());
+  }
+
+  #[test]
+  fn declared_window_uniforms_are_bound_by_the_host() {
+    drain();
+    let source = Arc::new(StdMutex::new(Windows {
+      rects: vec![[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]],
+      focused: Some(1),
+    }));
+    let shared = source.clone();
+    let r = Reconciler::<Fake>::new(Box::new(move || {
+      let w = shared.lock().unwrap();
+      Windows {
+        rects: w.rects.clone(),
+        focused: w.focused,
+      }
+    }));
+
+    let mut with = spec("A");
+    with["uniforms"] = json!({ "windows": "vec4f[3]", "focused": "f32" });
+    set(&r, 1, json!({ "a": with, "b": spec("B") }));
+
+    // Only the shader that declared them gets them: padded to its array length.
+    let log = drain();
+    let values: Vec<_> = log.iter().filter(|e| e.starts_with("values")).collect();
+    assert_eq!(values.len(), 1, "{log:?}");
+    assert!(
+      values[0].contains("[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 0.0, 0.0, 0.0, 0.0]"),
+      "{}",
+      values[0]
+    );
+    assert!(values[0].contains("\"focused\": [1.0]"), "{}", values[0]);
+
+    // They follow window changes.
+    *source.lock().unwrap() = Windows {
+      rects: vec![[9.0, 9.0, 9.0, 9.0]],
+      focused: None,
+    };
+    r.windows_changed();
+    let log = drain();
+    assert!(
+      log[0].contains("[9.0, 9.0, 9.0, 9.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]"),
+      "{log:?}"
+    );
+    assert!(log[0].contains("\"focused\": [-1.0]"), "{log:?}");
+  }
+
+  #[test]
+  fn more_windows_than_slots_are_cut_off() {
+    let windows = Windows {
+      rects: vec![[1.0; 4], [2.0; 4], [3.0; 4]],
+      focused: Some(2),
+    };
+    let binding = Binding {
+      windows: Some(2),
+      focused: true,
+    };
+    let values = binding.values(&windows);
+    assert_eq!(values["windows"], [1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0]);
+    assert_eq!(values["focused"], [-1.0], "the focused window doesn't fit");
   }
 }

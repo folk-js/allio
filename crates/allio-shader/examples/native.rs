@@ -2,7 +2,7 @@
 //! Usage: native [x y w h] [seconds]   (defaults: 100 100 800 500, 10s)
 #![allow(clippy::expect_used)]
 
-use allio_shader::{Region, Shader, ShaderSpec};
+use allio_shader::{Hide, Region, Shader, ShaderSpec};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 use std::collections::BTreeMap;
@@ -38,6 +38,10 @@ fn main() {
     uniforms: BTreeMap::new(),
     values: BTreeMap::new(),
     region,
+    hide: Hide::None,
+    cell: None,
+    steps: None,
+    behind: None,
   })
   .expect("shader");
   std::thread::spawn(move || {

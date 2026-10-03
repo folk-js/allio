@@ -1,0 +1,9 @@
+{
+  "uniforms": {
+    "windows": "vec4f[24]",
+    "radius": "f32",
+    "thickness": "f32",
+    "warp": "f32"
+  },
+  "behind": "none"
+}

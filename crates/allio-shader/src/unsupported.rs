@@ -1,6 +1,6 @@
 //! Stand-in so dependents compile on platforms without an implementation.
 
-use crate::spec::{Region, ShaderSpec};
+use crate::spec::{Hide, Region, ShaderSpec};
 use std::collections::BTreeMap;
 
 /// Screen shaders are not implemented on this platform, so no value of this type exists.
@@ -21,6 +21,21 @@ impl Shader {
 
   /// Unreachable: no instance can exist.
   pub fn set_values(&self, _values: &BTreeMap<String, Vec<f32>>) -> Result<(), String> {
+    match *self {}
+  }
+
+  /// Unreachable: no instance can exist.
+  pub fn set_hide(&self, _hide: &Hide) -> Result<(), String> {
+    match *self {}
+  }
+
+  /// Unreachable: no instance can exist.
+  pub fn set_behind(&self, _hide: &Hide) -> Result<(), String> {
+    match *self {}
+  }
+
+  /// Unreachable: no instance can exist.
+  pub fn probe(&self, _x: f64, _y: f64) -> Result<[f32; 4], String> {
     match *self {}
   }
 

@@ -20,12 +20,14 @@ mod diag;
 mod render;
 #[cfg(target_os = "macos")]
 mod shader;
+#[cfg(all(test, target_os = "macos"))]
+mod snapshot;
 #[cfg(target_os = "macos")]
 mod ticker;
 #[cfg(not(target_os = "macos"))]
 mod unsupported;
 
-pub use spec::{Region, ShaderSpec};
+pub use spec::{Hide, Region, ShaderSpec};
 pub use uniforms::UniformType;
 
 #[cfg(target_os = "macos")]

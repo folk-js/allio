@@ -21,10 +21,11 @@
  * (the region: x, y, w, h in screen points). Updates are latest-wins: all `set()` calls within
  * one animation frame are sent as one message, and the native side overwrites instead of queueing.
  */
+import type { Hide } from "./types/generated/Hide";
 import type { Region } from "./types/generated/Region";
 import type { ShaderSpec } from "./types/generated/ShaderSpec";
 
-export type { Region };
+export type { Hide, Region };
 
 export type UniformType = ShaderSpec["uniforms"][string];
 
@@ -34,7 +35,9 @@ export type UniformValue<T extends UniformType> = T extends "f32"
   ? [number, number]
   : T extends "vec3f"
   ? [number, number, number]
-  : [number, number, number, number];
+  : T extends "vec4f"
+  ? [number, number, number, number]
+  : number[]; // vec4f[N]: 4N flat numbers
 
 /** Declared uniforms: name to type. */
 export type Uniforms = Record<string, UniformType>;
@@ -48,11 +51,29 @@ export interface ShaderOptions<U extends Uniforms> {
   uniforms?: U;
   /** Initial uniform values; anything unset is zero. */
   values?: Partial<UniformValues<U>>;
+  /** Windows to leave out of `screen`, to see what is behind them. Default: none. */
+  hide?: Hide;
+  /** Screen points per cell of the `state` texture, for shaders that define `sim`. Default 4. */
+  cell?: number;
+  /** Simulation steps per frame (1 to 8), so a finer `cell` can keep the same speed. Default 1. */
+  steps?: number;
+  /**
+   * A second capture of the screen with these windows left out, read as the texture `behind`.
+   * Use it with `screen` to see a window and what is behind it at once. Change it with `fx.behind`.
+   */
+  behind?: Hide;
 }
 
 type Floats = Record<string, number[]>;
 
-const FLOATS: Record<UniformType, number> = { f32: 1, vec2f: 2, vec3f: 3, vec4f: 4 };
+const SCALARS = { f32: 1, vec2f: 2, vec3f: 3, vec4f: 4 } as const;
+
+/** How many numbers a uniform takes: `vec4f[N]` takes 4N. */
+function floatCount(type: UniformType): number {
+  return type in SCALARS
+    ? SCALARS[type as keyof typeof SCALARS]
+    : 4 * Number(type.slice("vec4f[".length, -1));
+}
 
 export class Shader<U extends Uniforms = Uniforms> {
   /** Why the shader's definition was rejected (WGSL diagnostics, bad initial values), or null. */
@@ -63,6 +84,10 @@ export class Shader<U extends Uniforms = Uniforms> {
   private _wgsl: string;
   private readonly uniforms: Uniforms;
   private _region: Region;
+  private _hide: Hide;
+  private _behind?: Hide;
+  private readonly cell?: number;
+  private readonly steps?: number;
   private values: Floats = {};
 
   /** @internal Use `allio.shader()`. */
@@ -74,6 +99,10 @@ export class Shader<U extends Uniforms = Uniforms> {
     this._wgsl = options.wgsl;
     this.uniforms = { ...options.uniforms };
     this._region = { ...options.region };
+    this._hide = options.hide ?? "none";
+    this.cell = options.cell;
+    this.steps = options.steps;
+    this._behind = options.behind;
     if (options.values) this.store(options.values);
   }
 
@@ -88,6 +117,36 @@ export class Shader<U extends Uniforms = Uniforms> {
   set wgsl(source: string) {
     this._wgsl = source;
     this.owner.changed();
+  }
+
+  get hide(): Hide {
+    return this._hide;
+  }
+
+  /** Changes which windows are left out of `screen`. Cheap enough to do as the pointer moves. */
+  set hide(hide: Hide) {
+    this._hide = hide;
+    this.owner.patch(this.id, { hide });
+  }
+
+  get behind(): Hide | undefined {
+    return this._behind;
+  }
+
+  /** Changes which windows are left out of `behind`. The shader must have declared `behind`. */
+  set behind(hide: Hide | undefined) {
+    if (this._behind === undefined || hide === undefined)
+      throw new Error(`shader ${this.id}: declare \`behind\` in the options to change it`);
+    this._behind = hide;
+    this.owner.patch(this.id, { behind: hide });
+  }
+
+  /**
+   * Reads one cell of the simulation state (`state`) at a screen point, as `[r, g, b, a]` in
+   * whatever the shader's `sim` wrote. Rejects if the shader has no `sim`.
+   */
+  probe(x: number, y: number): Promise<number[]> {
+    return this.owner.probe(this.id, x, y);
   }
 
   get region(): Region {
@@ -119,7 +178,7 @@ export class Shader<U extends Uniforms = Uniforms> {
       const type = this.uniforms[name];
       if (!type) throw new Error(`shader ${this.id}: uniform '${name}' is not declared`);
       const flat = Array.isArray(value) ? value : [value];
-      if (flat.length !== FLOATS[type])
+      if (flat.length !== floatCount(type))
         throw new Error(`shader ${this.id}: uniform '${name}' is ${type}, got ${flat.length} numbers`);
       floats[name] = flat;
     }
@@ -129,7 +188,16 @@ export class Shader<U extends Uniforms = Uniforms> {
 
   /** @internal */
   spec(): ShaderSpec {
-    return { wgsl: this._wgsl, uniforms: this.uniforms, values: this.values, region: this._region };
+    return {
+      wgsl: this._wgsl,
+      uniforms: this.uniforms,
+      values: this.values,
+      region: this._region,
+      hide: this._hide,
+      cell: this.cell,
+      steps: this.steps,
+      behind: this._behind,
+    };
   }
 
   /** @internal */
@@ -141,7 +209,7 @@ export class Shader<U extends Uniforms = Uniforms> {
 }
 
 type Rpc = (method: string, args: Record<string, unknown>) => Promise<unknown>;
-type Patch = { values?: Floats; region?: Region };
+type Patch = { values?: Floats; region?: Region; hide?: Hide; behind?: Hide };
 
 /** @internal The client's shaders, and the logic that pushes them to the server. */
 export class ShaderSet {
@@ -177,8 +245,14 @@ export class ShaderSet {
     const merged = this.pending.get(id) ?? {};
     if (patch.values) merged.values = { ...merged.values, ...patch.values };
     if (patch.region) merged.region = patch.region;
+    if (patch.hide) merged.hide = patch.hide;
+    if (patch.behind) merged.behind = patch.behind;
     this.pending.set(id, merged);
     this.schedule();
+  }
+
+  probe(id: string, x: number, y: number): Promise<number[]> {
+    return this.rpc("shader_probe", { id, x, y }) as Promise<number[]>;
   }
 
   /** Pushes the complete desired state. Called when shaders are added, removed or edited, and whenever the socket opens. */

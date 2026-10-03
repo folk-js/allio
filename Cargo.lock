@@ -47,6 +47,7 @@ dependencies = [
  "allio",
  "allio-shader",
  "allio-ws",
+ "async-broadcast",
  "core-graphics 0.23.2",
  "env_logger",
  "serde",

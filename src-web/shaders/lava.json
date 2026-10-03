@@ -1,0 +1,6 @@
+{
+  "uniforms": { "windows": "vec4f[24]", "pour": "f32", "radius": "f32", "rate": "f32", "reset": "f32" },
+  "behind": "all",
+  "cell": 3,
+  "steps": 1
+}

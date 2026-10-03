@@ -9,15 +9,19 @@ use crate::uniforms::Layout;
 use naga::back::msl;
 use std::fmt::Write as _;
 
-/// Entry point names: the generated vertex stage, and the one the author writes.
+/// Entry point names: the generated vertex stage, the display function every shader writes, and
+/// the optional simulation step that makes a shader stateful.
 pub(crate) const VERTEX_ENTRY: &str = "vs";
 pub(crate) const FRAGMENT_ENTRY: &str = "fs";
+pub(crate) const SIM_ENTRY: &str = "sim";
 
-/// A translated shader, ready to build a Metal pipeline from.
+/// A translated shader, ready to build Metal pipelines from.
 #[derive(Debug, Clone)]
 pub(crate) struct Compiled {
   pub(crate) msl: String,
   pub(crate) layout: Layout,
+  /// Whether the WGSL defines `sim`.
+  pub(crate) stateful: bool,
 }
 
 const VERTEX_STAGE: &str = "
@@ -31,14 +35,18 @@ struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f }
 }
 ";
 
-/// The WGSL prepended to user source.
-pub(crate) fn prelude(layout: &Layout) -> String {
+/// The WGSL prepended to user source. `behind` adds the second capture.
+pub(crate) fn prelude(layout: &Layout, behind: bool) -> String {
   let mut s = String::from("struct Uniforms {\n");
   for f in &layout.fields {
     let _ = writeln!(s, "  {}: {},", f.name, f.ty.wgsl());
   }
   s.push_str("}\n@group(0) @binding(0) var<uniform> u: Uniforms;\n");
   s.push_str("@group(0) @binding(1) var samp: sampler;\n@group(0) @binding(2) var screen: texture_2d<f32>;\n");
+  s.push_str("@group(0) @binding(3) var state: texture_2d<f32>;\n");
+  if behind {
+    s.push_str("@group(0) @binding(4) var behind: texture_2d<f32>;\n");
+  }
   s.push_str(VERTEX_STAGE);
   s
 }
@@ -46,7 +54,7 @@ pub(crate) fn prelude(layout: &Layout) -> String {
 /// Validates and translates a spec. Errors are human-readable WGSL diagnostics.
 pub(crate) fn compile(spec: &ShaderSpec) -> Result<Compiled, String> {
   let layout = Layout::new(&spec.uniforms)?;
-  let source = format!("{}{}", prelude(&layout), spec.wgsl);
+  let source = format!("{}{}", prelude(&layout, spec.behind.is_some()), spec.wgsl);
   let module = naga::front::wgsl::parse_str(&source).map_err(|e| e.emit_to_string(&source))?;
   let info = naga::valid::Validator::new(
     naga::valid::ValidationFlags::all(),
@@ -54,65 +62,91 @@ pub(crate) fn compile(spec: &ShaderSpec) -> Result<Compiled, String> {
   )
   .validate(&module)
   .map_err(|e| e.emit_to_string(&source))?;
-  let has_fragment = module
-    .entry_points
-    .iter()
-    .any(|ep| ep.stage == naga::ShaderStage::Fragment && ep.name == FRAGMENT_ENTRY);
-  if !has_fragment {
+  let defines = |name: &str| {
+    module
+      .entry_points
+      .iter()
+      .any(|ep| ep.stage == naga::ShaderStage::Fragment && ep.name == name)
+  };
+  if !defines(FRAGMENT_ENTRY) {
     return Err(format!(
       "WGSL must define `@fragment fn {FRAGMENT_ENTRY}(in: VsOut) -> @location(0) vec4f`"
     ));
   }
 
-  // The fragment stage gets the uniform buffer, sampler and screen texture at matching Metal slots.
-  let mut resources = msl::EntryPointResources::default();
-  let mut bind = |binding: u32, target: msl::BindTarget| {
+  // Fragment stages get the uniform buffer, sampler, `screen` and `state` at matching Metal slots.
+  let fragment_resources = || {
+    let mut resources = msl::EntryPointResources::default();
+    let mut bind = |binding: u32, target: msl::BindTarget| {
+      resources
+        .resources
+        .insert(naga::ResourceBinding { group: 0, binding }, target);
+    };
+    bind(
+      0,
+      msl::BindTarget {
+        buffer: Some(0),
+        ..Default::default()
+      },
+    );
+    bind(
+      1,
+      msl::BindTarget {
+        sampler: Some(msl::BindSamplerTarget::Resource(0)),
+        ..Default::default()
+      },
+    );
+    bind(
+      2,
+      msl::BindTarget {
+        texture: Some(0),
+        ..Default::default()
+      },
+    );
+    bind(
+      3,
+      msl::BindTarget {
+        texture: Some(1),
+        ..Default::default()
+      },
+    );
+    bind(
+      4,
+      msl::BindTarget {
+        texture: Some(2),
+        ..Default::default()
+      },
+    );
     resources
-      .resources
-      .insert(naga::ResourceBinding { group: 0, binding }, target);
   };
-  bind(
-    0,
-    msl::BindTarget {
-      buffer: Some(0),
-      ..Default::default()
-    },
-  );
-  bind(
-    1,
-    msl::BindTarget {
-      sampler: Some(msl::BindSamplerTarget::Resource(0)),
-      ..Default::default()
-    },
-  );
-  bind(
-    2,
-    msl::BindTarget {
-      texture: Some(0),
-      ..Default::default()
-    },
-  );
   let mut options = msl::Options {
     lang_version: (2, 4),
     ..Default::default()
   };
   options
     .per_entry_point_map
-    .insert(FRAGMENT_ENTRY.into(), resources);
+    .insert(FRAGMENT_ENTRY.into(), fragment_resources());
+  options
+    .per_entry_point_map
+    .insert(SIM_ENTRY.into(), fragment_resources());
   options
     .per_entry_point_map
     .insert(VERTEX_ENTRY.into(), msl::EntryPointResources::default());
 
   let (msl, _) = msl::write_string(&module, &info, &options, &msl::PipelineOptions::default())
     .map_err(|e| e.to_string())?;
-  Ok(Compiled { msl, layout })
+  Ok(Compiled {
+    msl,
+    layout,
+    stateful: defines(SIM_ENTRY),
+  })
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 mod tests {
   use super::*;
-  use crate::spec::Region;
+  use crate::spec::{Hide, Region};
   use crate::uniforms::UniformType;
   use std::collections::BTreeMap;
 
@@ -130,6 +164,10 @@ mod tests {
         w: 100.0,
         h: 100.0,
       },
+      hide: Hide::None,
+      cell: None,
+      steps: None,
+      behind: None,
     }
   }
 
@@ -161,7 +199,7 @@ mod tests {
   fn layout_matches_naga() {
     let s = rich();
     let c = compile(&s).unwrap();
-    let source = format!("{}{}", prelude(&c.layout), s.wgsl);
+    let source = format!("{}{}", prelude(&c.layout, false), s.wgsl);
     let module = naga::front::wgsl::parse_str(&source).unwrap();
     let (_, ty) = module
       .types
@@ -192,6 +230,18 @@ mod tests {
   fn bad_and_duplicate_uniform_names_rejected() {
     assert!(compile(&spec(PASSTHROUGH, &[("bad name", UniformType::F32)])).is_err());
     assert!(compile(&spec(PASSTHROUGH, &[("mouse", UniformType::Vec2)])).is_err());
+  }
+
+  #[test]
+  fn behind_exists_only_when_asked_for() {
+    let wgsl = "@fragment fn fs(in: VsOut) -> @location(0) vec4f { return textureSampleLevel(behind, samp, in.uv, 0.0); }";
+    let mut s = spec(wgsl, &[]);
+    assert!(
+      compile(&s).unwrap_err().contains("behind"),
+      "unknown without the option"
+    );
+    s.behind = Some(Hide::None);
+    assert!(compile(&s).is_ok());
   }
 
   #[test]

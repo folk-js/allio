@@ -82,6 +82,10 @@ const DEFAULT_OVERLAYS: &[&str] = &[
   "sand.html",
   "windows-debug.html",
   "shader.html",
+  "aura.html",
+  "xray.html",
+  "lava.html",
+  "blobs.html",
 ];
 
 fn get_overlay_files() -> Vec<String> {
@@ -374,11 +378,56 @@ fn load_file(app: &AppHandle, path: &Path) -> Result<(), Box<dyn std::error::Err
   Ok(())
 }
 
+/// Feeds window geometry to shaders that bind `windows`/`focused`, and keeps it current.
+fn start_window_binding(allio: &Allio) -> std::sync::Arc<shaders::Shaders> {
+  let source = {
+    let allio = allio.clone();
+    Box::new(move || {
+      let mut windows = allio.all_windows();
+      windows.sort_by_key(|w| w.z_index);
+      let focused = allio
+        .focused_window()
+        .and_then(|id| windows.iter().position(|w| w.id == id));
+      shaders::Windows {
+        rects: windows
+          .iter()
+          .map(|w| {
+            [
+              w.bounds.x as f32,
+              w.bounds.y as f32,
+              w.bounds.w as f32,
+              w.bounds.h as f32,
+            ]
+          })
+          .collect(),
+        focused,
+      }
+    })
+  };
+  let shaders = std::sync::Arc::new(shaders::Shaders::new(source));
+
+  let mut events = allio.subscribe();
+  let bound = shaders.clone();
+  thread::spawn(move || loop {
+    match events.recv_blocking() {
+      Ok(
+        allio::Event::WindowAdded { .. }
+        | allio::Event::WindowChanged { .. }
+        | allio::Event::WindowRemoved { .. }
+        | allio::Event::FocusWindow { .. },
+      ) => bound.windows_changed(),
+      Ok(_) | Err(async_broadcast::RecvError::Overflowed(_)) => {}
+      Err(async_broadcast::RecvError::Closed) => break,
+    }
+  });
+  shaders
+}
+
 fn create_rpc_handler(
   app_handle: AppHandle,
+  shaders: std::sync::Arc<shaders::Shaders>,
 ) -> (allio_ws::CustomRpcHandler, allio_ws::DisconnectHandler) {
   let last_state = std::sync::Arc::new(AtomicBool::new(true));
-  let shaders = std::sync::Arc::new(shaders::Shaders::default());
 
   let on_disconnect: allio_ws::DisconnectHandler = {
     let shaders = shaders.clone();
@@ -544,7 +593,8 @@ fn main() {
       };
 
       // WebSocket setup
-      let (rpc_handler, on_disconnect) = create_rpc_handler(app.handle().clone());
+      let shaders = start_window_binding(&allio);
+      let (rpc_handler, on_disconnect) = create_rpc_handler(app.handle().clone(), shaders);
       let ws_state = WebSocketState::new(allio.clone())
         .with_custom_handler(rpc_handler)
         .with_disconnect_handler(on_disconnect);

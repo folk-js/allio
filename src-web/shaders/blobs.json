@@ -1,0 +1,14 @@
+{
+  "uniforms": {
+    "windows": "vec4f[24]",
+    "goo": "f32",
+    "size": "f32",
+    "count": "f32",
+    "speed": "f32",
+    "cling": "f32",
+    "tone": "f32",
+    "ball": "f32",
+    "wobble": "f32"
+  },
+  "cell": 4
+}

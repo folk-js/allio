@@ -1,0 +1,3 @@
+{
+  "uniforms": { "windows": "vec4f[24]", "focused": "f32", "width": "f32", "intensity": "f32" }
+}

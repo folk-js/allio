@@ -2,8 +2,8 @@
 #![allow(clippy::expect_used)] // the main queue always runs on the main thread, and runs what it is given
 
 use crate::capture::{self, CaptureHandle};
-use crate::render::{self, Renderer};
-use crate::spec::{Region, ShaderSpec};
+use crate::render::{self, Renderer, Source};
+use crate::spec::{Hide, Region, ShaderSpec};
 use crate::ticker::Ticker;
 use dispatch2::DispatchQueue;
 use objc2::rc::Retained;
@@ -181,6 +181,8 @@ pub struct Shader {
   // Field order is drop order: stop drawing, stop capturing, then tear down the rest.
   _ticker: TickerGuard,
   stream: CaptureHandle,
+  /// The `behind` capture, if the spec asked for one.
+  behind: Option<CaptureHandle>,
   renderer: Renderer,
   overlay: Overlay,
   scale: f64,
@@ -200,16 +202,37 @@ impl Shader {
     let device = MTLCreateSystemDefaultDevice().ok_or("no Metal device")?;
     let pipeline = render::build(&device, spec)?;
     let (overlay, layer, scale) = Overlay::create(&device, spec.region)?;
-    let renderer = Renderer::new(device, layer.clone(), scale, pipeline, spec.region)?;
+    let renderer = Renderer::new(
+      device,
+      layer.clone(),
+      scale,
+      pipeline,
+      spec.region,
+      spec.cell,
+      spec.steps(),
+    )?;
 
-    let frames = renderer.clone();
     let pid = i32::try_from(std::process::id()).map_err(|e| e.to_string())?;
-    let stream = capture::start(spec.region, scale, pid, move |f| frames.present(f))?;
+    let frames = renderer.clone();
+    let stream = capture::start(spec.region, scale, &spec.hide, pid, move |f| {
+      frames.present(Source::Screen, f);
+    })?;
+    let behind = spec
+      .behind
+      .as_ref()
+      .map(|hide| {
+        let frames = renderer.clone();
+        capture::start(spec.region, scale, hide, pid, move |f| {
+          frames.present(Source::Behind, f);
+        })
+      })
+      .transpose()?;
     let ticker = TickerGuard::start(&layer, renderer.clone());
 
     Ok(Self {
       _ticker: ticker,
       stream,
+      behind,
       renderer,
       overlay,
       scale,
@@ -221,7 +244,12 @@ impl Shader {
   pub fn update(&self, spec: &ShaderSpec) -> Result<(), String> {
     let result = self.renderer.update(spec);
     self.set_region(spec.region);
-    result
+    let behind = match (&spec.behind, &self.behind) {
+      (Some(hide), Some(_)) => self.set_behind(hide),
+      (None, None) => Ok(()),
+      _ => Err("`behind` can't be added or removed while a shader is running".to_string()),
+    };
+    result.and(self.set_hide(&spec.hide)).and(behind)
   }
 
   /// Overwrites uniform values. Latest wins: nothing is queued.
@@ -229,10 +257,32 @@ impl Shader {
     self.renderer.set_values(values)
   }
 
+  /// Changes which windows are left out of the captured `screen`.
+  pub fn set_hide(&self, hide: &Hide) -> Result<(), String> {
+    self.stream.set_hide(hide)
+  }
+
+  /// Changes which windows are left out of `behind`.
+  pub fn set_behind(&self, hide: &Hide) -> Result<(), String> {
+    self
+      .behind
+      .as_ref()
+      .ok_or_else(|| "this shader has no `behind` capture".to_string())?
+      .set_hide(hide)
+  }
+
+  /// Reads one cell of the simulation state at a screen point, as `[r, g, b, a]`.
+  pub fn probe(&self, x: f64, y: f64) -> Result<[f32; 4], String> {
+    self.renderer.probe(x, y)
+  }
+
   /// Moves or resizes the captured region.
   pub fn set_region(&self, region: Region) {
     if self.renderer.set_region(region) {
       self.stream.set_region(region, self.scale);
+      if let Some(behind) = &self.behind {
+        behind.set_region(region, self.scale);
+      }
       self.overlay.set_region(region);
     }
   }
