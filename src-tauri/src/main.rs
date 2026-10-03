@@ -462,6 +462,7 @@ fn setup_macos_panel(window: &tauri::WebviewWindow) -> Result<(), Box<dyn std::e
   panel.set_becomes_key_only_if_needed(true);
   panel.set_hides_on_deactivate(false);
   panel.set_floating_panel(true);
+  panel.set_has_shadow(false);
   panel.set_ignores_mouse_events(true);
   panel.show();
 
