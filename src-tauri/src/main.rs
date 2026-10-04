@@ -23,6 +23,7 @@ use tauri_nspanel::{tauri_panel, ManagerExt as _, PanelLevel, StyleMask, Webview
 use allio::Allio;
 use allio_ws::WebSocketState;
 
+mod pointer;
 mod shaders;
 
 #[cfg(target_os = "macos")]
@@ -87,6 +88,9 @@ const DEFAULT_OVERLAYS: &[&str] = &[
   "xray.html",
   "lava.html",
   "blobs.html",
+  "lens.html",
+  "magnet.html",
+  "cuts.html",
 ];
 
 fn get_overlay_files() -> Vec<String> {
@@ -427,16 +431,24 @@ fn start_window_binding(allio: &Allio) -> std::sync::Arc<shaders::Shaders> {
 fn create_rpc_handler(
   app_handle: AppHandle,
   shaders: std::sync::Arc<shaders::Shaders>,
+  pointers: std::sync::Arc<pointer::Pointers>,
 ) -> (allio_ws::CustomRpcHandler, allio_ws::DisconnectHandler) {
   let last_state = std::sync::Arc::new(AtomicBool::new(true));
 
   let on_disconnect: allio_ws::DisconnectHandler = {
     let shaders = shaders.clone();
-    std::sync::Arc::new(move |conn| shaders.disconnected(conn))
+    let pointers = pointers.clone();
+    std::sync::Arc::new(move |conn| {
+      shaders.disconnected(conn);
+      pointers.disconnected(conn);
+    })
   };
 
   let handler: allio_ws::CustomRpcHandler = std::sync::Arc::new(move |conn, method, args| {
     if let Some(response) = shaders.handle(conn, method, args) {
+      return Some(response);
+    }
+    if let Some(response) = pointers.handle(conn, method, args) {
       return Some(response);
     }
     if method != "set_passthrough" && method != "set_clickthrough" {
@@ -535,8 +547,13 @@ fn setup_macos_panel(window: &tauri::WebviewWindow) -> Result<(), Box<dyn std::e
   Ok(())
 }
 
-fn setup_shortcuts(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+fn setup_shortcuts(
+  app: &tauri::App,
+  pointers: std::sync::Arc<pointer::Pointers>,
+) -> Result<(), Box<dyn std::error::Error>> {
   let toggle = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::KeyE);
+  // Escape hatch: give the pointer back if a pointer field makes it unusable.
+  let release = Shortcut::new(Some(Modifiers::SUPER | Modifiers::SHIFT), Code::Escape);
   let devtools = Shortcut::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::KeyI);
 
   app.handle().plugin(
@@ -546,7 +563,9 @@ fn setup_shortcuts(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
           return;
         }
 
-        if shortcut == &toggle {
+        if shortcut == &release {
+          pointers.release();
+        } else if shortcut == &toggle {
           let _ = toggle_passthrough(app);
         } else if shortcut == &devtools {
           if let Some(w) = app.get_webview_window("main") {
@@ -563,6 +582,7 @@ fn setup_shortcuts(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
   app.global_shortcut().register(toggle)?;
   app.global_shortcut().register(devtools)?;
+  app.global_shortcut().register(release)?;
 
   Ok(())
 }
@@ -595,7 +615,9 @@ fn main() {
 
       // WebSocket setup
       let shaders = start_window_binding(&allio);
-      let (rpc_handler, on_disconnect) = create_rpc_handler(app.handle().clone(), shaders);
+      let pointers = std::sync::Arc::new(pointer::Pointers::new());
+      let (rpc_handler, on_disconnect) =
+        create_rpc_handler(app.handle().clone(), shaders, pointers.clone());
       let ws_state = WebSocketState::new(allio.clone())
         .with_custom_handler(rpc_handler)
         .with_disconnect_handler(on_disconnect);
@@ -605,7 +627,7 @@ fn main() {
 
       // Shortcuts
       #[cfg(desktop)]
-      setup_shortcuts(app)?;
+      setup_shortcuts(app, pointers)?;
 
       // Tray setup
       let overlays = get_overlay_files();

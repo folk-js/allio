@@ -22,6 +22,7 @@ import type {
 } from "./types";
 import { ROLE_VALUES } from "./types";
 import { ShaderSet, type Shader, type ShaderOptions, type Uniforms } from "./shader";
+import { PointerSet, type Pointer, type PointerSpec, type PointerState } from "./pointer";
 
 export class Allio extends EventEmitter<AllioEvents> {
   private ws: WebSocket | null = null;
@@ -29,6 +30,10 @@ export class Allio extends EventEmitter<AllioEvents> {
   private pending = new Map<number, Pending>();
   private watchCallbacks = new Map<AX.ElementId, Set<WatchCallback>>();
   private shaders = new ShaderSet(
+    (method, args) => this.rawCall(method, args),
+    () => this.connected
+  );
+  private pointers = new PointerSet(
     (method, args) => this.rawCall(method, args),
     () => this.connected
   );
@@ -76,6 +81,7 @@ export class Allio extends EventEmitter<AllioEvents> {
         this.log("connected ✓");
         resolve();
         this.shaders.sync();
+        this.pointers.sync();
       };
       this.ws.onerror = (e) => {
         this.logError("connection error", e);
@@ -329,6 +335,19 @@ export class Allio extends EventEmitter<AllioEvents> {
    */
   shader<U extends Uniforms = Record<string, never>>(options: ShaderOptions<U>): Shader<U> {
     return this.shaders.create(options);
+  }
+
+  /**
+   * Reshapes how real mouse motion moves the cursor: overall gain, sticky or magnetic targets,
+   * portals. Lives as long as this connection; see `./pointer.ts`.
+   */
+  pointer(spec: PointerSpec = {}): Pointer {
+    return this.pointers.create(spec);
+  }
+
+  /** Where the pointer appears, and whether the system cursor is hidden so the page must draw it. */
+  pointerState(): Promise<PointerState | null> {
+    return this.pointers.state();
   }
 
   // === Raw RPC ===

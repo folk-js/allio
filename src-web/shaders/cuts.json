@@ -1,0 +1,3 @@
+{
+  "uniforms": { "cuts": "vec4f[24]", "count": "f32" }
+}

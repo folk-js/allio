@@ -45,6 +45,7 @@ name = "allio-app"
 version = "0.0.1"
 dependencies = [
  "allio",
+ "allio-pointer",
  "allio-shader",
  "allio-ws",
  "async-broadcast",
@@ -59,6 +60,19 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-shell",
  "tokio",
+]
+
+[[package]]
+name = "allio-pointer"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "ts-rs",
 ]
 
 [[package]]

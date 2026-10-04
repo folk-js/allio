@@ -1552,6 +1552,112 @@ mod tests {
     );
   }
 
+  // --- pointer demos: lens, magnet, cuts ---
+
+  /// A 200x100 screen whose blue channel is its x coordinate, so a pixel shows where it came from.
+  fn ramp(device: &ProtocolObject<dyn MTLDevice>) -> Retained<ProtocolObject<dyn MTLTexture>> {
+    #[allow(clippy::cast_possible_truncation)]
+    picture(device, 200, 100, |x, _| [x as u8, 0, 0, 255])
+  }
+
+  fn demo_on_ramp(name: &str) -> Option<Renderer> {
+    let r = renderer(&demo_spec(name))?;
+    r.0.state.lock().latest = Some(ramp(&r.0.device));
+    Some(r)
+  }
+
+  #[test]
+  fn lens_magnifies_around_its_centre_and_vanishes_at_1x() {
+    let Some(r) = demo_on_ramp("lens") else { return };
+    MOUSE.with(|m| m.set(Some([-500.0, -500.0]))); // the lens is fixed: the cursor doesn't matter
+    set(&r, &[("lens", vec![100.0, 50.0, 40.0, 2.0])]);
+    let image = render_image(&r, 200, 100);
+    let at = |x: usize, y: usize| image[y * 200 + x];
+
+    // 10pt right of the centre shows what is 5pt right of it (allio-pointer's lens test uses the
+    // same numbers, so pointer and picture agree).
+    assert!((i32::from(at(110, 50)[0]) - 105).abs() <= 1, "{:?}", at(110, 50));
+    assert!((i32::from(at(100, 50)[0]) - 100).abs() <= 1, "{:?}", at(100, 50));
+    assert_eq!(at(150, 50), [0, 0, 0, 0], "nothing outside the lens");
+
+    set(&r, &[("lens", vec![100.0, 50.0, 40.0, 1.0])]);
+    let image = render_image(&r, 200, 100);
+    assert!(image.iter().all(|p| *p == [0, 0, 0, 0]), "no lens at 1x");
+  }
+
+  #[test]
+  fn magnet_lifts_the_highlighted_control_and_draws_nothing_when_faded() {
+    let Some(r) = demo_on_ramp("magnet") else { return };
+    set(&r, &[("hl", vec![80.0, 40.0, 40.0, 20.0]), ("alpha", vec![1.0])]);
+    let image = render_image(&r, 200, 100);
+    let at = |x: usize, y: usize| image[y * 200 + x];
+
+    assert_eq!(at(100, 50)[3], 255, "the plate is opaque");
+    assert!(at(100, 50)[1] > 0, "and washed lighter (the ramp has no green): {:?}", at(100, 50));
+    // Left of centre, the lift pulls in pixels from nearer the centre.
+    assert!(at(84, 50)[0] > 84, "lifted: {:?}", at(84, 50));
+    assert!(at(100, 66)[3] > 0 && at(100, 66)[2] == 0, "a shadow below: {:?}", at(100, 66));
+    assert_eq!(at(10, 10), [0, 0, 0, 0]);
+
+    set(&r, &[("alpha", vec![0.0])]);
+    let image = render_image(&r, 200, 100);
+    assert!(image.iter().all(|p| *p == [0, 0, 0, 0]));
+  }
+
+  /// Cuts as the page sends them: (shown, source, visible) per cut, 8 slots.
+  fn cut_slots(cuts: &[[f32; 12]]) -> Vec<f32> {
+    let mut flat = vec![0.0; 96];
+    for (slot, cut) in flat.chunks_mut(12).zip(cuts) {
+      slot.copy_from_slice(cut);
+    }
+    flat
+  }
+
+  #[test]
+  fn cuts_draw_their_source_scaled_and_lift_off_the_screen() {
+    let Some(r) = demo_on_ramp("cuts") else { return };
+    // One cut: x 20..40 of the screen, all in view, drawn twice as wide at x 100..140.
+    let cut = [100.0, 30.0, 40.0, 40.0, 20.0, 30.0, 20.0, 40.0, 20.0, 30.0, 20.0, 40.0];
+    set(&r, &[("cuts", cut_slots(&[cut])), ("count", vec![1.0])]);
+    let image = render_image(&r, 200, 100);
+    let at = |x: usize, y: usize| image[y * 200 + x];
+
+    assert_eq!(at(120, 50)[3], 255, "the cut is opaque");
+    assert!((i32::from(at(120, 50)[0]) - 30).abs() <= 1, "middle of the cut shows x 30: {:?}", at(120, 50));
+    assert!((i32::from(at(110, 50)[0]) - 25).abs() <= 1, "scaled: {:?}", at(110, 50));
+    assert!(
+      (i32::from(at(102, 50)[0]) - 21).abs() <= 1,
+      "edges shared with the source stay crisp, no fog: {:?}",
+      at(102, 50)
+    );
+    assert!(at(120, 74)[3] > 0 && at(120, 74)[2] == 0, "a shadow below: {:?}", at(120, 74));
+    assert_eq!(at(10, 10), [0, 0, 0, 0]);
+
+    set(&r, &[("count", vec![0.0])]);
+    let image = render_image(&r, 200, 100);
+    assert!(image.iter().all(|p| *p == [0, 0, 0, 0]), "no cuts, nothing drawn");
+  }
+
+  #[test]
+  fn cuts_fog_what_is_out_of_view() {
+    let Some(r) = demo_on_ramp("cuts") else { return };
+    // Source x 20..60, of which only x 20..40 is in view (the rest scrolled away).
+    let cut = [100.0, 30.0, 40.0, 40.0, 20.0, 30.0, 40.0, 40.0, 20.0, 30.0, 20.0, 40.0];
+    set(&r, &[("cuts", cut_slots(&[cut])), ("count", vec![1.0])]);
+    let image = render_image(&r, 200, 100);
+    let at = |x: usize, y: usize| image[y * 200 + x];
+    let grey = |p: [u8; 4]| p[1] > 0 && p[2] > 0; // the ramp has only blue
+
+    assert!(!grey(at(105, 50)), "in view: the real thing {:?}", at(105, 50));
+    assert!(grey(at(130, 50)), "out of view: fog {:?}", at(130, 50));
+
+    // Gone altogether: all fog.
+    let gone = [100.0, 30.0, 40.0, 40.0, 20.0, 30.0, 40.0, 40.0, 0.0, 0.0, -1.0, 0.0];
+    set(&r, &[("cuts", cut_slots(&[gone]))]);
+    let image = render_image(&r, 200, 100);
+    assert!(grey(image[50 * 200 + 105]));
+  }
+
   // --- looking at the demos (writes PNGs when ALLIO_SNAPSHOTS names a directory) ---
 
   /// Pixels per point in snapshots.

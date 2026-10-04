@@ -72,3 +72,42 @@ export function panel(title: string, hint: string | null, controls: Control[]): 
   document.body.append(root);
   return (message) => (error.textContent = message ?? "");
 }
+
+/**
+ * Draws the pointer where it appears whenever the host hides the system cursor (because the
+ * pointer is acting somewhere else: through a cut or a lens). Polls the host once a frame.
+ */
+export function drawPointer(allio: Allio): void {
+  const arrow = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  arrow.setAttribute("viewBox", "0 0 14 22");
+  arrow.innerHTML = `<path d="M1 1 L1 17 L5 13 L8 20 L11 19 L8 12 L13 12 Z" fill="#000" stroke="#fff" stroke-width="1.2" stroke-linejoin="round"/>`;
+  Object.assign(arrow.style, {
+    position: "fixed",
+    left: "0",
+    top: "0",
+    width: "14px",
+    height: "22px",
+    pointerEvents: "none",
+    zIndex: "10000",
+    display: "none",
+    filter: "drop-shadow(0 1px 1px rgba(0,0,0,0.4))",
+  });
+  document.body.append(arrow);
+
+  let asking = false;
+  const frame = () => {
+    requestAnimationFrame(frame);
+    if (asking || !allio.connected) return;
+    asking = true;
+    allio
+      .pointerState()
+      .then((state) => {
+        const show = !!state?.hidden;
+        arrow.style.display = show ? "block" : "none";
+        if (state && show) arrow.style.transform = `translate(${state.x - 1}px, ${state.y - 1}px)`;
+      })
+      .catch(() => {})
+      .finally(() => (asking = false));
+  };
+  requestAnimationFrame(frame);
+}

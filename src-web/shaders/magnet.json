@@ -1,0 +1,3 @@
+{
+  "uniforms": { "hl": "vec4f", "alpha": "f32" }
+}

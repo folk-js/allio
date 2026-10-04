@@ -62,3 +62,89 @@ body {
   color: #ff8a80;
   white-space: pre-wrap;
 }
+
+/* --- Chrome for things placed on the screen (lenses, cuts) ---
+   One material, one grip texture, one close glyph, one selection outline. */
+
+:root {
+  --dots: radial-gradient(circle, rgba(255, 255, 255, 0.5) 0.8px, transparent 1.2px);
+}
+
+.chrome {
+  position: fixed;
+  box-sizing: border-box;
+  background: rgba(28, 28, 32, 0.9);
+  border: 0.5px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  color: rgba(255, 255, 255, 0.7);
+  font: 500 10px/1 -apple-system, "SF Pro Text", sans-serif;
+}
+
+/* A field of small dots: "this can be grabbed". */
+.grip,
+.drag-handle::before {
+  background-image: var(--dots);
+  background-size: 4px 4px;
+  background-position: center;
+  cursor: grab;
+}
+.grip:active {
+  cursor: grabbing;
+}
+
+/* A free-standing grab handle (the lens). */
+.drag-handle {
+  width: 40px;
+  height: 14px;
+  margin-left: -20px;
+  border-radius: 7px;
+  cursor: grab;
+}
+.drag-handle::before {
+  content: "";
+  position: absolute;
+  inset: 3px 9px;
+}
+
+/* A thin cross; brightens on hover. */
+.close {
+  width: 18px;
+  height: 18px;
+  cursor: default;
+  opacity: 0.55;
+}
+.close:hover {
+  opacity: 1;
+}
+.close::before,
+.close::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 8.5px;
+  width: 8px;
+  height: 1px;
+  background: #fff;
+  transform: rotate(45deg);
+}
+.close::after {
+  transform: rotate(-45deg);
+}
+
+/* What is being selected. */
+.outline {
+  position: fixed;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(0, 0, 0, 0.45);
+  background: rgba(255, 255, 255, 0.06);
+  pointer-events: none;
+}
+
+/* A small label next to a selection. */
+.caption {
+  padding: 4px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  pointer-events: none;
+}
