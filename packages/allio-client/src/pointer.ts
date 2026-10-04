@@ -28,6 +28,16 @@ import type { Target } from "./types/generated/Target";
 
 export type { Cut, Lens, PointerSpec, PointerState, Rect, Target };
 
+/** A cursor image: `src` is a data URL, sizes and the tip (`hot_x`, `hot_y`) are in points. */
+export interface PointerShape {
+  id: string;
+  src: string;
+  w: number;
+  h: number;
+  hot_x: number;
+  hot_y: number;
+}
+
 export class Pointer {
   /** Why the host rejected the field set (e.g. no Accessibility permission), or null. */
   error: string | null = null;
@@ -86,6 +96,11 @@ export class PointerSet {
   /** Where the pointer appears, and whether the page must draw it; null without a live field. */
   state(): Promise<PointerState | null> {
     return this.rpc("pointer_state", {}) as Promise<PointerState | null>;
+  }
+
+  /** The pointer's current shape as an image, when `state()` names one. */
+  shape(): Promise<PointerShape | null> {
+    return this.rpc("pointer_shape", {}) as Promise<PointerShape | null>;
   }
 
   /** Pushes the complete set. Called on change and whenever the socket opens. */

@@ -5,7 +5,8 @@
 //! client's fields die with its connection, so a crashed or reloaded page can never leave the
 //! cursor reshaped.
 
-use allio_pointer::{Pointer, PointerSpec, PointerState};
+use allio_pointer::{Pointer, PointerSpec, PointerState, Shape};
+use base64::Engine as _;
 use allio_ws::ConnId;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -17,6 +18,7 @@ pub trait Live: Sized {
   fn start(spec: PointerSpec) -> Result<Self, String>;
   fn set(&self, spec: PointerSpec);
   fn state(&self) -> PointerState;
+  fn shape(&self) -> Option<Shape>;
 }
 
 impl Live for Pointer {
@@ -28,6 +30,9 @@ impl Live for Pointer {
   }
   fn state(&self) -> PointerState {
     Pointer::state(self)
+  }
+  fn shape(&self) -> Option<Shape> {
+    Pointer::shape(self)
   }
 }
 
@@ -58,6 +63,7 @@ impl<T: Live> Reconciler<T> {
     match method {
       "pointer_set" => Some(self.set(conn, args)),
       "pointer_state" => Some(self.state()),
+      "pointer_shape" => Some(self.shape()),
       _ => None,
     }
   }
@@ -95,6 +101,21 @@ impl<T: Live> Reconciler<T> {
   /// Lets go of the pointer until the client next changes its fields. An escape hatch.
   pub fn release(&self) {
     self.state.lock().unwrap().live = None;
+  }
+
+  /// The shape named by the last `pointer_state`, as an image the page can draw.
+  fn shape(&self) -> Value {
+    let state = self.state.lock().unwrap();
+    let Some(shape) = state.live.as_ref().and_then(Live::shape) else {
+      return json!({ "result": null });
+    };
+    let png = base64::engine::general_purpose::STANDARD.encode(&shape.png);
+    json!({ "result": {
+      "id": format!("{:x}", shape.id),
+      "src": format!("data:image/png;base64,{png}"),
+      "w": shape.size.0, "h": shape.size.1,
+      "hot_x": shape.hot.0, "hot_y": shape.hot.1,
+    } })
   }
 
   /// Drops the field if the closed connection declared it.
@@ -140,7 +161,16 @@ mod tests {
         x: 1.0,
         y: 2.0,
         hidden: true,
+        shape: None,
       }
+    }
+    fn shape(&self) -> Option<Shape> {
+      Some(Shape {
+        id: 255,
+        png: vec![1, 2, 3],
+        size: (16.0, 24.0),
+        hot: (4.0, 5.0),
+      })
     }
   }
 
@@ -186,7 +216,11 @@ mod tests {
     let state = |r: &Reconciler<Fake>| r.handle(1, "pointer_state", &json!({})).unwrap();
     assert_eq!(state(&r)["result"], Value::Null);
     set(&r, 1, json!({ "a": { "gain": 2 } }));
-    assert_eq!(state(&r)["result"], json!({ "x": 1.0, "y": 2.0, "hidden": true }));
+    assert_eq!(state(&r)["result"], json!({ "x": 1.0, "y": 2.0, "hidden": true, "shape": null }));
+    let shape = r.handle(1, "pointer_shape", &json!({})).unwrap();
+    assert_eq!(shape["result"]["id"], "ff");
+    assert_eq!(shape["result"]["src"], "data:image/png;base64,AQID");
+    assert_eq!(shape["result"]["hot_y"], 5.0);
     drain();
   }
 

@@ -93,7 +93,7 @@ pub struct PointerSpec {
 }
 
 /// Where the pointer appears, for a page that draws it.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct PointerState {
   /// Where the pointer appears, left to right.
@@ -103,6 +103,11 @@ pub struct PointerState {
   /// Whether the system cursor is hidden (the pointer acts somewhere else), so the page must
   /// draw it.
   pub hidden: bool,
+  /// While hidden: which shape to draw it with (changes when the shape does). Absent if the
+  /// system won't say; draw an arrow then.
+  #[serde(default)]
+  #[ts(optional)]
+  pub shape: Option<String>,
 }
 
 /// Gains outside this range would freeze the cursor or fling it.

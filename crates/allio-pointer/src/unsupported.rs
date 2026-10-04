@@ -22,4 +22,22 @@ impl Pointer {
   pub fn state(&self) -> PointerState {
     match *self {}
   }
+
+  /// Unreachable: no instance can exist.
+  pub fn shape(&self) -> Option<Shape> {
+    match *self {}
+  }
+}
+
+/// A cursor image; never produced on this platform.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Shape {
+  /// Changes whenever the image does.
+  pub id: u64,
+  /// The image as PNG.
+  pub png: Vec<u8>,
+  /// Size in points.
+  pub size: (f64, f64),
+  /// The pointer's tip, in points from the top-left.
+  pub hot: (f64, f64),
 }

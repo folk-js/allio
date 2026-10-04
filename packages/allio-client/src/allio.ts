@@ -22,7 +22,7 @@ import type {
 } from "./types";
 import { ROLE_VALUES } from "./types";
 import { ShaderSet, type Shader, type ShaderOptions, type Uniforms } from "./shader";
-import { PointerSet, type Pointer, type PointerSpec, type PointerState } from "./pointer";
+import { PointerSet, type Pointer, type PointerShape, type PointerSpec, type PointerState } from "./pointer";
 
 export class Allio extends EventEmitter<AllioEvents> {
   private ws: WebSocket | null = null;
@@ -348,6 +348,11 @@ export class Allio extends EventEmitter<AllioEvents> {
   /** Where the pointer appears, and whether the system cursor is hidden so the page must draw it. */
   pointerState(): Promise<PointerState | null> {
     return this.pointers.state();
+  }
+
+  /** The image to draw the pointer with, as named by `pointerState().shape`. */
+  pointerShape(): Promise<PointerShape | null> {
+    return this.pointers.shape();
   }
 
   // === Raw RPC ===

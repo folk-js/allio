@@ -16,4 +16,9 @@ y: number,
  * Whether the system cursor is hidden (the pointer acts somewhere else), so the page must
  * draw it.
  */
-hidden: boolean, };
+hidden: boolean, 
+/**
+ * While hidden: which shape to draw it with (changes when the shape does). Absent if the
+ * system won't say; draw an arrow then.
+ */
+shape?: string, };

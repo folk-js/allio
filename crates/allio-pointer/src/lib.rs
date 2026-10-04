@@ -13,6 +13,8 @@ mod spec;
 mod tracker;
 
 #[cfg(target_os = "macos")]
+mod shape;
+#[cfg(target_os = "macos")]
 mod tap;
 #[cfg(not(target_os = "macos"))]
 mod unsupported;
@@ -20,6 +22,8 @@ mod unsupported;
 pub use spec::{Cut, Lens, PointerSpec, PointerState, Rect, Target, LENS_FLAT};
 
 #[cfg(target_os = "macos")]
+pub use shape::Shape;
+#[cfg(target_os = "macos")]
 pub use tap::Pointer;
 #[cfg(not(target_os = "macos"))]
-pub use unsupported::Pointer;
+pub use unsupported::{Pointer, Shape};

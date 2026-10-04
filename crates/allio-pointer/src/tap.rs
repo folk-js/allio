@@ -27,6 +27,7 @@ use objc2_core_foundation::CGPoint;
 use parking_lot::Mutex;
 
 use crate::field::{Field, Vec2};
+use crate::shape::{self, Shape};
 use crate::spec::{PointerSpec, PointerState, Rect};
 use crate::tracker::Tracker;
 
@@ -39,6 +40,8 @@ struct Context {
   real: Mutex<Option<Vec2>>,
   cursor: Mutex<Cursor>,
   mover: Mutex<Mover>,
+  /// The system cursor's shape, read while it is hidden.
+  shape: Mutex<Option<Shape>>,
   /// The tap itself, so the callback can turn it back on when the system disables it.
   port: AtomicPtr<CFMachPort>,
 }
@@ -73,6 +76,7 @@ impl Pointer {
       real: Mutex::new(None),
       cursor: Mutex::new(Cursor::default()),
       mover: Mutex::new(Mover::new()),
+      shape: Mutex::new(None),
       port: AtomicPtr::new(std::ptr::null_mut()),
     });
 
@@ -103,14 +107,28 @@ impl Pointer {
     *self.context.displays.lock() = displays();
   }
 
-  /// Where the pointer appears, and whether the page has to draw it.
+  /// Where the pointer appears, whether the page has to draw it, and with which shape.
   pub fn state(&self) -> PointerState {
     let visual = self.context.tracker.lock().visual();
+    let hidden = self.context.cursor.lock().hidden;
+    let shape = hidden
+      .then(|| {
+        let mut shape = self.context.shape.lock();
+        *shape = shape::current(shape.as_ref());
+        shape.as_ref().map(|s| format!("{:x}", s.id))
+      })
+      .flatten();
     PointerState {
       x: visual.map_or(0.0, |v| v.x),
       y: visual.map_or(0.0, |v| v.y),
-      hidden: self.context.cursor.lock().hidden,
+      hidden,
+      shape,
     }
+  }
+
+  /// The shape last named in [`Self::state`].
+  pub fn shape(&self) -> Option<Shape> {
+    self.context.shape.lock().clone()
   }
 }
 

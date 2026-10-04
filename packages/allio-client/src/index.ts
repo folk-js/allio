@@ -15,7 +15,7 @@ export type {
   UniformValues,
   Uniforms,
 } from "./shader";
-export type { Cut, Lens, Pointer, PointerSpec, PointerState, Rect, Target } from "./pointer";
+export type { Cut, Lens, Pointer, PointerShape, PointerSpec, PointerState, Rect, Target } from "./pointer";
 export {
   query,
   queryAs,

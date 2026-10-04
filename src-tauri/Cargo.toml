@@ -23,6 +23,7 @@ tauri-build = { version = "2", features = [] }
 allio = { path = "../crates/allio" }
 allio-ws = { path = "../crates/allio-ws" }
 allio-pointer = { path = "../crates/allio-pointer" }
+base64 = "0.22"
 
 # Tauri framework
 tauri = { version = "2", features = [

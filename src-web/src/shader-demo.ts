@@ -75,24 +75,32 @@ export function panel(title: string, hint: string | null, controls: Control[]): 
 
 /**
  * Draws the pointer where it appears whenever the host hides the system cursor (because the
- * pointer is acting somewhere else: through a cut or a lens). Polls the host once a frame.
+ * pointer is acting somewhere else: through a cut or a lens), in the shape the system cursor has
+ * there (I-beam over text, hand over links…). Polls the host once a frame.
  */
 export function drawPointer(allio: Allio): void {
-  const arrow = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  arrow.setAttribute("viewBox", "0 0 14 22");
-  arrow.innerHTML = `<path d="M1 1 L1 17 L5 13 L8 20 L11 19 L8 12 L13 12 Z" fill="#000" stroke="#fff" stroke-width="1.2" stroke-linejoin="round"/>`;
-  Object.assign(arrow.style, {
+  const pointer = document.createElement("img");
+  Object.assign(pointer.style, {
     position: "fixed",
     left: "0",
     top: "0",
-    width: "14px",
-    height: "22px",
     pointerEvents: "none",
     zIndex: "10000",
     display: "none",
-    filter: "drop-shadow(0 1px 1px rgba(0,0,0,0.4))",
   });
-  document.body.append(arrow);
+  document.body.append(pointer);
+
+  /** The shape drawn now; an arrow until the host names one. */
+  let shape = { id: "", w: 14, h: 22, hot_x: 1, hot_y: 1 };
+  const arrow = (): void => {
+    shape = { id: "", w: 14, h: 22, hot_x: 1, hot_y: 1 };
+    pointer.src =
+      "data:image/svg+xml," +
+      encodeURIComponent(
+        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 22"><path d="M1 1 L1 17 L5 13 L8 20 L11 19 L8 12 L13 12 Z" fill="#000" stroke="#fff" stroke-width="1.2" stroke-linejoin="round"/></svg>`
+      );
+  };
+  arrow();
 
   let asking = false;
   const frame = () => {
@@ -101,10 +109,24 @@ export function drawPointer(allio: Allio): void {
     asking = true;
     allio
       .pointerState()
-      .then((state) => {
+      .then(async (state) => {
         const show = !!state?.hidden;
-        arrow.style.display = show ? "block" : "none";
-        if (state && show) arrow.style.transform = `translate(${state.x - 1}px, ${state.y - 1}px)`;
+        pointer.style.display = show ? "block" : "none";
+        if (!state || !show) return;
+        if (!state.shape) {
+          if (shape.id) arrow();
+        } else if (state.shape !== shape.id) {
+          const next = await allio.pointerShape();
+          if (next) {
+            shape = next;
+            pointer.src = next.src;
+          }
+        }
+        Object.assign(pointer.style, {
+          width: `${shape.w}px`,
+          height: `${shape.h}px`,
+          transform: `translate(${state.x - shape.hot_x}px, ${state.y - shape.hot_y}px)`,
+        });
       })
       .catch(() => {})
       .finally(() => (asking = false));

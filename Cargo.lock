@@ -49,6 +49,7 @@ dependencies = [
  "allio-shader",
  "allio-ws",
  "async-broadcast",
+ "base64 0.22.1",
  "core-graphics 0.23.2",
  "env_logger",
  "serde",
@@ -66,9 +67,12 @@ dependencies = [
 name = "allio-pointer"
 version = "0.1.0"
 dependencies = [
+ "dispatch2",
  "log",
+ "objc2-app-kit",
  "objc2-core-foundation",
  "objc2-core-graphics",
+ "objc2-foundation",
  "parking_lot",
  "serde",
  "serde_json",
