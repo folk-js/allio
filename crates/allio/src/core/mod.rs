@@ -34,6 +34,7 @@ while let Ok(event) = events.recv().await {
 */
 
 mod actions;
+pub use actions::SetOptions;
 pub(crate) mod adapters;
 mod handlers;
 mod queries;

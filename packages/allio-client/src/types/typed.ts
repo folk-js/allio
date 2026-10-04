@@ -32,6 +32,7 @@ export const ROLE_VALUES = {
   textarea: "string",
   searchfield: "string",
   combobox: "string",
+  popupbutton: "string",
   // Roles with boolean values
   checkbox: "boolean",
   switch: "boolean",
@@ -128,6 +129,10 @@ export type WritableRole = {
  * Type guard: check if element accepts a specific value type.
  * Enables polymorphic value handling without checking specific roles.
  *
+ * Requires both a role with that value type *and* the app reporting the value as
+ * settable (`el.settable`): many elements (e.g. color wells) have values that can be
+ * read but never written.
+ *
  * @example
  * if (accepts(el, "string")) {
  *   await allio.set(el, "hello"); // any string-accepting role
@@ -140,5 +145,5 @@ export function accepts<V extends ValueKind>(
   el: TypedElement | AX.Element,
   kind: V
 ): el is ElementOfRole<RolesWithValueType<V>> {
-  return ROLE_VALUES[el.role as AX.Role] === kind;
+  return ROLE_VALUES[el.role as AX.Role] === kind && el.settable.includes("value");
 }

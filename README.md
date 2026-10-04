@@ -230,8 +230,19 @@ pub fn snapshot(&self) -> Snapshot;
 
 ```rust
 pub fn set_value(&self, id: ElementId, value: &Value) -> AllioResult<()>;
+pub fn set_value_with(&self, id: ElementId, value: &Value, options: SetOptions) -> AllioResult<()>;
+pub fn replace_text(&self, id: ElementId, range: TextRange, text: &str) -> AllioResult<()>;
 pub fn perform_action(&self, id: ElementId, action: Action) -> AllioResult<()>;
+pub fn perform_custom_action(&self, id: ElementId, label: &str) -> AllioResult<()>;
 ```
+
+Writability comes from the app, not the role: `Element::settable` lists what the app
+reports as settable, and writes re-check before writing (apps often report success for
+writes they ignore). `SetOptions { commit: true }` performs the element's confirm
+action afterwards, for fields that only save when editing ends. `replace_text` edits a
+range without focus or selection (AppKit text views, WebKit editables). Custom actions
+are app-declared semantic operations (e.g. Reminders' "Flag"), listed in
+`Element::custom_actions`. See [docs/MACOS_API_RESEARCH.md](docs/MACOS_API_RESEARCH.md#writability).
 
 ### Subscriptions
 

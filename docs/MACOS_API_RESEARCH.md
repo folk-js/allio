@@ -106,3 +106,103 @@ Display changes can be detected via:
 Currently we cache screen size with `OnceLock` assuming it never changes. Could add listener to invalidate cache on display changes.
 
 **Status**: Low priority.
+
+---
+
+## Writability
+
+Findings from `axprobe` experiments (raw output in `probes/`) and reading the AppKit,
+WebKit and Chromium implementations. Writes here are direct AX operations only: no
+focus-stealing, selection tricks, synthetic input, or pressing UI open.
+
+### Finding: `AXError::Success` does not mean a write happened
+
+AppKit returns `Success` for `AXUIElementSetAttributeValue` on attributes it doesn't
+let you set (TextEdit `NSColorWell` `AXValue`: success, no change, any CF type).
+`AXUIElementIsAttributeSettable` was accurate in every case tested.
+
+**Implication**: judge writability by settability (per element, from the app), never by
+role tables or the set's return code.
+
+### Finding: `AXReplaceRangeWithText` — range edits without focus
+
+Undocumented parameterized attribute (AppKit selector `accessibilityReplaceRange:withText:`).
+Parameter is a `CFDictionary`:
+
+```text
+{ "AXReplacementRange": AXValue(CFRange), "AXReplacementText": CFString }  →  CFBoolean
+```
+
+Keys found next to the attribute name in AppKit's constant table (dyld shared cache strings).
+Every AppKit element *advertises* it; it only does something where implemented:
+
+| Implementation | Works? |
+|---|---|
+| AppKit `NSTextView` (TextEdit) | Yes — verified, preserves surrounding styling, adjusts caret |
+| WebKit (Safari, `WKWebView` apps): inputs, textareas, contenteditable | Yes per source (`AccessibilityObject::replaceTextInRange`) |
+| Chromium / Electron | No (not implemented) |
+| Numbers cells | No (returns `false`) |
+
+Replacement text must be a plain `CFString`: attributed strings are rejected (`-25201`),
+so styled writes aren't possible this way. CGColor can't be sent as a set value at all.
+
+### Finding: what each engine routes from AX writes
+
+**AppKit** (`NSAccessibility` setters): `AXValue` where the control implements a setter
+(text fields/views, sliders…; not `NSColorWell`), `AXSelected`, `AXSelectedRows`/
+`Columns`/`Cells`/`Children`, `AXDisclosing`/`AXExpanded`, `AXFocused`, selected text
+range(s), window `AXPosition`/`AXSize`/`AXMain`/`AXMinimized`/`AXFullScreen`.
+
+**WebKit** (`WebAccessibilityObjectWrapperMac.mm` `_accessibilitySetValue:forAttribute:`):
+`AXValue` string (text inputs, textareas, editable via `Editor::insertText`) or number
+(sliders, progress), `AXSelected`, `AXSelectedChildren`, `AXSelectedRows` (trees/tables),
+`AXExpanded`/`AXDisclosing`, `AXARIAGrabbed`, selected text marker range. Plus
+`accessibilityReplaceRange:withText:` and `AXTextOperation` (multi-range replace/case ops
+over text marker ranges; keys `AXTextOperationMarkerRanges`, `AXTextOperationType`
+= `TextOperationReplace|ReplacePreserveCase|Capitalize|Lowercase|Uppercase|Select`,
+`AXTextOperationReplacementString`, `AXTextOperationIndividualReplacementStrings`).
+
+**Chromium/Electron** (`ax_platform_node_cocoa.mm`, Blink `OnNativeSetValueAction`):
+`AXValue` → `kSetValue` on `<input>` text fields, `<textarea>` (dispatching `input` +
+`change` events, so frameworks see it), `contenteditable` (`setInnerText` — flattens
+rich content), sliders; `AXSelectedText` → `kReplaceSelectedText`; focus; selected text
+range. `AXTextOperation` exists but is behind `kMacAccessibilityTextOperation`
+(disabled by default). No range replace.
+
+### Finding: actions are a write channel
+
+Standard: `AXIncrement`/`AXDecrement` (adjustables), `AXConfirm`, `AXPick`, `AXDelete`,
+`AXOpen`, `AXCancel`. **Custom actions** are app-declared semantic operations (SwiftUI
+`.accessibilityAction(named:)`, UIKit custom actions); they appear in the action list as
+`"Name:<label>\nTarget:…\nSelector:…"` and are performed by that full string. Reminders
+rows expose Delete, Flag, Details, Indent, Move Up/Down/To Top/To Bottom.
+
+### Finding: AppKit constants worth exploring
+
+From AppKit's constant table: `AXAllowedValues`, `AXLabelValue`, `AXDateTimeComponents`,
+`AXUserInputLabels`, `AXEdited`, `AXAttributedValueForStringAttribute` (param),
+`AXResultsForSearchPredicate` (param; native tree search with `AXSearchKey`,
+`AXStartElement`, `AXDirection`, `AXResultsLimit`, `AXSearchText`), `AXHighlightTextRanges`.
+
+### Finding: color wells are read-only; the Colors panel is writable
+
+Tested in-process (no IPC): `NSColorWell` in every style (`default`, `minimal`,
+`expanded`) reports `AXValue` not settable and ignores `accessibilitySetValue:` with a
+string *or an `NSColor`*; its only action is `AXPress`. SwiftUI `ColorPicker` wraps it;
+WebKit/Chromium `<input type=color>` aren't settable either.
+
+The shared `NSColorPanel` *is* AX-writable: RGB/HSB sliders take numeric `AXValue`
+directly; the component and "Hex Color #" text fields take a string followed by
+`AXConfirm` (no change without the confirm). The panel then applies the color to the
+active well / selected text as usual. Requires the panel to be open.
+
+### Finding: some text fields only commit on `AXConfirm`
+
+Reminders (Catalyst) title fields accept `AXValue` and show it, but the change does not
+survive relaunch when the field isn't being edited. Fields advertise `AXConfirm`.
+
+### Open
+
+- Allio does not use Apple Events / AppleScript (not Apple-oriented by design), so apps
+  whose AX writes are closed (Numbers cells) stay read-only for now.
+- SwiftUI / Catalyst setter coverage is undocumented; needs probing per control.

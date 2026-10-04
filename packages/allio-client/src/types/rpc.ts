@@ -24,7 +24,9 @@ export type RpcReturns = {
   children: TypedElement[];
   parent: TypedElement | null;
   set: boolean;
+  replace_text: void;
   perform: boolean;
+  perform_custom: void;
   watch: void;
   unwatch: void;
   observe: void;

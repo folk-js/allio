@@ -59,6 +59,7 @@ pub(crate) struct CachedWindow {
 }
 
 /// Per-element state in the registry.
+#[allow(clippy::struct_excessive_bools)] // independent state flags, not a mode
 pub(crate) struct CachedElement {
   // === Identity & Hierarchy ===
   pub(crate) id: ElementId,
@@ -110,6 +111,11 @@ pub(crate) struct CachedElement {
 
   // === Actions ===
   pub(crate) actions: Vec<Action>,
+  pub(crate) custom_actions: Vec<String>,
+
+  // === Writability ===
+  /// Sampled from the app when the element is first built; not refreshed (writes re-check).
+  pub(crate) settable: Vec<crate::a11y::SettableAttribute>,
 
   // === Identity ===
   /// Platform accessibility identifier (AXIdentifier on macOS).
@@ -121,6 +127,9 @@ pub(crate) struct CachedElement {
 
   // === Registry metadata ===
   pub(crate) watch: Option<WatchHandle>,
+  /// A client called `watch()` on this element. Focus-driven auto-unwatch must not
+  /// remove change notifications a client asked for.
+  pub(crate) explicitly_watched: bool,
   /// When this element was last refreshed from the OS.
   pub(crate) last_refreshed: std::time::Instant,
 }
@@ -149,6 +158,8 @@ impl PartialEq for CachedElement {
       && self.row_count == other.row_count
       && self.column_count == other.column_count
       && self.actions == other.actions
+      && self.custom_actions == other.custom_actions
+      && self.settable == other.settable
       && self.identifier == other.identifier
       && self.is_fallback == other.is_fallback
   }
@@ -189,9 +200,12 @@ impl CachedElement {
       row_count: attrs.row_count,
       column_count: attrs.column_count,
       actions: attrs.actions,
+      custom_actions: attrs.custom_actions,
+      settable: Vec::new(),
       identifier: attrs.identifier,
       is_fallback: false,
       watch: None,
+      explicitly_watched: false,
       last_refreshed: std::time::Instant::now(),
     }
   }
@@ -221,6 +235,7 @@ impl CachedElement {
     self.row_count = attrs.row_count;
     self.column_count = attrs.column_count;
     self.actions = attrs.actions;
+    self.custom_actions = attrs.custom_actions;
     self.identifier = attrs.identifier;
     self.is_fallback = false;
     self.last_refreshed = std::time::Instant::now();
@@ -319,22 +334,37 @@ impl Registry {
   ) -> Option<bool> {
     let elem = self.elements.get_mut(&id)?;
 
-    // Check for meaningful change
-    let old_value = elem.value.clone();
-    let old_label = elem.label.clone();
-    let old_bounds = elem.bounds;
-    let old_focused = elem.focused;
-    let old_selected = elem.selected;
-    let old_expanded = elem.expanded;
+    // Compare full semantic state (CachedElement's PartialEq excludes registry metadata).
+    let old = (
+      elem.role,
+      elem.label.clone(),
+      elem.description.clone(),
+      elem.placeholder.clone(),
+      elem.url.clone(),
+      elem.value.clone(),
+      elem.bounds,
+      (elem.focused, elem.disabled, elem.selected, elem.expanded),
+      (elem.row_index, elem.column_index, elem.row_count, elem.column_count),
+      (elem.actions.clone(), elem.custom_actions.clone()),
+      elem.identifier.clone(),
+    );
 
     elem.refresh(attrs);
 
-    let changed = elem.value != old_value
-      || elem.label != old_label
-      || elem.bounds != old_bounds
-      || elem.focused != old_focused
-      || elem.selected != old_selected
-      || elem.expanded != old_expanded;
+    let changed = old
+      != (
+        elem.role,
+        elem.label.clone(),
+        elem.description.clone(),
+        elem.placeholder.clone(),
+        elem.url.clone(),
+        elem.value.clone(),
+        elem.bounds,
+        (elem.focused, elem.disabled, elem.selected, elem.expanded),
+        (elem.row_index, elem.column_index, elem.row_count, elem.column_count),
+        (elem.actions.clone(), elem.custom_actions.clone()),
+        elem.identifier.clone(),
+      );
 
     if changed {
       self.emit_element_changed(id);

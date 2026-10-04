@@ -11,7 +11,7 @@ Core code only uses these traits - never platform-specific types directly.
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::a11y::{Action, Notification, Value};
+use crate::a11y::{Action, Notification, SettableAttribute, Value};
 use crate::types::{AllioResult, ElementId, Window};
 
 /// Event types from platform to core.
@@ -62,6 +62,8 @@ pub(crate) struct ElementAttributes {
   pub row_count: Option<usize>,
   pub column_count: Option<usize>,
   pub actions: Vec<crate::a11y::Action>,
+  /// App-declared custom action labels (e.g. "Flag").
+  pub custom_actions: Vec<String>,
   /// Platform accessibility identifier (AXIdentifier on macOS).
   /// May provide stable identity across element moves if the app sets it.
   pub identifier: Option<String>,
@@ -131,6 +133,30 @@ pub(crate) trait PlatformHandle: Clone + Send + Sync + Hash + Eq + 'static {
   /// Perform an action on this element.
   fn perform_action(&self, action: Action) -> AllioResult<()>;
 
+  /// Perform an app-declared custom action by its label.
+  fn perform_custom_action(&self, label: &str) -> AllioResult<()>;
+
+  /// Ask the app whether an attribute is settable (one IPC call).
+  fn is_settable(&self, attr: SettableAttribute) -> bool;
+
+  /// Which of the attributes present in `attrs` the app reports as settable.
+  fn fetch_settable(&self, attrs: &ElementAttributes) -> Vec<SettableAttribute> {
+    SettableAttribute::ALL
+      .iter()
+      .copied()
+      .filter(|a| match a {
+        SettableAttribute::Value => attrs.value.is_some(),
+        SettableAttribute::Selected => attrs.selected.is_some(),
+        SettableAttribute::Expanded => attrs.expanded.is_some(),
+      })
+      .filter(|a| self.is_settable(*a))
+      .collect()
+  }
+
+  /// Replace a character range of the element's text, without focus or selection.
+  /// `Err(NotSupported)` if the element doesn't implement range replacement.
+  fn replace_text(&self, start: u32, length: u32, text: &str) -> AllioResult<()>;
+
   /// Fetch current attributes from the platform.
   fn fetch_attributes(&self) -> ElementAttributes;
 
@@ -183,6 +209,14 @@ impl WatchHandle {
     #[cfg(target_os = "macos")]
     {
       self.inner.add(notifs)
+    }
+  }
+
+  /// Whether a notification is currently registered.
+  pub(crate) fn has(&self, notif: Notification) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+      self.inner.has(notif)
     }
   }
 

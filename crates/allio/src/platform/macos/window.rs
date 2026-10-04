@@ -29,19 +29,41 @@ fn get_window_elements(pid: u32) -> Vec<ElementHandle> {
     .collect()
 }
 
-/// Enable accessibility for Chromium/Electron apps.
+/// Announce an assistive technology to apps that only build their accessibility
+/// tree on request (Chromium/Electron, iWork).
 pub(crate) fn enable_accessibility_for_pid(pid: crate::ProcessId) {
   let raw_pid = pid.0;
   let app_el = app_element(raw_pid);
-  let attr_name = CFString::from_static_str("AXManualAccessibility");
+
+  set_app_flag(&app_el, raw_pid, "AXManualAccessibility");
+
+  // iWork apps only build their document canvas (tables, cells, shapes) once an
+  // assistive technology announces itself. They return NotImplemented for this
+  // attribute but still honour it. Scoped to these apps because the flag is known
+  // to slow window animations elsewhere.
+  if super::window_list::bundle_identifier_for_pid(raw_pid)
+    .is_some_and(|id| ENHANCED_UI_BUNDLES.contains(&id.as_str()))
+  {
+    set_app_flag(&app_el, raw_pid, "AXEnhancedUserInterface");
+  }
+}
+
+/// Apps that need `AXEnhancedUserInterface` to expose their content.
+const ENHANCED_UI_BUNDLES: &[&str] = &[
+  "com.apple.iWork.Numbers",
+  "com.apple.iWork.Pages",
+  "com.apple.iWork.Keynote",
+];
+
+fn set_app_flag(app_el: &objc2_application_services::AXUIElement, raw_pid: u32, name: &'static str) {
+  let attr_name = CFString::from_static_str(name);
   let value = CFBoolean::new(true);
-
-  unsafe {
-    let result = app_el.set_attribute_value(&attr_name, value);
-
-    if !matches!(result, AXError::Success | AXError::AttributeUnsupported) {
-      log::debug!("Failed to enable accessibility for PID {raw_pid} (error: {result:?})");
-    }
+  let result = unsafe { app_el.set_attribute_value(&attr_name, value) };
+  if !matches!(
+    result,
+    AXError::Success | AXError::AttributeUnsupported | AXError::NotImplemented
+  ) {
+    log::debug!("Failed to set {name} for PID {raw_pid} (error: {result:?})");
   }
 }
 

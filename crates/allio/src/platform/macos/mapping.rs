@@ -132,6 +132,7 @@ pub(in crate::platform::macos) mod ax_role {
   pub(super) const SECURE_TEXT_FIELD: &str = "AXSecureTextField";
   pub(super) const SEARCH_FIELD: &str = "AXSearchField";
   pub(super) const COMBO_BOX: &str = "AXComboBox";
+  pub(super) const POP_UP_BUTTON: &str = "AXPopUpButton";
   pub(super) const CHECKBOX: &str = "AXCheckBox";
   pub(super) const RADIO_BUTTON: &str = "AXRadioButton";
   pub(super) const SLIDER: &str = "AXSlider";
@@ -199,6 +200,7 @@ pub(in crate::platform) fn role_from_macos(platform_role: &str) -> Role {
     ax_role::TEXT_AREA => Role::TextArea,
     ax_role::SEARCH_FIELD => Role::SearchField,
     ax_role::COMBO_BOX => Role::ComboBox,
+    ax_role::POP_UP_BUTTON => Role::PopUpButton,
     ax_role::CHECKBOX => Role::Checkbox,
     ax_role::RADIO_BUTTON => Role::RadioButton,
     ax_role::SLIDER => Role::Slider,
@@ -273,6 +275,7 @@ const fn role_to_macos(r: Role) -> &'static str {
     Role::TextArea => ax_role::TEXT_AREA,
     Role::SearchField => ax_role::SEARCH_FIELD,
     Role::ComboBox => ax_role::COMBO_BOX,
+    Role::PopUpButton => ax_role::POP_UP_BUTTON,
     Role::Checkbox | Role::Switch => ax_role::CHECKBOX, // macOS doesn't have distinct switch role
     Role::RadioButton => ax_role::RADIO_BUTTON,
     Role::Slider => ax_role::SLIDER,

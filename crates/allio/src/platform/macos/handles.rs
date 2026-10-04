@@ -13,7 +13,7 @@ The rest of the crate can interact with elements using safe methods.
 )]
 
 use super::mapping::{action_from_macos, role_from_macos};
-use crate::a11y::{Color, Role, Value};
+use crate::a11y::{Color, Role, SettableAttribute, Value};
 use crate::platform::ElementAttributes;
 use crate::types::Bounds;
 use objc2_application_services::{
@@ -21,7 +21,8 @@ use objc2_application_services::{
   AXValueType,
 };
 use objc2_core_foundation::{
-  kCFNull, CFArray, CFBoolean, CFHash, CFNumber, CFRetained, CFString, CFType, CGPoint, CGSize,
+  kCFNull, CFArray, CFBoolean, CFDictionary, CFHash, CFNumber, CFRange, CFRetained, CFString,
+  CFType, CGPoint, CGSize, CFURL,
 };
 use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
@@ -263,8 +264,10 @@ impl ElementHandle {
     let row_count = CFString::from_static_str("AXRowCount");
     let column_count = CFString::from_static_str("AXColumnCount");
     let identifier = CFString::from_static_str("AXIdentifier");
+    let row_index_range = CFString::from_static_str("AXRowIndexRange");
+    let column_index_range = CFString::from_static_str("AXColumnIndexRange");
 
-    let attr_refs: [&CFString; 18] = [
+    let attr_refs: [&CFString; 20] = [
       &role,         // 0
       &subrole,      // 1
       &title,        // 2
@@ -283,6 +286,8 @@ impl ElementHandle {
       &row_count,    // 15
       &column_count, // 16
       &identifier,   // 17
+      &row_index_range,    // 18
+      &column_index_range, // 19
     ];
     let attrs = CFArray::from_objects(&attr_refs);
 
@@ -345,22 +350,29 @@ impl ElementHandle {
       get_val(3).and_then(|v| Self::extract_value(&v, role_hint.or(role_str.as_deref())));
     let desc_str = get_val(4).and_then(|v| parse_str(&v));
     let placeholder_str = get_val(5).and_then(|v| parse_str(&v));
-    let url_str = get_val(6).and_then(|v| parse_str(&v));
+    let url_str = get_val(6).and_then(|v| parse_str(&v).or_else(|| Self::parse_url(&v)));
     let bounds = Self::parse_bounds(get_val(7).as_deref(), get_val(8).as_deref());
     let focused_bool = get_val(9).and_then(|v| parse_bool(&v));
     let enabled_bool = get_val(10).and_then(|v| parse_bool(&v));
     let selected_bool = get_val(11).and_then(|v| parse_bool(&v));
     let expanded_bool = get_val(12).and_then(|v| parse_bool(&v));
-    let row_index_val = get_val(13).and_then(|v| parse_usize(&v));
-    let column_index_val = get_val(14).and_then(|v| parse_usize(&v));
+    // Many tables (NSTableView/NSOutlineView, iWork) expose positions only as ranges.
+    let row_index_val = get_val(13)
+      .and_then(|v| parse_usize(&v))
+      .or_else(|| get_val(18).and_then(|v| Self::parse_range_location(&v)));
+    let column_index_val = get_val(14)
+      .and_then(|v| parse_usize(&v))
+      .or_else(|| get_val(19).and_then(|v| Self::parse_range_location(&v)));
     let row_count_val = get_val(15).and_then(|v| parse_usize(&v));
     let column_count_val = get_val(16).and_then(|v| parse_usize(&v));
     let identifier_str = get_val(17).and_then(|v| parse_str(&v));
 
     let action_strs = self.get_actions();
-    let actions = action_strs
-      .into_iter()
-      .filter_map(|s| action_from_macos(&s))
+    let actions = action_strs.iter().filter_map(|s| action_from_macos(s)).collect();
+    let custom_actions = action_strs
+      .iter()
+      .filter_map(|s| Self::custom_action_label(s))
+      .map(str::to_owned)
       .collect();
 
     // Convert enabled to disabled (inverted)
@@ -400,8 +412,97 @@ impl ElementHandle {
       row_count: row_count_val,
       column_count: column_count_val,
       actions,
+      custom_actions,
       identifier: identifier_str,
     }
+  }
+
+  /// Custom actions (`SwiftUI` `.accessibilityAction(named:)`, `UIKit` custom actions) are
+  /// listed as `"Name:<label>\nTarget:…\nSelector:…"`. Returns the label.
+  fn custom_action_label(raw: &str) -> Option<&str> {
+    let rest = raw.strip_prefix("Name:")?;
+    let label = rest.split('\n').next()?;
+    (!label.is_empty()).then_some(label)
+  }
+
+  /// `AXURL` is a `CFURL`. File-reference URLs (`file:///.file/id=…`) resolve to paths.
+  fn parse_url(v: &CFType) -> Option<String> {
+    let url = v.downcast_ref::<CFURL>()?;
+    let resolved = unsafe { CFURL::new_file_path_url(None, Some(url), std::ptr::null_mut()) };
+    let s = resolved.as_deref().unwrap_or(url).string().to_string();
+    (!s.is_empty()).then_some(s)
+  }
+
+  /// Location of an `AXValue`-wrapped `CFRange`; `NSNotFound` locations are `None`.
+  fn parse_range_location(v: &CFType) -> Option<usize> {
+    let ax = v.downcast_ref::<AXValueRef>()?;
+    let mut range = CFRange { location: 0, length: 0 };
+    let ok = unsafe {
+      ax.r#type() == AXValueType::CFRange
+        && ax.value(AXValueType::CFRange, NonNull::from(&mut range).cast())
+    };
+    // NSNotFound is isize::MAX; real indices are far smaller.
+    (ok && range.location >= 0 && range.location < isize::MAX / 2).then_some(range.location as usize)
+  }
+
+  const fn settable_attr_name(attr: SettableAttribute) -> &'static str {
+    match attr {
+      SettableAttribute::Value => "AXValue",
+      SettableAttribute::Selected => "AXSelected",
+      SettableAttribute::Expanded => "AXExpanded",
+    }
+  }
+
+  /// Ask the app whether an attribute is settable.
+  pub(crate) fn is_settable_internal(&self, attr: SettableAttribute) -> bool {
+    let name = CFString::from_static_str(Self::settable_attr_name(attr));
+    let mut settable: u8 = 0;
+    let result = unsafe { self.inner.is_attribute_settable(&name, NonNull::from(&mut settable)) };
+    result == AXError::Success && settable != 0
+  }
+
+  /// Find the raw action string for a custom action label.
+  pub(crate) fn find_custom_action(&self, label: &str) -> Option<String> {
+    self
+      .get_actions()
+      .into_iter()
+      .find(|raw| Self::custom_action_label(raw) == Some(label))
+  }
+
+  /// `AXReplaceRangeWithText` (`AppKit` `accessibilityReplaceRange:withText:`). Undocumented
+  /// parameter: `{AXReplacementRange: AXValue(CFRange), AXReplacementText: CFString}`,
+  /// returns a `CFBoolean`. See `docs/MACOS_API_RESEARCH.md`.
+  #[allow(clippy::cast_possible_wrap)] // u32 → isize is lossless on 64-bit macOS
+  pub(crate) fn replace_text_internal(&self, start: u32, length: u32, text: &str) -> Result<bool, AXError> {
+    let mut range = CFRange { location: start as isize, length: length as isize };
+    let range_value = unsafe { AXValueRef::new(AXValueType::CFRange, NonNull::from(&mut range).cast()) }
+      .ok_or(AXError::IllegalArgument)?;
+    let text = CFString::from_str(text);
+    let keys = [
+      CFString::from_static_str("AXReplacementRange"),
+      CFString::from_static_str("AXReplacementText"),
+    ];
+    let key_refs: [&CFString; 2] = [&keys[0], &keys[1]];
+    let value_refs: [&CFType; 2] = [&range_value, &text];
+    let param = CFDictionary::<CFString, CFType>::from_slices(&key_refs, &value_refs);
+
+    let attr = CFString::from_static_str("AXReplaceRangeWithText");
+    let mut result_ptr: *const CFType = std::ptr::null();
+    let err = unsafe {
+      self.inner.copy_parameterized_attribute_value(
+        &attr,
+        &*(CFRetained::as_ptr(&param).as_ptr() as *const CFType),
+        NonNull::new(&raw mut result_ptr).expect("result ptr"),
+      )
+    };
+    if err != AXError::Success {
+      return Err(err);
+    }
+    if result_ptr.is_null() {
+      return Ok(false);
+    }
+    let result = unsafe { CFRetained::<CFType>::from_raw(NonNull::new_unchecked(result_ptr.cast_mut())) };
+    Ok(result.downcast_ref::<CFBoolean>().is_some_and(CFBoolean::as_bool))
   }
 
   /// Fetch raw `CFType` attribute (for internal platform code).

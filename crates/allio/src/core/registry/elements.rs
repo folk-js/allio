@@ -102,6 +102,7 @@ impl Registry {
     // Preserve metadata from old entry
     new_elem.handle = old_elem.handle.clone();
     new_elem.watch = old_elem.watch.take();
+    new_elem.explicitly_watched = old_elem.explicitly_watched;
     new_elem.last_refreshed = std::time::Instant::now();
 
     *old_elem = new_elem;
@@ -197,6 +198,13 @@ impl Registry {
   pub(crate) fn set_element_watch(&mut self, id: ElementId, watch: WatchHandle) {
     if let Some(elem) = self.elements.get_mut(&id) {
       elem.watch = Some(watch);
+    }
+  }
+
+  /// Record whether a client explicitly watches this element.
+  pub(crate) fn set_explicitly_watched(&mut self, id: ElementId, explicit: bool) {
+    if let Some(elem) = self.elements.get_mut(&id) {
+      elem.explicitly_watched = explicit;
     }
   }
 

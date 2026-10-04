@@ -4,6 +4,7 @@ import type { Bounds } from "./Bounds";
 import type { ElementId } from "./ElementId";
 import type { ProcessId } from "./ProcessId";
 import type { Role } from "./Role";
+import type { SettableAttribute } from "./SettableAttribute";
 import type { Value } from "./Value";
 import type { WindowId } from "./WindowId";
 
@@ -62,6 +63,16 @@ row_count: number | null,
  * Total column count (for table containers)
  */
 column_count: number | null, actions: Array<Action>, 
+/**
+ * App-declared semantic actions by label (e.g. "Flag", "Delete", "Move Up").
+ * Perform with `perform_custom_action`.
+ */
+custom_actions: Array<string>, 
+/**
+ * Attributes the app reports as settable (sampled when the element is first seen;
+ * writes re-check with the app).
+ */
+settable: Array<SettableAttribute>, 
 /**
  * Platform accessibility identifier (AXIdentifier on macOS).
  * May provide stable identity across element moves if the app sets it.

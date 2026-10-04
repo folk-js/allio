@@ -187,10 +187,15 @@ export class Allio extends EventEmitter<AllioEvents> {
    * await allio.set(slider, 50);      // number for slider
    * await allio.set(textfield, "hi"); // string for textfield
    * await allio.set(checkbox, true);  // boolean for checkbox
+   *
+   * Rejects if the app reports the value as not settable. Pass `{ commit: true }` for
+   * fields that only save when editing ends (performs the element's confirm action;
+   * on some elements that means "press Enter", e.g. submitting a search field).
    */
   set<R extends WritableRole>(
     element: ElementOfRole<R>,
-    value: PrimitiveForRole<R>
+    value: PrimitiveForRole<R>,
+    options: Partial<AX.SetOptions> = {}
   ): Promise<boolean> {
     const valueType = ROLE_VALUES[element.role];
     if (!valueType) {
@@ -199,8 +204,27 @@ export class Allio extends EventEmitter<AllioEvents> {
     return this.call("set", {
       element_id: element.id,
       value: value as AX.Value,
+      commit: options.commit ?? false,
     });
   }
+
+  /**
+   * Replace a character range of an element's text, without focus or selection.
+   * Preserves surrounding text and styling. Rejects where the app doesn't support it
+   * (supported by AppKit text views and WebKit editables; not Chromium/Electron).
+   *
+   * @example
+   * await allio.replaceText(textArea.id, { start: 0, end: 0 }, "Hello "); // insert
+   */
+  replaceText = (element_id: AX.ElementId, range: AX.TextRange, text: string) =>
+    this.call("replace_text", { element_id, range, text });
+
+  /**
+   * Perform an app-declared custom action by label (see `element.custom_actions`),
+   * e.g. Reminders' "Flag" or "Delete".
+   */
+  performCustom = (element_id: AX.ElementId, label: string) =>
+    this.call("perform_custom", { element_id, label });
 
   /**
    * Perform an action on an element.

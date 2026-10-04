@@ -155,11 +155,9 @@ impl Allio {
 
     let attrs = handle.fetch_attributes();
 
-    self.write(|r| {
-      if let Some(elem) = r.elements.get_mut(&element_id) {
-        elem.refresh(attrs);
-      }
-    });
+    // Emits ElementChanged if anything meaningful differs (notification-driven
+    // refreshes rely on this to reach clients).
+    self.write(|r| r.refresh_element(element_id, attrs));
 
     self
       .read(|r| super::build_element(r, element_id))

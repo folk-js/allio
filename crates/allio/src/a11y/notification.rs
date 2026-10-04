@@ -49,8 +49,11 @@ impl Notification {
 
   /// Additional notifications to subscribe when "watching" an element.
   ///
-  /// These are role-dependent: text fields get `ValueChanged` + `SelectionChanged`,
-  /// windows get `TitleChanged`, etc. This does NOT include Destroyed (that's implicit).
+  /// Value and title changes are subscribed for every role: whether an element
+  /// posts them is the app's decision, not something our role table can predict
+  /// (e.g. pop-up buttons and segmented toggles carry values but aren't "writable").
+  /// Registrations the app doesn't support are simply skipped by the platform layer.
+  /// Text inputs additionally get `SelectionChanged`.
   ///
   /// # Example
   /// ```
@@ -60,17 +63,7 @@ impl Notification {
   /// assert!(notifs.contains(&Notification::ValueChanged));
   /// ```
   pub fn for_watching(role: Role) -> Vec<Self> {
-    let mut notifs = vec![];
-
-    // Track value changes for writable elements
-    if role.is_writable() {
-      notifs.push(Self::ValueChanged);
-    }
-
-    // Track title changes for windows
-    if matches!(role, Role::Window) {
-      notifs.push(Self::TitleChanged);
-    }
+    let mut notifs = vec![Self::ValueChanged, Self::TitleChanged];
 
     // Track selection for text inputs
     if role.is_text_input() {
@@ -117,8 +110,12 @@ mod tests {
   }
 
   #[test]
-  fn buttons_get_nothing_special() {
-    let notifs = Notification::for_watching(Role::Button);
-    assert!(notifs.is_empty());
+  fn non_writable_roles_still_get_value_and_title() {
+    for role in [Role::Button, Role::Unknown, Role::StaticText] {
+      let notifs = Notification::for_watching(role);
+      assert!(notifs.contains(&Notification::ValueChanged));
+      assert!(notifs.contains(&Notification::TitleChanged));
+      assert!(!notifs.contains(&Notification::SelectionChanged));
+    }
   }
 }

@@ -49,6 +49,8 @@ pub(crate) fn build_element(registry: &Registry, id: ElementId) -> Option<Elemen
     row_count: elem.row_count,
     column_count: elem.column_count,
     actions: elem.actions.clone(),
+    custom_actions: elem.custom_actions.clone(),
+    settable: elem.settable.clone(),
     identifier: elem.identifier.clone(),
     is_fallback: elem.is_fallback,
   })
@@ -69,6 +71,8 @@ pub(crate) fn build_entry_from_handle(
   pid: ProcessId,
 ) -> CachedElement {
   let attrs = handle.fetch_attributes();
+  // Writability is sampled once per element (one IPC per present attribute).
+  let settable = handle.fetch_settable(&attrs);
 
   // Fetch parent once and reuse (OS call is expensive)
   let parent_handle = handle.fetch_parent();
@@ -81,7 +85,7 @@ pub(crate) fn build_entry_from_handle(
   // For root elements, don't store parent handle
   let parent_for_entry = if is_root { None } else { parent_handle };
 
-  CachedElement::from_attributes(
+  let mut entry = CachedElement::from_attributes(
     ElementId::new(),
     window_id,
     pid,
@@ -89,7 +93,9 @@ pub(crate) fn build_entry_from_handle(
     handle,
     parent_for_entry,
     attrs,
-  )
+  );
+  entry.settable = settable;
+  entry
 }
 
 /// Build a snapshot of current state.

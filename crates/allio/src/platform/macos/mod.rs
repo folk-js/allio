@@ -26,7 +26,7 @@ pub(super) use handles::{ElementHandle, ObserverHandle};
 
 use std::sync::Arc;
 
-use crate::a11y::{Action, Notification, Value};
+use crate::a11y::{Action, Notification, SettableAttribute, Value};
 use crate::platform::traits::{
   AppNotificationHandle, DisplayLinkHandle, ElementAttributes, EventHandler, Platform,
   PlatformHandle, PlatformObserver, WatchHandle,
@@ -113,6 +113,34 @@ impl PlatformHandle for ElementHandle {
         action,
         reason: format!("{e:?}"),
       })
+  }
+
+  fn perform_custom_action(&self, label: &str) -> AllioResult<()> {
+    let raw = self
+      .find_custom_action(label)
+      .ok_or_else(|| AllioError::NotSupported(format!("No custom action named '{label}'")))?;
+    self
+      .perform_action_internal(&raw)
+      .map_err(|e| AllioError::CustomActionFailed {
+        label: label.to_owned(),
+        reason: format!("{e:?}"),
+      })
+  }
+
+  fn is_settable(&self, attr: SettableAttribute) -> bool {
+    self.is_settable_internal(attr)
+  }
+
+  fn replace_text(&self, start: u32, length: u32, text: &str) -> AllioResult<()> {
+    match self.replace_text_internal(start, length, text) {
+      Ok(true) => Ok(()),
+      Ok(false) => Err(AllioError::NotSupported(
+        "Element does not implement range text replacement".to_owned(),
+      )),
+      Err(e) => Err(AllioError::SetValueFailed {
+        reason: format!("AXReplaceRangeWithText: {e:?}"),
+      }),
+    }
   }
 
   fn fetch_attributes(&self) -> ElementAttributes {

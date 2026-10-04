@@ -61,6 +61,14 @@ pub struct Element {
 
   // === Actions ===
   pub actions: Vec<crate::a11y::Action>,
+  /// App-declared semantic actions by label (e.g. "Flag", "Delete", "Move Up").
+  /// Perform with `perform_custom_action`.
+  pub custom_actions: Vec<String>,
+
+  // === Writability ===
+  /// Attributes the app reports as settable (sampled when the element is first seen;
+  /// writes re-check with the app).
+  pub settable: Vec<crate::a11y::SettableAttribute>,
 
   // === Identity ===
   /// Platform accessibility identifier (AXIdentifier on macOS).

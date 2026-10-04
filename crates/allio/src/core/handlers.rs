@@ -39,20 +39,21 @@ impl Allio {
       return;
     };
 
-    // Auto-unwatch previous element
+    // Auto-unwatch previous element, unless a client explicitly watches it
     if let Some(prev_id) = previous_id {
       let should_unwatch = self.read(|s| {
-        s.element(prev_id)
-          .is_some_and(|e| e.role.auto_watch_on_focus() || e.role.is_writable())
+        s.element(prev_id).is_some_and(|e| {
+          !e.explicitly_watched && (e.role.auto_watch_on_focus() || e.role.is_writable())
+        })
       });
       if should_unwatch {
-        drop(self.unwatch(prev_id));
+        drop(self.remove_change_watch(prev_id));
       }
     }
 
     // Auto-watch new element
     if element.role.auto_watch_on_focus() || element.role.is_writable() {
-      drop(self.watch(element.id));
+      drop(self.add_change_watch(element.id));
     }
   }
 

@@ -2,13 +2,14 @@
 import type { Action } from "./Action";
 import type { ElementId } from "./ElementId";
 import type { Recency } from "./Recency";
+import type { TextRange } from "./TextRange";
 import type { Value } from "./Value";
 import type { WindowId } from "./WindowId";
 
 /**
  * RPC request.
  */
-export type RpcRequest = { "method": "snapshot" } | { "method": "element_at", "args": { x: number, y: number, } } | { "method": "get", "args": { element_id: ElementId, recency: Recency | null, } } | { "method": "window_root", "args": { window_id: WindowId, } } | { "method": "children", "args": { element_id: ElementId, max_children: number, } } | { "method": "parent", "args": { element_id: ElementId, } } | { "method": "set", "args": { element_id: ElementId, value: Value, } } | { "method": "perform", "args": { element_id: ElementId, action: Action, } } | { "method": "watch", "args": { element_id: ElementId, } } | { "method": "unwatch", "args": { element_id: ElementId, } } | { "method": "observe", "args": { element_id: ElementId, depth: number | null, 
+export type RpcRequest = { "method": "snapshot" } | { "method": "element_at", "args": { x: number, y: number, } } | { "method": "get", "args": { element_id: ElementId, recency: Recency | null, } } | { "method": "window_root", "args": { window_id: WindowId, } } | { "method": "children", "args": { element_id: ElementId, max_children: number, } } | { "method": "parent", "args": { element_id: ElementId, } } | { "method": "set", "args": { element_id: ElementId, value: Value, commit: boolean, } } | { "method": "replace_text", "args": { element_id: ElementId, range: TextRange, text: string, } } | { "method": "perform", "args": { element_id: ElementId, action: Action, } } | { "method": "perform_custom", "args": { element_id: ElementId, label: string, } } | { "method": "watch", "args": { element_id: ElementId, } } | { "method": "unwatch", "args": { element_id: ElementId, } } | { "method": "observe", "args": { element_id: ElementId, depth: number | null, 
 /**
  * Wait time between sweeps in milliseconds.
  */

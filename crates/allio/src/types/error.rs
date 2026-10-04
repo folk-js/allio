@@ -24,6 +24,15 @@ pub enum AllioError {
   #[error("Failed to set value: {reason}")]
   SetValueFailed { reason: String },
 
+  #[error("Attribute '{attribute:?}' is not settable on element {element}")]
+  NotSettable {
+    element: ElementId,
+    attribute: crate::a11y::SettableAttribute,
+  },
+
+  #[error("Custom action '{label}' failed: {reason}")]
+  CustomActionFailed { label: String, reason: String },
+
   #[error("Type mismatch: expected {expected:?}, got {got:?}")]
   TypeMismatch { expected: ValueType, got: ValueType },
 

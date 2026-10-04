@@ -60,6 +60,11 @@ impl WatchHandleInner {
     added
   }
 
+  /// Whether a notification is currently registered.
+  pub(crate) fn has(&self, notif: Notification) -> bool {
+    self.notifications.contains(&notif)
+  }
+
   /// Remove notifications from the watch set.
   pub(crate) fn remove(&mut self, notifs: &[Notification]) {
     for notif in notifs {

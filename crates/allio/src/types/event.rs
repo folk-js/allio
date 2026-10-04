@@ -1,11 +1,11 @@
 /*! Event types for state changes and synchronization. */
 
 use super::{Element, ElementId, Point, Window, WindowId};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 /// Character range within text. End is exclusive, matching Rust's `Range` semantics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct TextRange {
   /// Start position (inclusive).

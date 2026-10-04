@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Spreadsheet</title>
+    <style>
+      :root {
+        --panel-bg: rgba(24, 24, 27, 0.92);
+        --panel-border: rgba(255, 255, 255, 0.14);
+        --text: rgba(255, 255, 255, 0.88);
+        --muted: rgba(255, 255, 255, 0.5);
+        --grid: rgba(255, 255, 255, 0.08);
+        --s0: #5b9bd5;
+        --s1: #f2a65a;
+        --s2: #7bc47f;
+        --s3: #c792ea;
+        --s4: #ef6b73;
+      }
+
+      body {
+        margin: 0;
+        background: transparent;
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+        overflow: hidden;
+        pointer-events: none;
+        user-select: none;
+      }
+
+      #panel {
+        position: absolute;
+        display: none;
+        width: 380px;
+        box-sizing: border-box;
+        padding: 12px 14px 10px;
+        background: var(--panel-bg);
+        border: 1px solid var(--panel-border);
+        border-radius: 10px;
+        color: var(--text);
+        box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+        transition: left 0.15s ease, top 0.15s ease;
+      }
+
+      #title {
+        font-size: 12px;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      #subtitle {
+        font-size: 10.5px;
+        color: var(--muted);
+        margin-top: 2px;
+      }
+
+      #chart {
+        display: block;
+        margin-top: 10px;
+      }
+
+      #chart text {
+        fill: var(--muted);
+        font-size: 9.5px;
+      }
+
+      #legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 12px;
+        margin-top: 6px;
+        font-size: 10.5px;
+        color: var(--muted);
+      }
+
+      #legend span::before {
+        content: "";
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 2px;
+        margin-right: 5px;
+        background: var(--swatch);
+      }
+
+      #pulse {
+        position: absolute;
+        top: 12px;
+        right: 14px;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #7bc47f;
+        opacity: 0.25;
+        transition: opacity 0.6s ease;
+      }
+
+      #pulse.on {
+        opacity: 1;
+        transition: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="panel">
+      <div id="pulse"></div>
+      <div id="title"></div>
+      <div id="subtitle"></div>
+      <svg id="chart" width="352" height="190"></svg>
+      <div id="legend"></div>
+    </div>
+    <script type="module" src="../src/spreadsheet.ts"></script>
+  </body>
+</html>

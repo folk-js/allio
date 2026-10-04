@@ -38,5 +38,5 @@ pub mod a11y;
 mod types;
 pub use types::*;
 
-pub use crate::core::{Allio, AllioBuilder};
+pub use crate::core::{Allio, AllioBuilder, SetOptions};
 pub use crate::observation::{ObservationHandle, ObserveConfig};

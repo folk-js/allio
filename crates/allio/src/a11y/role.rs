@@ -51,6 +51,8 @@ pub enum Role {
   TextArea,
   SearchField,
   ComboBox,
+  /// Pop-up button / select: shows its chosen option as a string value.
+  PopUpButton,
   Checkbox,
   Switch,
   RadioButton,
@@ -116,7 +118,9 @@ impl Role {
   /// ```
   pub const fn value_type(&self) -> ValueType {
     match self {
-      Self::TextField | Self::TextArea | Self::SearchField | Self::ComboBox => ValueType::String,
+      Self::TextField | Self::TextArea | Self::SearchField | Self::ComboBox | Self::PopUpButton => {
+        ValueType::String
+      }
       Self::Checkbox | Self::Switch | Self::RadioButton => ValueType::Boolean,
       Self::Slider | Self::ProgressBar | Self::Stepper => ValueType::Number,
       Self::ColorWell => ValueType::Color,
@@ -180,7 +184,7 @@ impl Role {
       Self::Application | Self::Window | Self::Document |
       // Interactive controls
       Self::Button | Self::Link | Self::MenuItem |
-      Self::TextField | Self::TextArea | Self::SearchField | Self::ComboBox |
+      Self::TextField | Self::TextArea | Self::SearchField | Self::ComboBox | Self::PopUpButton |
       Self::Checkbox | Self::Switch | Self::RadioButton |
       Self::Slider | Self::Stepper | Self::ColorWell |
       Self::Tab |
@@ -232,6 +236,7 @@ impl Role {
         | Self::TextArea
         | Self::SearchField
         | Self::ComboBox
+        | Self::PopUpButton
         | Self::Checkbox
         | Self::Switch
         | Self::RadioButton
@@ -260,6 +265,7 @@ impl Role {
         | Self::TextArea
         | Self::SearchField
         | Self::ComboBox
+        | Self::PopUpButton
         | Self::Checkbox
         | Self::Switch
         | Self::RadioButton

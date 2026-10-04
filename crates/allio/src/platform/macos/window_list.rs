@@ -121,6 +121,11 @@ fn enumerate_windows_inner() -> Vec<Window> {
   windows
 }
 
+/// Bundle identifier for a process, if it's a running application.
+pub(super) fn bundle_identifier_for_pid(process_id: u32) -> Option<String> {
+  get_running_application(process_id).as_deref().and_then(get_bundle_identifier)
+}
+
 fn get_bundle_identifier(app: &NSRunningApplication) -> Option<String> {
   app.bundleIdentifier().map(|s| s.to_string())
 }

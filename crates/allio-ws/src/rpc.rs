@@ -5,7 +5,7 @@ RPC request/response types and dispatch.
 #![allow(missing_docs)]
 
 use allio::a11y::{Action, Value as AXValue};
-use allio::{Allio, Element, ElementId, Snapshot, WindowId};
+use allio::{Allio, Element, ElementId, SetOptions, Snapshot, TextRange, WindowId};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use ts_rs::TS;
@@ -58,16 +58,26 @@ pub enum RpcRequest {
   },
   /// Discover parent of element.
   Parent { element_id: ElementId },
-  /// Set value on element.
+  /// Set value on element. `commit` performs the element's confirm action afterwards.
   Set {
     element_id: ElementId,
     value: AXValue,
+    #[serde(default)]
+    commit: bool,
+  },
+  /// Replace a character range of an element's text (no focus or selection).
+  ReplaceText {
+    element_id: ElementId,
+    range: TextRange,
+    text: String,
   },
   /// Perform an action on element.
   Perform {
     element_id: ElementId,
     action: Action,
   },
+  /// Perform an app-declared custom action by label.
+  PerformCustom { element_id: ElementId, label: String },
   /// Watch element for changes.
   Watch { element_id: ElementId },
   /// Stop watching element.
@@ -170,9 +180,24 @@ pub fn dispatch(allio: &Allio, request: RpcRequest) -> Result<RpcResponse, Strin
       Ok(RpcResponse::OptionalElement(parent.map(Box::new)))
     }
 
-    RpcRequest::Set { element_id, value } => {
+    RpcRequest::Set {
+      element_id,
+      value,
+      commit,
+    } => {
       allio
-        .set_value(element_id, &value)
+        .set_value_with(element_id, &value, SetOptions { commit })
+        .map_err(|e| e.to_string())?;
+      Ok(RpcResponse::Null)
+    }
+
+    RpcRequest::ReplaceText {
+      element_id,
+      range,
+      text,
+    } => {
+      allio
+        .replace_text(element_id, range, &text)
         .map_err(|e| e.to_string())?;
       Ok(RpcResponse::Null)
     }
@@ -180,6 +205,13 @@ pub fn dispatch(allio: &Allio, request: RpcRequest) -> Result<RpcResponse, Strin
     RpcRequest::Perform { element_id, action } => {
       allio
         .perform_action(element_id, action)
+        .map_err(|e| e.to_string())?;
+      Ok(RpcResponse::Null)
+    }
+
+    RpcRequest::PerformCustom { element_id, label } => {
+      allio
+        .perform_custom_action(element_id, &label)
         .map_err(|e| e.to_string())?;
       Ok(RpcResponse::Null)
     }

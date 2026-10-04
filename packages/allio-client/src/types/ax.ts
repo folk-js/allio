@@ -18,6 +18,8 @@ export type { Value } from "./generated/Value";
 export type { ValueType } from "./generated/ValueType";
 export type { Color } from "./generated/Color";
 export type { Notification } from "./generated/Notification";
+export type { SettableAttribute } from "./generated/SettableAttribute";
+export type { SetOptions } from "./generated/SetOptions";
 
 // Typed elements - role-based discriminated union
 export {

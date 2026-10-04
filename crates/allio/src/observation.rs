@@ -63,6 +63,9 @@ impl Default for ObserveConfig {
 pub(crate) struct ObservedSubtree {
   pub(crate) root_id: ElementId,
   pub(crate) depth: Option<usize>,
+  /// Poll only the root's attributes: no children, no `subtree:changed`.
+  /// Used by `watch()` for elements that can't deliver change notifications.
+  pub(crate) node_only: bool,
   pub(crate) wait_between: Duration,
 
   /// Prevents overlapping sweeps.
@@ -118,12 +121,16 @@ impl Drop for ObservationHandle {
 pub(crate) struct ObservationState {
   /// Map of observed subtrees by root element ID.
   pub(crate) subtrees: Mutex<HashMap<ElementId, Arc<ObservedSubtree>>>,
+  /// Single-element polls backing `watch()` where notifications are unsupported.
+  /// Kept separate so they never collide with a client's `observe()` on the same element.
+  pub(crate) node_polls: Mutex<HashMap<ElementId, Arc<ObservedSubtree>>>,
 }
 
 impl ObservationState {
   pub(crate) fn new() -> Self {
     Self {
       subtrees: Mutex::new(HashMap::new()),
+      node_polls: Mutex::new(HashMap::new()),
     }
   }
 }
@@ -169,12 +176,13 @@ fn observation_loop(allio: Allio, stop_signal: &AtomicBool) {
   while !stop_signal.load(Ordering::SeqCst) {
     thread::sleep(Duration::from_millis(CHECK_INTERVAL_MS));
 
-    // Get all observed subtrees
-    let subtrees: Vec<Arc<ObservedSubtree>> = allio
-      .observation_state()
+    // Get all observed subtrees and node polls
+    let state = allio.observation_state();
+    let subtrees: Vec<Arc<ObservedSubtree>> = state
       .subtrees
       .lock()
       .values()
+      .chain(state.node_polls.lock().values())
       .cloned()
       .collect();
 
@@ -224,10 +232,26 @@ fn sweep_subtree(allio: &Allio, obs: &ObservedSubtree) {
 
   let Some((root_handle, window_id, pid, _cached_children)) = root_info else {
     // Root element not in cache - nothing to sweep
+    if obs.node_only {
+      allio.observation_state().node_polls.lock().remove(&obs.root_id);
+    }
     obs.in_progress.store(false, Ordering::SeqCst);
     *obs.last_completed.lock() = Instant::now();
     return;
   };
+
+  if obs.node_only {
+    // refresh_element emits ElementChanged on change; removal emits ElementRemoved.
+    let attrs = root_handle.fetch_attributes();
+    if attrs.role == crate::a11y::Role::Unknown && attrs.platform_role.is_empty() {
+      allio.write(|r| r.remove_element(obs.root_id));
+    } else {
+      allio.write(|r| r.refresh_element(obs.root_id, attrs));
+    }
+    obs.in_progress.store(false, Ordering::SeqCst);
+    *obs.last_completed.lock() = Instant::now();
+    return;
+  }
 
   // Sweep recursively starting from root
   sweep_element_recursive(allio, obs, obs.root_id, &root_handle, window_id, pid, 0);
@@ -367,6 +391,7 @@ impl Allio {
     let subtree = Arc::new(ObservedSubtree {
       root_id,
       depth: config.depth,
+      node_only: false,
       wait_between: config
         .wait_between
         .unwrap_or(Duration::from_millis(DEFAULT_WAIT_BETWEEN_MS)),
@@ -397,6 +422,31 @@ impl Allio {
   pub fn unobserve(&self, root_id: ElementId) {
     self.observation_state().subtrees.lock().remove(&root_id);
     log::debug!("Stopped observing subtree {}", root_id);
+  }
+
+  /// Poll a single element's attributes (backs `watch()` when notifications are unsupported).
+  pub(crate) fn start_node_poll(&self, element_id: ElementId) {
+    let poll = Arc::new(ObservedSubtree {
+      root_id: element_id,
+      depth: Some(0),
+      node_only: true,
+      wait_between: Duration::from_millis(DEFAULT_WAIT_BETWEEN_MS),
+      in_progress: AtomicBool::new(false),
+      last_completed: Mutex::new(Instant::now()),
+      changes: Mutex::new(SweepChanges::default()),
+    });
+    self
+      .observation_state()
+      .node_polls
+      .lock()
+      .entry(element_id)
+      .or_insert(poll);
+    log::debug!("Polling element {element_id} (change notifications unsupported)");
+  }
+
+  /// Stop polling a single element.
+  pub(crate) fn stop_node_poll(&self, element_id: ElementId) {
+    self.observation_state().node_polls.lock().remove(&element_id);
   }
 
   /// Check if a subtree is being observed.
