@@ -19,8 +19,9 @@ field.dispose();
 | `targets` | Motion inside `rect` (grown by `reach`) is multiplied by its `gain`; the smallest target wins. | |
 | `cuts` | | Inside `shown`, R is the matching point of `source` (scaled if the sizes differ). Later cuts are on top. |
 | `lenses` | | Inside the lens, R is the point the lens magnifies there. Within `r * LENS_FLAT` that is `mag` times closer to the centre; out to `r` it eases back. |
+| `warps` | | A deformed window. In window-local points V goes through `affine`, then `grid` (a displacement field over the window grown by `margin`); if that lands inside the window, R is there. `above` lists what is in front of the window, where nothing is mapped. |
 
-A shader that draws a cut or a lens must use the same map; `lens.wgsl` and `cuts.wgsl` do, and tests in both crates pin the same numbers.
+Cuts come first, then warps, then lenses. A shader that draws a cut, lens or warp must use the same map; `cuts.wgsl`, `lens.wgsl` and `warp.wgsl` do, and tests in both crates pin the same numbers.
 
 ## How it behaves
 
@@ -29,12 +30,15 @@ A shader that draws a cut or a lens must use the same map; `lens.wgsl` and `cuts
 - **Escape hatch.** ⌘⇧Esc lets go of the pointer until the page next changes its fields.
 - **Hiding the cursor** while another app is frontmost needs one private call (`CGSSetConnectionProperty`, `SetsCursorInBackground`), made once, the first time the cursor has to hide.
 - **Client owns the state.** The complete set of fields is pushed at most once per frame when it changes, and when the socket opens; several fields combine. When the page's connection closes the fields are dropped, the tap removed and the cursor shown, so a reload or crash never leaves the pointer reshaped. No fields, or fields that change nothing, means no tap.
+- **Carved-away windows can't be clicked through.** Where a warp has moved a window off part of its real footprint, what was behind it shows, but the real window is still there. Presses, their releases and scrolls there are dropped by the tap rather than landing on the window by surprise.
 - **Real clicks need a real target.** Through a cut, the click lands on whatever is frontmost at the source point. If another window covers the source there, that window gets it.
 
 ## Demos
 
 - **cuts** (WinCuts, Tan et al., CHI 2004): cut part of the screen out and place it anywhere, scaled if you like; point into it to use the real thing. A cut's source is anchored to the screen, to a window (it follows the window), or to an accessibility element (it follows the element's bounds as it moves, resizes and scrolls; the part out of view is drawn as fog and can't be clicked through, and a removed element leaves the cut fogged and marked gone). Only the visible part of a cut goes to the pointer field.
 - **lens**: a fixed magnifier you can put over a toolbar or small text. Inside it the pointer acts on what it appears to be over, so it moves more slowly over the real screen (a pointing lens, Ramos et al., CHI 2007, falling out of the map rather than being a speed setting).
+- **warp**: a liquify-style brush. Drag across a window to push it around (to make room for something behind it); the deformation belongs to the window and moves with it. Turn the brush off to use the window as drawn.
+- **transform**: pick a window, then turn and scale it by its knobs. It still works as drawn.
 - **magnet**: buttons, links, tabs and checkboxes of the window under the pointer, found through accessibility, are sticky (semantic pointing, Blanch et al., CHI 2004), and the one you're on lifts.
 
 ## Crates

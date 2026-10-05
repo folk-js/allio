@@ -2,7 +2,7 @@
 //! has to be for the visual pointer to act on what it appears to. Pure, so it can be tested
 //! without moving anyone's cursor.
 
-use crate::spec::{clamp_gain, Cut, Lens, PointerSpec, Rect, Target, LENS_FLAT};
+use crate::spec::{clamp_gain, Cut, Grid, Lens, PointerSpec, Rect, Target, Warp, LENS_FLAT};
 
 /// A point or a vector in screen points.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -53,6 +53,9 @@ impl Field {
     if let Some(cut) = self.spec.cuts.iter().rev().find(|c| contains(c.shown, visual)) {
       return through_cut(cut, visual);
     }
+    if let Some(real) = self.spec.warps.iter().rev().find_map(|w| through_warp(w, visual)) {
+      return real;
+    }
     self
       .spec
       .lenses
@@ -60,6 +63,24 @@ impl Field {
       .rev()
       .find(|l| visual.sub(Vec2::new(l.x, l.y)).len() < l.r)
       .map_or(visual, |l| through_lens(l, visual))
+  }
+
+  /// Whether the pointer at `visual` is over a part of a real window that a warp has carved away:
+  /// what shows there is what is behind the window, which the pointer can't reach. Clicks and
+  /// scrolls there are dropped rather than landing on the window by surprise.
+  pub(crate) fn blocked(&self, visual: Vec2) -> bool {
+    if self.spec.cuts.iter().any(|c| contains(c.shown, visual)) {
+      return false;
+    }
+    for warp in self.spec.warps.iter().rev() {
+      if warp.above.iter().any(|r| contains(*r, visual)) || through_warp(warp, visual).is_some() {
+        return false;
+      }
+      if contains(warp.window, visual) {
+        return true;
+      }
+    }
+    false
   }
 
   /// The smallest target (grown by its reach) containing `p`.
@@ -78,6 +99,51 @@ fn through_cut(cut: &Cut, p: Vec2) -> Vec2 {
   let sx = if s.w > 0.0 { src.w / s.w } else { 1.0 };
   let sy = if s.h > 0.0 { src.h / s.h } else { 1.0 };
   Vec2::new(src.x + (p.x - s.x) * sx, src.y + (p.y - s.y) * sy)
+}
+
+/// The point of the real window a warp draws at `p`, if it draws the window there. Must match the
+/// warp shader.
+fn through_warp(warp: &Warp, p: Vec2) -> Option<Vec2> {
+  if warp.above.iter().any(|r| contains(*r, p)) {
+    return None;
+  }
+  let win = warp.window;
+  let q = p.sub(Vec2::new(win.x, win.y));
+  let a = warp.affine.map_or(q, |[a, b, c, d, tx, ty]| {
+    Vec2::new(a * q.x + b * q.y + tx, c * q.x + d * q.y + ty)
+  });
+  let r = warp.grid.as_ref().map_or(a, |g| a.add(grid_offset(g, win, a)));
+  contains(Rect { x: 0.0, y: 0.0, w: win.w, h: win.h }, r).then(|| r.add(Vec2::new(win.x, win.y)))
+}
+
+/// The grid's displacement at window-local point `p`. Must match the warp shader.
+fn grid_offset(grid: &Grid, win: Rect, p: Vec2) -> Vec2 {
+  let (cols, rows) = (grid.cols as usize, grid.rows as usize);
+  if cols < 2 || rows < 2 || grid.offsets.len() < 2 * cols * rows {
+    return Vec2::default();
+  }
+  #[allow(clippy::cast_precision_loss)]
+  let (last_col, last_row) = ((cols - 1) as f64, (rows - 1) as f64);
+  let fx = (p.x + grid.margin) / (win.w + 2.0 * grid.margin) * last_col;
+  let fy = (p.y + grid.margin) / (win.h + 2.0 * grid.margin) * last_row;
+  if !(0.0..=last_col).contains(&fx) || !(0.0..=last_row).contains(&fy) {
+    return Vec2::default();
+  }
+  let col = fx.floor().min(last_col - 1.0);
+  let row = fy.floor().min(last_row - 1.0);
+  let (tx, ty) = (fx - col, fy - row);
+  #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+  let (col, row) = (col as usize, row as usize);
+  let at = |col: usize, row: usize| {
+    let k = 2 * (row * cols + col);
+    Vec2::new(
+      grid.offsets.get(k).copied().unwrap_or(0.0),
+      grid.offsets.get(k + 1).copied().unwrap_or(0.0),
+    )
+  };
+  let top = at(col, row).scale(1.0 - tx).add(at(col + 1, row).scale(tx));
+  let bottom = at(col, row + 1).scale(1.0 - tx).add(at(col + 1, row + 1).scale(tx));
+  top.scale(1.0 - ty).add(bottom.scale(ty))
 }
 
 /// The point of the screen a lens draws at `p`. Must match the lens shader.
@@ -116,6 +182,7 @@ fn contains(r: Rect, p: Vec2) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
   use super::*;
 
@@ -182,6 +249,49 @@ mod tests {
       ..PointerSpec::default()
     });
     assert!(near(f.real(Vec2::new(5.0, 5.0)), Vec2::new(205.0, 5.0)));
+  }
+
+  fn warp(affine: Option<[f64; 6]>, grid: Option<Grid>) -> Field {
+    field(PointerSpec {
+      warps: vec![Warp {
+        window: rect(100.0, 100.0, 200.0, 100.0),
+        affine,
+        grid,
+        above: vec![rect(0.0, 0.0, 120.0, 120.0)],
+      }],
+      ..PointerSpec::default()
+    })
+  }
+
+  #[test]
+  fn a_scaled_window_acts_on_its_real_self() {
+    // Drawn at half size about its centre (150, 50 local): the map back doubles about it.
+    let f = warp(Some([2.0, 0.0, 0.0, 2.0, -100.0, -50.0]), None);
+    assert!(near(f.real(Vec2::new(225.0, 150.0)), Vec2::new(250.0, 150.0)));
+    // Inside the real window but outside the shrunken one: acts where it appears.
+    assert!(near(f.real(Vec2::new(290.0, 190.0)), Vec2::new(290.0, 190.0)));
+    // A window in front wins.
+    assert!(near(f.real(Vec2::new(110.0, 110.0)), Vec2::new(110.0, 110.0)));
+    // Only the carved-away part of the real window blocks.
+    assert!(f.blocked(Vec2::new(290.0, 190.0)));
+    assert!(!f.blocked(Vec2::new(225.0, 150.0)), "over the shrunken window");
+    assert!(!f.blocked(Vec2::new(110.0, 110.0)), "over a window in front");
+    assert!(!f.blocked(Vec2::new(350.0, 150.0)), "outside the real window");
+  }
+
+  #[test]
+  fn a_grid_pushes_the_window_around() {
+    // 3x3 grid over the window grown by 50: points at local x -50, 100, 250 and y -50, 50, 150.
+    // Only the centre point moves: whatever is drawn at local (100, 50) is really 20pt left of it.
+    let mut offsets = vec![0.0; 18];
+    offsets[8] = -20.0;
+    let grid = Grid { margin: 50.0, cols: 3, rows: 3, offsets };
+    let f = warp(None, Some(grid));
+    assert!(near(f.real(Vec2::new(200.0, 150.0)), Vec2::new(180.0, 150.0)));
+    // Halfway to the next grid point, half the offset.
+    assert!(near(f.real(Vec2::new(275.0, 150.0)), Vec2::new(265.0, 150.0)));
+    // Outside the window: acts where it appears.
+    assert!(near(f.real(Vec2::new(320.0, 150.0)), Vec2::new(320.0, 150.0)));
   }
 
   #[test]

@@ -1658,6 +1658,54 @@ mod tests {
     assert!(grey(image[50 * 200 + 105]));
   }
 
+  // --- warp: deformed windows ---
+
+  /// The warp demo over the ramp, its window at x 40..160, y 20..80, with a red desktop behind.
+  fn warp_demo() -> Option<Renderer> {
+    let r = demo_on_ramp("warp")?;
+    r.0.state.lock().behind = Some(solid(&r.0.device, [0, 0, 255, 255]));
+    set(&r, &[("win", vec![40.0, 20.0, 120.0, 60.0]), ("affine", vec![1.0, 0.0, 0.0, 1.0])]);
+    Some(r)
+  }
+
+  #[test]
+  fn warp_scales_a_window_about_its_centre_and_shows_what_was_under_it() {
+    let Some(r) = warp_demo() else { return };
+    // Drawn at half size: the map back doubles about the centre (local 60, 30). allio-pointer's
+    // warp tests use the same kind of map.
+    set(&r, &[("affine", vec![2.0, 0.0, 0.0, 2.0]), ("shift", vec![-60.0, -30.0, 0.0, 0.0])]);
+    let image = render_image(&r, 200, 100);
+    let at = |x: usize, y: usize| image[y * 200 + x];
+
+    assert!((i32::from(at(100, 50)[0]) - 100).abs() <= 1, "the centre stays: {:?}", at(100, 50));
+    assert!((i32::from(at(120, 50)[0]) - 140).abs() <= 1, "20pt right shows 40pt right: {:?}", at(120, 50));
+    let desktop = at(150, 30);
+    assert!(desktop[3] == 255 && desktop[2] > 230 && desktop[0] == 0, "the rest of the old window shows the desktop (under a soft shadow): {desktop:?}");
+
+    // Well clear of the window and its shadow, nothing is drawn.
+    set(&r, &[("win", vec![10.0, 10.0, 20.0, 10.0]), ("shift", vec![-10.0, -5.0, 0.0, 0.0])]);
+    let image = render_image(&r, 200, 100);
+    assert_eq!(image[60 * 200 + 150][3], 0, "far away, nothing is drawn");
+  }
+
+  #[test]
+  fn warp_grid_pushes_the_window_and_leaves_windows_in_front_alone() {
+    let Some(r) = warp_demo() else { return };
+    // 3x3 points over the window grown by 30 (local x -30, 60, 150; y -30, 30, 90). Only the
+    // centre moves: what is drawn at local (60, 30) is really 20pt left of it.
+    let mut grid = vec![0.0; 640];
+    grid[8] = -20.0;
+    set(&r, &[("shift", vec![0.0, 0.0, 30.0, 1.0]), ("dims", vec![3.0, 3.0, 1.0, 0.0]), ("grid", grid)]);
+    let mut above = vec![0.0; 32];
+    above.splice(0..4, [0.0, 0.0, 50.0, 30.0]);
+    set(&r, &[("above", above)]);
+    let image = render_image(&r, 200, 100);
+    let at = |x: usize, y: usize| image[y * 200 + x];
+
+    assert!((i32::from(at(100, 50)[0]) - 80).abs() <= 1, "pushed: {:?}", at(100, 50));
+    assert_eq!(at(45, 25)[3], 0, "a window in front is left alone");
+  }
+
   // --- looking at the demos (writes PNGs when ALLIO_SNAPSHOTS names a directory) ---
 
   /// Pixels per point in snapshots.

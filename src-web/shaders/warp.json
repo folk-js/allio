@@ -1,0 +1,11 @@
+{
+  "uniforms": {
+    "win": "vec4f",
+    "affine": "vec4f",
+    "shift": "vec4f",
+    "dims": "vec4f",
+    "above": "vec4f[8]",
+    "grid": "vec4f[160]"
+  },
+  "behind": "none"
+}

@@ -91,6 +91,8 @@ const DEFAULT_OVERLAYS: &[&str] = &[
   "lens.html",
   "magnet.html",
   "cuts.html",
+  "warp.html",
+  "transform.html",
 ];
 
 fn get_overlay_files() -> Vec<String> {

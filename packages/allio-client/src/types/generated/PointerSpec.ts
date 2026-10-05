@@ -2,6 +2,7 @@
 import type { Cut } from "./Cut";
 import type { Lens } from "./Lens";
 import type { Target } from "./Target";
+import type { Warp } from "./Warp";
 
 /**
  * How real mouse motion moves the pointer, and where on the real screen the pointer acts.
@@ -29,4 +30,8 @@ cuts?: Array<Cut>,
 /**
  * Fixed magnifiers.
  */
-lenses?: Array<Lens>, };
+lenses?: Array<Lens>, 
+/**
+ * Deformed windows.
+ */
+warps?: Array<Warp>, };

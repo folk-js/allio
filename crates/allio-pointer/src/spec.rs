@@ -60,6 +60,47 @@ pub struct Lens {
   pub mag: f64,
 }
 
+/// A window drawn deformed: rotated, scaled, pushed around. While the pointer appears over the
+/// deformed window it really is over the matching point of the real one.
+///
+/// The map from where the pointer appears to where it acts works in window-local points (from the
+/// window's top-left), so it moves with the window: first `affine`, then `grid`. Where the result
+/// falls outside the window, the pointer acts where it appears.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Warp {
+  /// The real window, in screen points.
+  pub window: Rect,
+  /// `[a, b, c, d, tx, ty]`: local point (x, y) goes to (a·x + b·y + tx, c·x + d·y + ty).
+  #[serde(default)]
+  #[ts(optional)]
+  pub affine: Option<[f64; 6]>,
+  /// Then this displacement is added.
+  #[serde(default)]
+  #[ts(optional)]
+  pub grid: Option<Grid>,
+  /// Windows in front of this one, in screen points: there the pointer acts where it appears.
+  #[serde(default)]
+  #[ts(optional, as = "Option<Vec<Rect>>")]
+  pub above: Vec<Rect>,
+}
+
+/// A displacement field over a window, grown by `margin` on every side so edges can be pushed
+/// outwards: `cols` × `rows` evenly spaced points, row by row, each an (x, y) offset in points,
+/// interpolated bilinearly in between. Zero outside.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Grid {
+  /// How far the grid reaches past each edge of the window.
+  pub margin: f64,
+  /// Points across.
+  pub cols: u32,
+  /// Points down.
+  pub rows: u32,
+  /// `2 * cols * rows` numbers: x and y offsets.
+  pub offsets: Vec<f64>,
+}
+
 /// Fraction of a lens's radius that is magnified evenly. Shaders drawing a lens must use the same.
 pub const LENS_FLAT: f64 = 0.72;
 
@@ -90,6 +131,10 @@ pub struct PointerSpec {
   #[serde(default)]
   #[ts(optional, as = "Option<Vec<Lens>>")]
   pub lenses: Vec<Lens>,
+  /// Deformed windows.
+  #[serde(default)]
+  #[ts(optional, as = "Option<Vec<Warp>>")]
+  pub warps: Vec<Warp>,
 }
 
 /// Where the pointer appears, for a page that draws it.
@@ -125,6 +170,7 @@ impl PointerSpec {
       && self.targets.is_empty()
       && self.cuts.is_empty()
       && self.lenses.is_empty()
+      && self.warps.is_empty()
   }
 
   /// One spec that does what all of these do together.
@@ -136,6 +182,7 @@ impl PointerSpec {
       out.targets.extend(&spec.targets);
       out.cuts.extend(&spec.cuts);
       out.lenses.extend(&spec.lenses);
+      out.warps.extend(spec.warps.iter().cloned());
     }
     out.gain = Some(clamp_gain(gain));
     out

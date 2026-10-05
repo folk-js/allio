@@ -148,3 +148,21 @@ body {
   white-space: nowrap;
   pointer-events: none;
 }
+
+/* A round handle (turning, scaling). */
+.knob {
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border-radius: 8px;
+}
+.knob .grip {
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  cursor: inherit;
+}
+
+.outline.round {
+  border-radius: 50%;
+}

@@ -6,6 +6,7 @@
  *   field.set({ targets: [{ rect, gain: 0.4, reach: 6 }] });   // sticky buttons
  *   field.set({ cuts: [{ shown, source }] });                  // part of the screen drawn elsewhere
  *   field.set({ lenses: [{ x, y, r: 150, mag: 3 }] });         // a fixed magnifier
+ *   field.set({ warps: [{ window, affine, grid }] });          // a deformed window
  *   field.dispose();
  *
  * The host keeps a visual pointer that the hand moves, and puts the real cursor where the screen
@@ -20,13 +21,15 @@
  * gains multiply, the rest add up.
  */
 import type { Cut } from "./types/generated/Cut";
+import type { Grid } from "./types/generated/Grid";
 import type { Lens } from "./types/generated/Lens";
 import type { PointerSpec } from "./types/generated/PointerSpec";
 import type { PointerState } from "./types/generated/PointerState";
 import type { Rect } from "./types/generated/Rect";
 import type { Target } from "./types/generated/Target";
+import type { Warp } from "./types/generated/Warp";
 
-export type { Cut, Lens, PointerSpec, PointerState, Rect, Target };
+export type { Cut, Grid, Lens, PointerSpec, PointerState, Rect, Target, Warp };
 
 /** A cursor image: `src` is a data URL, sizes and the tip (`hot_x`, `hot_y`) are in points. */
 export interface PointerShape {

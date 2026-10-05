@@ -19,7 +19,7 @@ mod tap;
 #[cfg(not(target_os = "macos"))]
 mod unsupported;
 
-pub use spec::{Cut, Lens, PointerSpec, PointerState, Rect, Target, LENS_FLAT};
+pub use spec::{Cut, Grid, Lens, PointerSpec, PointerState, Rect, Target, Warp, LENS_FLAT};
 
 #[cfg(target_os = "macos")]
 pub use shape::Shape;

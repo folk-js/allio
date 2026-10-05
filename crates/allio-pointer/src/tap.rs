@@ -42,6 +42,8 @@ struct Context {
   mover: Mutex<Mover>,
   /// The system cursor's shape, read while it is hidden.
   shape: Mutex<Option<Shape>>,
+  /// Buttons whose press was dropped, so their release is dropped too.
+  dropped: Mutex<u32>,
   /// The tap itself, so the callback can turn it back on when the system disables it.
   port: AtomicPtr<CFMachPort>,
 }
@@ -77,6 +79,7 @@ impl Pointer {
       cursor: Mutex::new(Cursor::default()),
       mover: Mutex::new(Mover::new()),
       shape: Mutex::new(None),
+      dropped: Mutex::new(0),
       port: AtomicPtr::new(std::ptr::null_mut()),
     });
 
@@ -151,6 +154,13 @@ fn run(context: &Arc<Context>, ready: &mpsc::Sender<Result<RunLoop, String>>) {
     CGEventType::LeftMouseDragged,
     CGEventType::RightMouseDragged,
     CGEventType::OtherMouseDragged,
+    CGEventType::LeftMouseDown,
+    CGEventType::LeftMouseUp,
+    CGEventType::RightMouseDown,
+    CGEventType::RightMouseUp,
+    CGEventType::OtherMouseDown,
+    CGEventType::OtherMouseUp,
+    CGEventType::ScrollWheel,
   ]
   .iter()
   .fold(0, |m, t| m | (1 << t.0));
@@ -218,8 +228,50 @@ unsafe extern "C-unwind" fn callback(
   }
 
   // SAFETY: the system hands us a valid event for the duration of the callback.
-  reshape(context, kind, unsafe { event.as_ref() });
+  let event_ref = unsafe { event.as_ref() };
+  if is_move(kind) {
+    reshape(context, kind, event_ref);
+  } else if !admit(context, kind, event_ref) {
+    return std::ptr::null_mut();
+  }
   event.as_ptr()
+}
+
+fn is_move(kind: CGEventType) -> bool {
+  [
+    CGEventType::MouseMoved,
+    CGEventType::LeftMouseDragged,
+    CGEventType::RightMouseDragged,
+    CGEventType::OtherMouseDragged,
+  ]
+  .contains(&kind)
+}
+
+/// Whether a click or scroll goes through. Over a part of a window a warp has carved away it is
+/// dropped (see `Field::blocked`), and so is the release of a press that was dropped.
+fn admit(context: &Context, kind: CGEventType, event: &CGEvent) -> bool {
+  let button = CGEvent::integer_value_field(Some(event), CGEventField::MouseEventButtonNumber);
+  let bit = 1u32 << button.clamp(0, 31);
+  let blocked = || {
+    let visual = context.tracker.lock().visual();
+    visual.is_some_and(|v| context.field.lock().blocked(v))
+  };
+  let mut dropped = context.dropped.lock();
+  match kind {
+    CGEventType::LeftMouseDown | CGEventType::RightMouseDown | CGEventType::OtherMouseDown => {
+      if blocked() {
+        *dropped |= bit;
+        return false;
+      }
+      true
+    }
+    CGEventType::LeftMouseUp | CGEventType::RightMouseUp | CGEventType::OtherMouseUp => {
+      let was = *dropped & bit != 0;
+      *dropped &= !bit;
+      !was
+    }
+    _ => !blocked(),
+  }
 }
 
 /// Marks the moves we post, so the tap knows them when they come back through.
