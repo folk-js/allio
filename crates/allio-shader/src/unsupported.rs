@@ -35,6 +35,10 @@ impl Shader {
   }
 
   /// Unreachable: no instance can exist.
+  pub fn captures(&self) -> usize {
+    0
+  }
+
   pub fn probe(&self, _x: f64, _y: f64) -> Result<[f32; 4], String> {
     match *self {}
   }

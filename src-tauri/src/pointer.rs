@@ -98,6 +98,11 @@ impl<T: Live> Reconciler<T> {
     json!({ "result": null })
   }
 
+  /// Whether a pointer field is live.
+  pub fn active(&self) -> bool {
+    self.state.lock().unwrap().live.is_some()
+  }
+
   /// Lets go of the pointer until the client next changes its fields. An escape hatch.
   pub fn release(&self) {
     self.state.lock().unwrap().live = None;

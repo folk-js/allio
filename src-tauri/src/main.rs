@@ -24,6 +24,8 @@ use allio::Allio;
 use allio_ws::WebSocketState;
 
 mod backstage;
+#[cfg(target_os = "macos")]
+mod menubar;
 mod pointer;
 mod shaders;
 
@@ -255,17 +257,29 @@ fn build_or_update_tray_inner(
       let _ = tray.set_icon(Some(icon));
     }
 
-    // Only update menu if not icon-only mode
-    if !icon_only {
+    // Only update menu if not icon-only mode (macOS builds its menus on each click)
+    if !icon_only && !cfg!(target_os = "macos") {
       let menu = build_tray_menu(app, overlay_files, &current_overlay, passthrough_enabled)?;
       tray.set_menu(Some(menu))?;
     }
   } else {
-    // Create new tray (first time setup)
-    let menu = build_tray_menu(app, overlay_files, &current_overlay, passthrough_enabled)?;
     let icon = get_tray_icon(passthrough_enabled)
       .unwrap_or_else(|| app.default_window_icon().unwrap().clone());
 
+    // On macOS the menus are native and built on each click (see `menubar`).
+    #[cfg(target_os = "macos")]
+    {
+      TrayIconBuilder::with_id("main-tray")
+        .icon(icon)
+        .on_tray_icon_event(menubar::on_event)
+        .build(app)?;
+      return Ok(());
+    }
+
+    // Create new tray (first time setup)
+    #[cfg(not(target_os = "macos"))]
+    let menu = build_tray_menu(app, overlay_files, &current_overlay, passthrough_enabled)?;
+    #[cfg(not(target_os = "macos"))]
     TrayIconBuilder::with_id("main-tray")
       .menu(&menu)
       .icon(icon)
@@ -276,6 +290,7 @@ fn build_or_update_tray_inner(
   Ok(())
 }
 
+#[cfg(not(target_os = "macos"))]
 fn handle_tray_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
   let id = event.id().0.clone();
   let handle = app.clone();
@@ -437,10 +452,9 @@ fn create_rpc_handler(
   app_handle: AppHandle,
   shaders: std::sync::Arc<shaders::Shaders>,
   pointers: std::sync::Arc<pointer::Pointers>,
+  backstages: std::sync::Arc<backstage::Backstages>,
 ) -> (allio_ws::CustomRpcHandler, allio_ws::DisconnectHandler) {
   let last_state = std::sync::Arc::new(AtomicBool::new(true));
-
-  let backstages = std::sync::Arc::new(backstage::Backstages::default());
 
   let on_disconnect: allio_ws::DisconnectHandler = {
     let shaders = shaders.clone();
@@ -628,8 +642,19 @@ fn main() {
       // WebSocket setup
       let shaders = start_window_binding(&allio);
       let pointers = std::sync::Arc::new(pointer::Pointers::new());
-      let (rpc_handler, on_disconnect) =
-        create_rpc_handler(app.handle().clone(), shaders, pointers.clone());
+      let backstages = std::sync::Arc::new(backstage::Backstages::default());
+      #[cfg(target_os = "macos")]
+      app.manage(menubar::Services {
+        shaders: shaders.clone(),
+        pointers: pointers.clone(),
+        backstages: backstages.clone(),
+      });
+      let (rpc_handler, on_disconnect) = create_rpc_handler(
+        app.handle().clone(),
+        shaders,
+        pointers.clone(),
+        backstages,
+      );
       let ws_state = WebSocketState::new(allio.clone())
         .with_custom_handler(rpc_handler)
         .with_disconnect_handler(on_disconnect);

@@ -28,6 +28,10 @@ pub trait Live: Sized {
   fn set_behind(&self, hide: &Hide) -> Result<(), String>;
   fn probe(&self, x: f64, y: f64) -> Result<[f32; 4], String>;
   fn window_resized(&self, window: u32, w: f64, h: f64);
+  /// How many captures it is running.
+  fn captures(&self) -> usize {
+    0
+  }
 }
 
 impl Live for Shader {
@@ -54,6 +58,9 @@ impl Live for Shader {
   }
   fn window_resized(&self, window: u32, w: f64, h: f64) {
     Shader::window_resized(self, window, w, h);
+  }
+  fn captures(&self) -> usize {
+    Shader::captures(self)
   }
 }
 
@@ -287,6 +294,13 @@ impl<T: Live> Reconciler<T> {
         Err(e) => json!({ "error": e }),
       },
     }
+  }
+
+  /// How many shaders are live, and how many captures they run between them.
+  pub fn summary(&self) -> (usize, usize) {
+    let state = self.state.lock().unwrap();
+    let captures = state.shaders.values().map(|e| e.shader.captures()).sum();
+    (state.shaders.len(), captures)
   }
 
   /// Re-reads the windows and pushes them to the shaders that bound them.

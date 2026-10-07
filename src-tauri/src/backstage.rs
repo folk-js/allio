@@ -54,6 +54,16 @@ impl Backstages {
     json!({ "result": { "x": f.x, "y": f.y, "w": f.w, "h": f.h } })
   }
 
+  /// Where the display is, if there is one.
+  pub fn frame(&self) -> Option<allio_display::Frame> {
+    self.state.lock().unwrap().as_ref().map(|(_, b)| b.frame())
+  }
+
+  /// Removes the display, whoever made it; its windows come back onto real displays.
+  pub fn remove(&self) {
+    *self.state.lock().unwrap() = None;
+  }
+
   /// Removes the display if the closed connection made it.
   pub fn disconnected(&self, conn: ConnId) {
     let mut state = self.state.lock().unwrap();

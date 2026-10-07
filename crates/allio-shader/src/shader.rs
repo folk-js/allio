@@ -318,6 +318,11 @@ impl Shader {
     self.sync()
   }
 
+  /// How many captures are running for it.
+  pub fn captures(&self) -> usize {
+    self.captures.lock().len()
+  }
+
   /// Reads one cell of the simulation state at a screen point, as `[r, g, b, a]`.
   pub fn probe(&self, x: f64, y: f64) -> Result<[f32; 4], String> {
     self.renderer.probe(x, y)
