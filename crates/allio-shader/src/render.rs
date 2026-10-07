@@ -15,6 +15,7 @@
 
 use crate::capture::Frame;
 use crate::diag::warn_once;
+use crate::light::{self, Kernels, Light};
 use crate::pipeline::{self, Compiled};
 use crate::spec::{Region, ShaderSpec};
 use crate::uniforms::UniformType;
@@ -70,6 +71,8 @@ pub(crate) struct Pipeline {
   pso: Retained<ProtocolObject<dyn MTLRenderPipelineState>>,
   /// Present if the shader defines `sim`.
   sim: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
+  /// Present if the shader defines `scene`.
+  scene: Option<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
   uniforms: Vec<u8>,
 }
 
@@ -83,6 +86,8 @@ const TEXEL_BYTES: usize = 16;
 const DEFAULT_CELL: f32 = 4.0;
 /// Largest state texture side, in cells.
 const MAX_CELLS: usize = 4096;
+/// Frames a lit shader keeps drawing after the last change, so light bouncing around settles.
+const SETTLE_FRAMES: u32 = 90;
 
 /// The simulation state: two textures, one read while the other is written, then swapped.
 struct Sim {
@@ -97,6 +102,12 @@ struct Sim {
 struct State {
   pipeline: Pipeline,
   sim: Option<Sim>,
+  /// The light of a lit shader, sized like the state.
+  light: Option<Light>,
+  /// Built the first time a shader is lit.
+  kernels: Option<Kernels>,
+  /// Frames left to draw for light to settle.
+  settle: u32,
   /// Size in screen points of one `state` cell.
   cell: f32,
   /// Draws so far, exposed as `u.frame`.
@@ -166,24 +177,33 @@ pub(crate) fn build(
     .newFunctionWithName(&ns(pipeline::FRAGMENT_ENTRY))
     .ok_or("missing fragment function")?;
 
-  let make = |fragment: &ProtocolObject<dyn MTLFunction>, format: MTLPixelFormat| {
+  let make = |fragment: &ProtocolObject<dyn MTLFunction>, formats: &[MTLPixelFormat]| {
     let desc = MTLRenderPipelineDescriptor::new();
     desc.setVertexFunction(Some(&vertex));
     desc.setFragmentFunction(Some(fragment));
-    unsafe { desc.colorAttachments().objectAtIndexedSubscript(0) }.setPixelFormat(format);
+    for (i, format) in formats.iter().enumerate() {
+      unsafe { desc.colorAttachments().objectAtIndexedSubscript(i) }.setPixelFormat(*format);
+    }
     device
       .newRenderPipelineStateWithDescriptor_error(&desc)
       .map_err(|e| e.localizedDescription().to_string())
   };
-  let pso = make(&fragment, MTLPixelFormat::BGRA8Unorm)?;
-  let sim = if compiled.stateful {
+  let pso = make(&fragment, &[MTLPixelFormat::BGRA8Unorm])?;
+  let optional = |present: bool, name: &str, formats: &[MTLPixelFormat]| {
+    if !present {
+      return Ok(None);
+    }
     let function = library
-      .newFunctionWithName(&ns(pipeline::SIM_ENTRY))
-      .ok_or("missing sim function")?;
-    Some(make(&function, STATE_FORMAT)?)
-  } else {
-    None
+      .newFunctionWithName(&ns(name))
+      .ok_or(format!("missing {name} function"))?;
+    make(&function, formats).map(Some)
   };
+  let sim = optional(compiled.stateful, pipeline::SIM_ENTRY, &[STATE_FORMAT])?;
+  let scene = optional(
+    compiled.lit,
+    pipeline::SCENE_ENTRY,
+    &[light::FORMAT, light::FORMAT],
+  )?;
 
   let uniforms = vec![0; compiled.layout.size];
   let mut pipeline = Pipeline {
@@ -191,6 +211,7 @@ pub(crate) fn build(
     compiled,
     pso,
     sim,
+    scene,
     uniforms,
   };
   apply(&mut pipeline, &spec.values)?;
@@ -283,6 +304,9 @@ impl Renderer {
     let state = State {
       pipeline,
       sim: None,
+      light: None,
+      kernels: None,
+      settle: 0,
       cell: spec.cell.unwrap_or(DEFAULT_CELL).max(0.5),
       frames: 0,
       latest: None,
@@ -482,6 +506,7 @@ impl Renderer {
     let compiled = &st.pipeline.compiled;
     let animated = st.animate.unwrap_or(compiled.animated);
     let pointer = compiled.reads_mouse.then(mouse);
+    let lit = compiled.lit;
     let moved = pointer.is_some_and(|m| {
       m.iter()
         .zip(st.last_mouse)
@@ -490,8 +515,15 @@ impl Renderer {
     if let Some(m) = pointer {
       st.last_mouse = m;
     }
-    let need = st.dirty || animated || moved;
+    let mut need = st.dirty || animated || moved;
     st.dirty = false;
+    // Light bounces a little further each frame, so keep drawing for a while after a change.
+    if lit && need {
+      st.settle = SETTLE_FRAMES;
+    } else if lit && st.settle > 0 {
+      st.settle -= 1;
+      need = true;
+    }
     need
   }
 
@@ -512,6 +544,8 @@ impl Renderer {
     let State {
       pipeline: p,
       sim,
+      light,
+      kernels,
       cell,
       frames,
       started,
@@ -544,42 +578,33 @@ impl Renderer {
     if p.sim.is_none() {
       *sim = None;
     }
+    prepare_light(&i.device, &cb, p.scene.is_some(), light, kernels, size);
 
     *frames += 1;
     let res = [target.width() as f32, target.height() as f32];
-    let r = [
-      region.x as f32,
-      region.y as f32,
-      region.w as f32,
-      region.h as f32,
-    ];
-    let state_size = [size.0 as f32, size.1 as f32];
-    for (name, vals) in [
-      ("resolution", &res[..]),
-      ("time", &[started.elapsed().as_secs_f32()][..]),
-      ("mouse", &mouse()[..]),
-      ("region", &r[..]),
-      ("frame", &[*frames as f32][..]),
-      ("state_size", &state_size[..]),
-    ] {
-      if let Some(f) = p.compiled.layout.field(name) {
-        put(&mut p.uniforms, f.offset, vals);
-      }
-    }
+    builtins(p, res, *region, started.elapsed().as_secs_f32(), *frames, size);
+
+    let base = Pass {
+      pso: &p.pso,
+      uniforms: &p.uniforms,
+      sampler: &i.sampler,
+      screen: &src,
+      // A stateless shader never reads `state`, but the slot still needs a texture.
+      state: &src,
+      behind,
+      named: &named,
+      light: light.as_ref().map_or(&*i.blank, |l| &*l.texture),
+    };
 
     // Advance the simulation: each step reads `current`, writes `next`, and swaps.
     if let (Some(step), Some(sim)) = (&p.sim, sim.as_mut()) {
       for _ in 0..*steps {
         let pass = Pass {
           pso: step,
-          uniforms: &p.uniforms,
-          sampler: &i.sampler,
-          screen: &src,
           state: &sim.current,
-          behind,
-          named: &named,
+          ..base
         };
-        if !pass.encode(&cb, &sim.next) {
+        if !pass.encode(&cb, &[&sim.next]) {
           warn_once("render: sim", "no render encoder");
           return None;
         }
@@ -587,22 +612,87 @@ impl Renderer {
       }
     }
 
-    let latest_state = sim.as_ref().map(|s| &s.current);
+    // Describe the scene, then solve its light.
+    if let (Some(scene), Some(light), Some(kernels)) = (&p.scene, light.as_ref(), kernels.as_ref())
+    {
+      let pass = Pass {
+        pso: scene,
+        state: sim.as_ref().map_or(&*src, |s| &*s.current),
+        ..base
+      };
+      if !pass.encode(&cb, &[&light.emit, &light.matter]) {
+        warn_once("render: scene", "no render encoder");
+        return None;
+      }
+      if light.encode(kernels, &cb, *cell).is_none() {
+        warn_once("render: light", "no encoder");
+        return None;
+      }
+    }
+
     let pass = Pass {
-      pso: &p.pso,
-      uniforms: &p.uniforms,
-      sampler: &i.sampler,
-      screen: &src,
-      // A stateless shader never reads `state`, but the slot still needs a texture.
-      state: latest_state.unwrap_or(&src),
-      behind,
-      named: &named,
+      state: sim.as_ref().map_or(&*src, |s| &*s.current),
+      ..base
     };
-    if !pass.encode(&cb, target) {
+    if !pass.encode(&cb, &[target]) {
       warn_once("render: draw", "no render encoder");
       return None;
     }
     Some(cb)
+  }
+}
+
+/// Fills the built-in uniforms for a draw.
+fn builtins(
+  p: &mut Pipeline,
+  resolution: [f32; 2],
+  region: Region,
+  time: f32,
+  frame: u64,
+  cells: (usize, usize),
+) {
+  let r = [
+    region.x as f32,
+    region.y as f32,
+    region.w as f32,
+    region.h as f32,
+  ];
+  for (name, vals) in [
+    ("resolution", &resolution[..]),
+    ("time", &[time][..]),
+    ("mouse", &mouse()[..]),
+    ("region", &r[..]),
+    ("frame", &[frame as f32][..]),
+    ("state_size", &[cells.0 as f32, cells.1 as f32][..]),
+  ] {
+    if let Some(f) = p.compiled.layout.field(name) {
+      put(&mut p.uniforms, f.offset, vals);
+    }
+  }
+}
+
+/// (Re)allocates a lit shader's light when the grid changes, builds the kernels the first time,
+/// and drops the light of a shader that is no longer lit.
+fn prepare_light(
+  device: &ProtocolObject<dyn MTLDevice>,
+  cb: &ProtocolObject<dyn MTLCommandBuffer>,
+  lit: bool,
+  light: &mut Option<Light>,
+  kernels: &mut Option<Kernels>,
+  size: (usize, usize),
+) {
+  if !lit {
+    *light = None;
+    return;
+  }
+  if light.as_ref().is_none_or(|l| l.size != size) {
+    *light = Light::new(device, cb, size);
+  }
+  if kernels.is_none() {
+    match Kernels::new(device) {
+      Ok(k) => *kernels = Some(k),
+      Err(e) => warn_once("render: light kernels", &e),
+    }
   }
 }
 
@@ -685,6 +775,7 @@ impl Sim {
 }
 
 /// One full-screen draw of a fragment function.
+#[derive(Clone, Copy)]
 struct Pass<'a> {
   pso: &'a ProtocolObject<dyn MTLRenderPipelineState>,
   uniforms: &'a [u8],
@@ -694,26 +785,31 @@ struct Pass<'a> {
   behind: &'a ProtocolObject<dyn MTLTexture>,
   /// Named sources, at texture slots 3 and up.
   named: &'a [Retained<ProtocolObject<dyn MTLTexture>>],
+  /// The solved light (blank for unlit shaders).
+  light: &'a ProtocolObject<dyn MTLTexture>,
 }
 
 impl Pass<'_> {
-  /// Draws into `target`, starting from transparent. Returns false if no encoder was available.
+  /// Draws into `targets` (colour attachments 0, 1...), starting from transparent. Returns
+  /// false if no encoder was available.
   fn encode(
     &self,
     cb: &ProtocolObject<dyn MTLCommandBuffer>,
-    target: &ProtocolObject<dyn MTLTexture>,
+    targets: &[&ProtocolObject<dyn MTLTexture>],
   ) -> bool {
     let pass = MTLRenderPassDescriptor::renderPassDescriptor();
-    let color = unsafe { pass.colorAttachments().objectAtIndexedSubscript(0) };
-    color.setTexture(Some(target));
-    color.setLoadAction(MTLLoadAction::Clear);
-    color.setStoreAction(MTLStoreAction::Store);
-    color.setClearColor(MTLClearColor {
-      red: 0.0,
-      green: 0.0,
-      blue: 0.0,
-      alpha: 0.0,
-    });
+    for (i, target) in targets.iter().enumerate() {
+      let color = unsafe { pass.colorAttachments().objectAtIndexedSubscript(i) };
+      color.setTexture(Some(target));
+      color.setLoadAction(MTLLoadAction::Clear);
+      color.setStoreAction(MTLStoreAction::Store);
+      color.setClearColor(MTLClearColor {
+        red: 0.0,
+        green: 0.0,
+        blue: 0.0,
+        alpha: 0.0,
+      });
+    }
     let Some(enc) = cb.renderCommandEncoderWithDescriptor(&pass) else {
       return false;
     };
@@ -731,6 +827,7 @@ impl Pass<'_> {
       for (slot, texture) in (3..).zip(self.named) {
         enc.setFragmentTexture_atIndex(Some(texture), slot);
       }
+      enc.setFragmentTexture_atIndex(Some(self.light), pipeline::LIGHT_SLOT.into());
       enc.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
     }
     enc.endEncoding();
@@ -1233,6 +1330,106 @@ mod tests {
     for _ in 0..n {
       render_red(r, &target);
     }
+  }
+
+  // --- light ---
+
+  /// A lamp at (64, 32) on a 192x64 point screen, one cell a point, and a wall from (96, 20) to
+  /// (100, 44) of albedo `wall`. `fs` shows the light, times 4, as BGRA bytes.
+  fn lamp_and_wall(wall: [f32; 3]) -> Option<Renderer> {
+    let mut s = spec(
+      "@fragment fn scene(in: VsOut) -> Scene {
+        let p = u.region.xy + in.uv * u.region.zw;
+        var s: Scene;
+        s.emit = vec4f(0.0);
+        s.matter = vec4f(0.0);
+        if (distance(p, vec2f(64.0, 32.0)) < 3.0) {
+          s.emit = vec4f(1.0);
+          s.matter = vec4f(0.0, 0.0, 0.0, 1.0);
+        }
+        if (p.x >= 96.0 && p.x < 100.0 && p.y > 20.0 && p.y < 44.0) {
+          s.matter = vec4f(u.wall, 1.0);
+        }
+        return s;
+      }
+      @fragment fn fs(in: VsOut) -> @location(0) vec4f {
+        let l = textureLoad(light, vec2i(in.uv * vec2f(textureDimensions(light))), 0).rgb;
+        return vec4f(min(l * 4.0, vec3f(1.0)), 1.0);
+      }",
+      &[("wall", UniformType::Vec3)],
+    );
+    s.region = Region {
+      x: 0.0,
+      y: 0.0,
+      w: 192.0,
+      h: 64.0,
+    };
+    s.cell = Some(1.0);
+    renderer(&with_values(s, &[("wall", &wall)]))
+  }
+
+  /// Red, green and blue of the light at a point, after `frames` frames.
+  fn lit(renderer: &Renderer, frames: usize, x: usize, y: usize) -> [u8; 3] {
+    let mut image = Vec::new();
+    for _ in 0..frames {
+      image = render_image(renderer, 192, 64);
+    }
+    let [blue, green, red, _] = image[y * 192 + x];
+    [red, green, blue]
+  }
+
+  #[test]
+  fn light_falls_off_from_a_lamp_and_walls_cast_shadows() {
+    let Some(r) = lamp_and_wall([0.0; 3]) else {
+      return;
+    };
+    let near = lit(&r, 1, 74, 32)[0];
+    let far = lit(&r, 1, 24, 32)[0];
+    let shadow = lit(&r, 1, 104, 32)[0];
+    assert!(near > far && far > 0, "falls off: {near} near, {far} far");
+    assert!(shadow * 4 < far, "{shadow} behind the wall, {far} in the open");
+    let beside = lit(&r, 1, 104, 2)[0];
+    assert!(beside > shadow * 2, "past the wall's end it's lit: {beside} vs {shadow}");
+  }
+
+  #[test]
+  fn light_bounces_off_walls_in_their_colour() {
+    let Some(r) = lamp_and_wall([1.0, 0.0, 0.0]) else {
+      return;
+    };
+    // Off to the side, near the wall's lit face: the lamp is white, so any red is bounced.
+    let [red, green, _] = lit(&r, 30, 92, 18);
+    assert!(red > green + 3, "red {red} vs green {green}");
+    let Some(white) = lamp_and_wall([0.0; 3]) else {
+      return;
+    };
+    let [red, green, _] = lit(&white, 30, 92, 18);
+    assert!(red.abs_diff(green) <= 1, "a black wall bounces nothing: {red} vs {green}");
+  }
+
+  #[test]
+  fn snapshots_lamp_and_wall() {
+    let (Some(dir), Some(r)) = (crate::snapshot::dir(), lamp_and_wall([1.0, 0.2, 0.2])) else {
+      return;
+    };
+    let mut image = Vec::new();
+    for _ in 0..30 {
+      image = render_image(&r, 192, 64);
+    }
+    let rgba: Vec<u8> = image.iter().flat_map(|&[b, g, r, _]| [r, g, b, 255]).collect();
+    crate::snapshot::write_png(&dir.join("lamp-and-wall.png"), 192, 64, &rgba);
+  }
+
+  #[test]
+  fn lit_shaders_settle_then_stop_drawing() {
+    let Some(r) = lamp_and_wall([1.0; 3]) else {
+      return;
+    };
+    assert!(r.needs_draw());
+    let draws = (0..200).filter(|_| r.needs_draw()).count();
+    assert_eq!(draws, SETTLE_FRAMES as usize);
+    r.set_values(&BTreeMap::new()).unwrap();
+    assert!(r.needs_draw(), "a change starts it again");
   }
 
   // --- lava ---
@@ -2178,6 +2375,34 @@ mod tests {
     );
     MOUSE.with(|m| m.set(Some([100.0, 50.0])));
     snapshot(name, &render_image(&r, 200 * SCALE, 100 * SCALE), &[rect]);
+  }
+
+  #[test]
+  fn snapshots_light() {
+    let rects = [[110.0, 15.0, 70.0, 70.0], [15.0, 55.0, 60.0, 35.0]];
+    let mut spec = demo_spec("light");
+    spec.cell = Some(1.0);
+    let Some(r) = renderer(&spec) else {
+      return;
+    };
+    r.0.state.lock().latest = Some(scene_texture(&r.0.device, &rects));
+    set(
+      &r,
+      &[
+        ("windows", windows(&rects)),
+        ("lamp", vec![6.0]),
+        ("glow", vec![4.0]),
+        ("density", vec![0.02]),
+        ("ambient", vec![0.15]),
+        ("exposure", vec![3.0]),
+      ],
+    );
+    MOUSE.with(|m| m.set(Some([80.0, 30.0])));
+    let mut image = Vec::new();
+    for _ in 0..40 {
+      image = render_image(&r, 200 * SCALE, 100 * SCALE);
+    }
+    snapshot("light", &image, &rects);
   }
 
   #[test]

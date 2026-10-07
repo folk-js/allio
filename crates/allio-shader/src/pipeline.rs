@@ -15,14 +15,19 @@ use std::fmt::Write as _;
 pub(crate) const VERTEX_ENTRY: &str = "vs";
 pub(crate) const FRAGMENT_ENTRY: &str = "fs";
 pub(crate) const SIM_ENTRY: &str = "sim";
+/// The optional function that describes what light does at each cell, making a shader lit.
+pub(crate) const SCENE_ENTRY: &str = "scene";
 
 /// A translated shader, ready to build Metal pipelines from.
 #[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)] // independent facts about the shader
 pub(crate) struct Compiled {
   pub(crate) msl: String,
   pub(crate) layout: Layout,
   /// Whether the WGSL defines `sim`.
   pub(crate) stateful: bool,
+  /// Whether the WGSL defines `scene`, so the host solves its light into `light`.
+  pub(crate) lit: bool,
   /// The named sources, in binding order.
   pub(crate) sources: Vec<String>,
   /// The textures the shader actually reads (`screen`, `behind`, named sources): only these need
@@ -36,8 +41,15 @@ pub(crate) struct Compiled {
 
 /// Binding of the first named source; Metal texture slot is this minus 2.
 const FIRST_SOURCE_BINDING: u32 = 5;
+/// Binding of `light`, after the last named source; its Metal texture slot is
+/// [`LIGHT_SLOT`].
+#[allow(clippy::cast_possible_truncation)] // MAX_SOURCES is 8
+const LIGHT_BINDING: u32 = FIRST_SOURCE_BINDING + MAX_SOURCES as u32;
+/// Metal texture slot of `light`.
+#[allow(clippy::cast_possible_truncation)]
+pub(crate) const LIGHT_SLOT: u8 = 3 + MAX_SOURCES as u8;
 /// Names the prelude already uses.
-const RESERVED: [&str; 5] = ["u", "samp", "screen", "state", "behind"];
+const RESERVED: [&str; 6] = ["u", "samp", "screen", "state", "behind", "light"];
 
 fn check_source_name(name: &str) -> Result<(), String> {
   let mut chars = name.chars();
@@ -72,9 +84,23 @@ struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f }
 }
 ";
 
+/// What a lit shader's `scene` returns for each cell.
+const SCENE_STRUCT: &str = "
+struct Scene { @location(0) emit: vec4f, @location(1) matter: vec4f }
+";
+
+/// Whether `wgsl` defines a function called `name` (checked properly once parsed).
+fn defines_fn(wgsl: &str, name: &str) -> bool {
+  wgsl
+    .match_indices("fn ")
+    .any(|(at, m)| wgsl[at + m.len()..].trim_start().strip_prefix(name).is_some_and(|rest| {
+      !rest.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
+    }))
+}
+
 /// The WGSL prepended to user source. `behind` adds the second capture; `sources` are named
-/// textures after it.
-pub(crate) fn prelude(layout: &Layout, behind: bool, sources: &[String]) -> String {
+/// textures after it; `lit` adds the `Scene` struct and the `light` texture.
+pub(crate) fn prelude(layout: &Layout, behind: bool, sources: &[String], lit: bool) -> String {
   let mut s = String::from("struct Uniforms {\n");
   for f in &layout.fields {
     let _ = writeln!(s, "  {}: {},", f.name, f.ty.wgsl());
@@ -91,6 +117,13 @@ pub(crate) fn prelude(layout: &Layout, behind: bool, sources: &[String]) -> Stri
       "@group(0) @binding({binding}) var {name}: texture_2d<f32>;"
     );
   }
+  if lit {
+    let _ = writeln!(
+      s,
+      "@group(0) @binding({LIGHT_BINDING}) var light: texture_2d<f32>;"
+    );
+    s.push_str(SCENE_STRUCT);
+  }
   s.push_str(VERTEX_STAGE);
   s
 }
@@ -105,9 +138,10 @@ pub(crate) fn compile(spec: &ShaderSpec) -> Result<Compiled, String> {
   for name in &sources {
     check_source_name(name)?;
   }
+  let lit = defines_fn(&spec.wgsl, SCENE_ENTRY);
   let source = format!(
     "{}{}",
-    prelude(&layout, spec.behind.is_some(), &sources),
+    prelude(&layout, spec.behind.is_some(), &sources, lit),
     spec.wgsl
   );
   let module = naga::front::wgsl::parse_str(&source).map_err(|e| e.emit_to_string(&source))?;
@@ -142,6 +176,9 @@ pub(crate) fn compile(spec: &ShaderSpec) -> Result<Compiled, String> {
     .insert(SIM_ENTRY.into(), fragment_resources());
   options
     .per_entry_point_map
+    .insert(SCENE_ENTRY.into(), fragment_resources());
+  options
+    .per_entry_point_map
     .insert(VERTEX_ENTRY.into(), msl::EntryPointResources::default());
 
   let (msl, _) = msl::write_string(&module, &info, &options, &msl::PipelineOptions::default())
@@ -150,6 +187,7 @@ pub(crate) fn compile(spec: &ShaderSpec) -> Result<Compiled, String> {
     msl,
     layout,
     stateful: defines(SIM_ENTRY),
+    lit: defines(SCENE_ENTRY),
     reads: textures_read(&module, &info),
     animated: defines(SIM_ENTRY)
       || mentions(&spec.wgsl, "u.time")
@@ -191,6 +229,13 @@ fn fragment_resources(sources: usize) -> msl::EntryPointResources {
       },
     );
   }
+  bind(
+    LIGHT_BINDING,
+    msl::BindTarget {
+      texture: Some(LIGHT_SLOT),
+      ..Default::default()
+    },
+  );
   for (binding, slot) in (FIRST_SOURCE_BINDING..).zip(3u8..).take(sources) {
     bind(
       binding,
@@ -282,7 +327,7 @@ mod tests {
   fn layout_matches_naga() {
     let s = rich();
     let c = compile(&s).unwrap();
-    let source = format!("{}{}", prelude(&c.layout, false, &[]), s.wgsl);
+    let source = format!("{}{}", prelude(&c.layout, false, &[], false), s.wgsl);
     let module = naga::front::wgsl::parse_str(&source).unwrap();
     let (_, ty) = module
       .types

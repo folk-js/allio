@@ -106,6 +106,34 @@ A shader that defines a second function remembers between frames:
 
 Read the state from the page with `await fx.probe(x, y)`: it returns the cell under a screen point as `[r, g, b, a]`, as `sim` last wrote it. That is how `lava` knows whether the cursor is over a burnt-out hole.
 
+## Lit shaders: `scene` and `light`
+
+A shader that defines `scene` gets global illumination. `scene` says what each cell of the screen is made of, as far as light goes; the host solves how light moves between cells (holographic radiance cascades, ported from folkjs), and `fs` reads the result as the texture `light`.
+
+```wgsl
+@fragment fn scene(in: VsOut) -> Scene {
+  var s: Scene;
+  s.emit = vec4f(0.0);   // rgb: light given off, linear (a unused)
+  s.matter = vec4f(0.0); // rgb: albedo (how much light bounces back, per channel); a: opacity
+  if (distance(u.region.xy + in.uv * u.region.zw, u.mouse) < 8.0) {
+    s.emit = vec4f(20.0);
+    s.matter.a = 1.0;    // light comes from what it can stop: give emitters opacity
+  }
+  return s;
+}
+@fragment fn fs(in: VsOut) -> @location(0) vec4f {
+  let l = textureSampleLevel(light, samp, in.uv, 0.0).rgb;
+  return vec4f(0.0, 0.0, 0.0, 1.0 - min(dot(l, vec3f(0.33)), 1.0)); // dark where unlit
+}
+```
+
+- `scene` runs once per cell of `cell` points (the same grid as `state`), and can read everything `fs` can.
+- **Opacity is per point**: a cell lets `(1 - a)^points` of the light crossing it through, whatever the cell size. 0 is air, 1 is a wall; in between is fog or frosted glass. A cell gives off `emit` times what it stops, so a light source needs opacity.
+- **Light bounces**: each frame, what lit a cell last frame is given off again times its albedo, so light bounces a little further every frame and coloured things tint what they light.
+- **`light`** is the mean radiance arriving at each cell: a cell surrounded by emitters of 1 sees 1. Sample it with `samp` for smooth light. Nothing comes from beyond the region.
+- A lit shader keeps drawing for 90 frames after the last change, so bounces settle, then stops until something changes again.
+- Cost grows with the number of cells: a full screen at 4 points a cell is about 380 by 250.
+
 ## How it behaves
 
 - **Latest wins.** `set()` and `region` updates made in one task are merged into one message, and the native side overwrites its state instead of queueing.
@@ -134,6 +162,8 @@ Pick them from the tray menu. Their shaders are in `src-web/shaders/`; a test bu
 - **blobs**: classic monochrome metaballs. A few blobs wander the screen as particles in the simulation state: they keep apart from each other, are shoved out of windows and drawn to window edges, where they cling. Windows and the cursor are metaballs in the same field, so a blob near one fuses with it in a bridge of goo. Uses `windows`, `sim`.
 - **xray**: a hole punched through the window under the cursor, modelled as a quarter-arc of a circle. Between the outer circle and the inner one the window's surface is flat at the outer edge and curves smoothly down until it runs straight through at the inner edge; inside is what is behind the window. The surface normal at each point sets the lighting (ambient plus diffuse from the top-left, and a bright line where the surface turns edge-on), and the window's own pixels are taken from where the curved surface lies: `warp` 1 squeezes the texture toward the hole by arc length (as it would look painted on the rim), 0 leaves it flat, -1 stretches it the other way. `thickness` is the rim's width. Uses `windows` and both captures (`screen`, and `behind` without the hovered window).
 - **lava**: click and hold in empty space and lava pours from the cursor, lands on windows, pools, and eats through them, leaving holes onto the desktop. What a window is made of is read from its colour, and decides how it burns: white, green and red things are fuel (flames, and fire spreads through them much faster than the lava eats), blue things are water (steam, and lava touching them cools to stone), very dark things are coal (slow, glowing embers), and everything else is metal (heats through red to white-hot and conducts heat slowly). Clicks on windows still go to the windows, but a burnt-out hole counts as empty space. Drawn one 3-point cell at a time for a pixel-art look. Uses everything: a `sim` with window geometry as solid ground, a four-channel `RGBA32Float` state, `behind`, `cell` and `probe`.
+
+- **light**: lights out. The desktop at night, lit by global illumination. The pointer carries a warm lamp, and the bright, colourful bits of every window (badges, buttons, video, selections) give off light of their own colour. Light flows freely over the desktop, soaks into windows like fog (`density`, per point), bounces off them in their colours, and leaves soft shadows behind them. The overlay only dims the real screen by how dark it is (and tints it a little), so the screen itself stays live; only the lighting lags a capture behind. Uses `scene`, `light`, `windows` and `screen`.
 
 Each demo's options are in `src-web/shaders/<name>.json`, read by both the page and the tests.
 

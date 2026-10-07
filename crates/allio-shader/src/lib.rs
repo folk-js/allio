@@ -17,6 +17,8 @@ mod capture;
 #[cfg(target_os = "macos")]
 mod diag;
 #[cfg(target_os = "macos")]
+mod light;
+#[cfg(target_os = "macos")]
 mod render;
 #[cfg(target_os = "macos")]
 mod shader;
