@@ -1,0 +1,29 @@
+[package]
+name = "allio-display"
+version = "0.1.0"
+edition = "2021"
+description = "A backstage display: a virtual display nobody looks at, for windows that should keep rendering out of sight"
+authors = ["Orion Reed"]
+license = "MIT"
+repository = "https://github.com/folk-js/allio"
+readme = "../../README.md"
+keywords = ["display", "virtual-display", "windows"]
+categories = ["gui"]
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+dispatch2 = "0.3.1"
+log = "0.4"
+objc2 = "0.6.4"
+objc2-core-foundation = "0.3.2"
+objc2-core-graphics = { version = "0.3.2", features = [
+  "CGDirectDisplay",
+  "CGDisplayConfiguration",
+  "CGError",
+  "libc",
+] }
+objc2-foundation = { version = "0.3.2", features = ["NSArray", "NSString"] }

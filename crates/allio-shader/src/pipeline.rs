@@ -4,9 +4,10 @@
 //! fullscreen vertex stage), so authors only write the fragment function. See
 //! `docs/SHADERS.md` for what the shader can read.
 
-use crate::spec::ShaderSpec;
+use crate::spec::{ShaderSpec, MAX_SOURCES};
 use crate::uniforms::Layout;
 use naga::back::msl;
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 /// Entry point names: the generated vertex stage, the display function every shader writes, and
@@ -22,6 +23,42 @@ pub(crate) struct Compiled {
   pub(crate) layout: Layout,
   /// Whether the WGSL defines `sim`.
   pub(crate) stateful: bool,
+  /// The named sources, in binding order.
+  pub(crate) sources: Vec<String>,
+  /// The textures the shader actually reads (`screen`, `behind`, named sources): only these need
+  /// capturing.
+  pub(crate) reads: BTreeSet<String>,
+  /// Whether it changes by itself (`sim`, `u.time`, `u.frame`), so needs drawing every frame.
+  pub(crate) animated: bool,
+  /// Whether it reads `u.mouse`, so needs drawing when the pointer moves.
+  pub(crate) reads_mouse: bool,
+}
+
+/// Binding of the first named source; Metal texture slot is this minus 2.
+const FIRST_SOURCE_BINDING: u32 = 5;
+/// Names the prelude already uses.
+const RESERVED: [&str; 5] = ["u", "samp", "screen", "state", "behind"];
+
+fn check_source_name(name: &str) -> Result<(), String> {
+  let mut chars = name.chars();
+  let ident = chars
+    .next()
+    .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+    && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+  if !ident || RESERVED.contains(&name) {
+    return Err(format!("'{name}' can't be a source name"));
+  }
+  Ok(())
+}
+
+/// Whether `wgsl` mentions `name` as a whole identifier path (so `u.time` but not `u.timeout`).
+fn mentions(wgsl: &str, name: &str) -> bool {
+  wgsl.match_indices(name).any(|(at, _)| {
+    let before = wgsl[..at].chars().next_back();
+    let after = wgsl[at + name.len()..].chars().next();
+    !before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+      && !after.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+  })
 }
 
 const VERTEX_STAGE: &str = "
@@ -35,8 +72,9 @@ struct VsOut { @builtin(position) pos: vec4f, @location(0) uv: vec2f }
 }
 ";
 
-/// The WGSL prepended to user source. `behind` adds the second capture.
-pub(crate) fn prelude(layout: &Layout, behind: bool) -> String {
+/// The WGSL prepended to user source. `behind` adds the second capture; `sources` are named
+/// textures after it.
+pub(crate) fn prelude(layout: &Layout, behind: bool, sources: &[String]) -> String {
   let mut s = String::from("struct Uniforms {\n");
   for f in &layout.fields {
     let _ = writeln!(s, "  {}: {},", f.name, f.ty.wgsl());
@@ -47,6 +85,12 @@ pub(crate) fn prelude(layout: &Layout, behind: bool) -> String {
   if behind {
     s.push_str("@group(0) @binding(4) var behind: texture_2d<f32>;\n");
   }
+  for (binding, name) in (FIRST_SOURCE_BINDING..).zip(sources) {
+    let _ = writeln!(
+      s,
+      "@group(0) @binding({binding}) var {name}: texture_2d<f32>;"
+    );
+  }
   s.push_str(VERTEX_STAGE);
   s
 }
@@ -54,7 +98,18 @@ pub(crate) fn prelude(layout: &Layout, behind: bool) -> String {
 /// Validates and translates a spec. Errors are human-readable WGSL diagnostics.
 pub(crate) fn compile(spec: &ShaderSpec) -> Result<Compiled, String> {
   let layout = Layout::new(&spec.uniforms)?;
-  let source = format!("{}{}", prelude(&layout, spec.behind.is_some()), spec.wgsl);
+  if spec.sources.len() > MAX_SOURCES {
+    return Err(format!("at most {MAX_SOURCES} sources"));
+  }
+  let sources: Vec<String> = spec.sources.keys().cloned().collect();
+  for name in &sources {
+    check_source_name(name)?;
+  }
+  let source = format!(
+    "{}{}",
+    prelude(&layout, spec.behind.is_some(), &sources),
+    spec.wgsl
+  );
   let module = naga::front::wgsl::parse_str(&source).map_err(|e| e.emit_to_string(&source))?;
   let info = naga::valid::Validator::new(
     naga::valid::ValidationFlags::all(),
@@ -74,51 +129,7 @@ pub(crate) fn compile(spec: &ShaderSpec) -> Result<Compiled, String> {
     ));
   }
 
-  // Fragment stages get the uniform buffer, sampler, `screen` and `state` at matching Metal slots.
-  let fragment_resources = || {
-    let mut resources = msl::EntryPointResources::default();
-    let mut bind = |binding: u32, target: msl::BindTarget| {
-      resources
-        .resources
-        .insert(naga::ResourceBinding { group: 0, binding }, target);
-    };
-    bind(
-      0,
-      msl::BindTarget {
-        buffer: Some(0),
-        ..Default::default()
-      },
-    );
-    bind(
-      1,
-      msl::BindTarget {
-        sampler: Some(msl::BindSamplerTarget::Resource(0)),
-        ..Default::default()
-      },
-    );
-    bind(
-      2,
-      msl::BindTarget {
-        texture: Some(0),
-        ..Default::default()
-      },
-    );
-    bind(
-      3,
-      msl::BindTarget {
-        texture: Some(1),
-        ..Default::default()
-      },
-    );
-    bind(
-      4,
-      msl::BindTarget {
-        texture: Some(2),
-        ..Default::default()
-      },
-    );
-    resources
-  };
+  let fragment_resources = || fragment_resources(sources.len());
   let mut options = msl::Options {
     lang_version: (2, 4),
     ..Default::default()
@@ -139,7 +150,77 @@ pub(crate) fn compile(spec: &ShaderSpec) -> Result<Compiled, String> {
     msl,
     layout,
     stateful: defines(SIM_ENTRY),
+    reads: textures_read(&module, &info),
+    animated: defines(SIM_ENTRY)
+      || mentions(&spec.wgsl, "u.time")
+      || mentions(&spec.wgsl, "u.frame"),
+    reads_mouse: mentions(&spec.wgsl, "u.mouse"),
+    sources,
   })
+}
+
+/// Where fragment stages find things in Metal: the uniform buffer, the sampler, then `screen`,
+/// `state`, `behind` and the `sources` named sources at texture slots 0, 1, 2, 3...
+fn fragment_resources(sources: usize) -> msl::EntryPointResources {
+  let mut resources = msl::EntryPointResources::default();
+  let mut bind = |binding: u32, target: msl::BindTarget| {
+    resources
+      .resources
+      .insert(naga::ResourceBinding { group: 0, binding }, target);
+  };
+  bind(
+    0,
+    msl::BindTarget {
+      buffer: Some(0),
+      ..Default::default()
+    },
+  );
+  bind(
+    1,
+    msl::BindTarget {
+      sampler: Some(msl::BindSamplerTarget::Resource(0)),
+      ..Default::default()
+    },
+  );
+  for (binding, slot) in [(2, 0), (3, 1), (4, 2)] {
+    bind(
+      binding,
+      msl::BindTarget {
+        texture: Some(slot),
+        ..Default::default()
+      },
+    );
+  }
+  for (binding, slot) in (FIRST_SOURCE_BINDING..).zip(3u8..).take(sources) {
+    bind(
+      binding,
+      msl::BindTarget {
+        texture: Some(slot),
+        ..Default::default()
+      },
+    );
+  }
+  resources
+}
+
+/// The texture globals that the fragment entry points (or anything they call) read.
+fn textures_read(module: &naga::Module, info: &naga::valid::ModuleInfo) -> BTreeSet<String> {
+  let mut reads = BTreeSet::new();
+  for (index, ep) in module.entry_points.iter().enumerate() {
+    if ep.stage != naga::ShaderStage::Fragment {
+      continue;
+    }
+    let uses = info.get_entry_point(index);
+    for (handle, global) in module.global_variables.iter() {
+      let is_texture = matches!(module.types[global.ty].inner, naga::TypeInner::Image { .. });
+      if is_texture && !uses[handle].is_empty() {
+        if let Some(name) = &global.name {
+          reads.insert(name.clone());
+        }
+      }
+    }
+  }
+  reads
 }
 
 #[cfg(test)]
@@ -168,6 +249,8 @@ mod tests {
       cell: None,
       steps: None,
       behind: None,
+      sources: BTreeMap::new(),
+      animate: None,
     }
   }
 
@@ -199,7 +282,7 @@ mod tests {
   fn layout_matches_naga() {
     let s = rich();
     let c = compile(&s).unwrap();
-    let source = format!("{}{}", prelude(&c.layout, false), s.wgsl);
+    let source = format!("{}{}", prelude(&c.layout, false, &[]), s.wgsl);
     let module = naga::front::wgsl::parse_str(&source).unwrap();
     let (_, ty) = module
       .types
@@ -242,6 +325,36 @@ mod tests {
     );
     s.behind = Some(Hide::None);
     assert!(compile(&s).is_ok());
+  }
+
+  #[test]
+  fn named_sources_are_textures_and_only_what_is_read_is_reported() {
+    use crate::spec::Source;
+    let wgsl = "fn pick() -> vec4f { return textureSampleLevel(win, samp, vec2f(0.0), 0.0); }
+      @fragment fn fs(in: VsOut) -> @location(0) vec4f { return pick() * u.time; }";
+    let mut s = spec(wgsl, &[]);
+    s.sources
+      .insert("win".into(), Some(Source::Window { window: 1 }));
+    s.sources.insert("spare".into(), None);
+    let c = compile(&s).unwrap();
+    assert_eq!(c.sources, ["spare", "win"]);
+    assert_eq!(
+      c.reads.iter().collect::<Vec<_>>(),
+      ["win"],
+      "read through a helper; screen unread"
+    );
+    assert!(c.animated && !c.reads_mouse);
+
+    s.sources.insert("screen".into(), None);
+    assert!(compile(&s).unwrap_err().contains("source name"));
+  }
+
+  #[test]
+  fn still_shaders_are_not_animated() {
+    let c = compile(&spec(PASSTHROUGH, &[("timeout", UniformType::F32)])).unwrap();
+    assert!(!c.animated && !c.reads_mouse);
+    assert!(c.reads.contains("screen"));
+    assert!(mentions("x * u.mouse.x", "u.mouse") && !mentions("u.timeout", "u.time"));
   }
 
   #[test]

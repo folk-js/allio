@@ -70,6 +70,27 @@ Declare a second capture with the `behind` option (a `Hide`, like `hide`) and th
 
 A shader that returns transparent pixels (`vec4f(0.0)`) leaves the real screen showing through, so it can cut a hole in one place and touch nothing else. This is how `xray` and `lava` work. Colour is premultiplied, so `vec4f(rgb, 0.0)` adds light without dimming, and the real screen is never copied or delayed where you draw nothing.
 
+## Windows and more sources: `sources`
+
+Declare named sources and each is read as a `texture_2d<f32>` of that name:
+
+```ts
+allio.shader({
+  region, wgsl,
+  sources: { win: { window: id }, top: { region: { x: 0, y: 0, w: 400, h: 40 } }, spare: null },
+  uniforms: { win_rect: "vec4f" },
+});
+fx.sources = { win: { window: other }, top: null, spare: null }; // retarget without rebuilding
+```
+
+- `{ window: id }` is a window's own pixels, without its shadow, even while it is covered or on another Space. Declare `NAME_rect: "vec4f"` and the host keeps it at the window's `(x, y, w, h)` on screen, so `(p - u.NAME_rect.xy) / u.NAME_rect.zw` is the texture coordinate of screen point `p`. The capture is resized with the window.
+- `{ region, hide? }` is part of the screen, like `screen`.
+- `null` declares the name with nothing in it (it reads as transparent), so a page can keep a fixed set of names and fill them as it goes.
+
+Changing what a name shows is cheap; adding or removing names rebuilds the pipeline. At most 8 sources. `screen` and `behind` are the same machinery: two display sources that follow the region.
+
+**Only what is read is captured.** A source (including `screen` and `behind`) that the shader never reads, directly or through a function it calls, is not captured at all.
+
 ## Stateful shaders
 
 A shader that defines a second function remembers between frames:
@@ -87,7 +108,8 @@ Read the state from the page with `await fx.probe(x, y)`: it returns the cell un
 
 ## How it behaves
 
-- **Latest wins.** `set()` and `region` updates made within one animation frame are merged into one message, and the native side overwrites its state instead of queueing. The shader redraws on every vsync with whatever state it has.
+- **Latest wins.** `set()` and `region` updates made in one task are merged into one message, and the native side overwrites its state instead of queueing.
+- **Drawn only when something changed.** A shader draws when one of its sources delivers a frame (`ScreenCaptureKit` only delivers when content changes), a value or the region changes, or the pointer moves if it reads `u.mouse`. One that reads `u.time` or `u.frame`, or defines `sim`, draws every frame; set `animate: false` (or `fx.animate`) to stop that, `true` to force it.
 - **Client owns the state.** The client pushes its complete set of shaders whenever shaders are added or removed, and whenever the socket opens. Reconnecting needs no special handling.
 - **Lifetime follows the connection.** When a client's websocket closes, its shaders are removed. Switching overlays or reloading a page cleans up by itself.
 - **Errors.** A shader that fails to compile or has bad initial values is rejected before any window appears, and `fx.error` holds the diagnostics. If an edit of `fx.wgsl` fails, the previous version keeps running. Setting an undeclared uniform or the wrong number of components throws at the call site.

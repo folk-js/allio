@@ -1,5 +1,5 @@
 /** Shared setup for the screen shader demos. */
-import { Allio, AllioPassthrough, type Hide, type Region, type Uniforms } from "allio";
+import { Allio, AllioPassthrough, type Hide, type Region, type Source, type Uniforms } from "allio";
 
 /** The whole screen, in points: the overlay window is exactly that big. */
 export const screen = (): Region => ({ x: 0, y: 0, w: innerWidth, h: innerHeight });
@@ -7,11 +7,21 @@ export const screen = (): Region => ({ x: 0, y: 0, w: innerWidth, h: innerHeight
 /** A demo's `.json` file: its uniforms and options, shared with the Rust tests. */
 interface Manifest {
   uniforms: Record<string, string>;
+  /** Files in `shaders/lib/` put in front of the shader. */
+  include?: string[];
+  /** Named sources the shader reads (usually `null`: names the page fills later). */
+  sources?: Record<string, unknown>;
   hide?: unknown;
   cell?: number;
   steps?: number;
   behind?: unknown;
 }
+
+const LIBS = import.meta.glob("../shaders/lib/*.wgsl", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
+
+/** A demo's shader source with the libraries its manifest includes in front, as the tests build it. */
+export const source = (m: Manifest, wgsl: string): string =>
+  [...(m.include ?? []).map((lib) => LIBS[`../shaders/lib/${lib}.wgsl`] ?? ""), wgsl].join("\n");
 
 /** The shader options a manifest declares. */
 export const declared = (m: Manifest) => ({
@@ -20,6 +30,7 @@ export const declared = (m: Manifest) => ({
   cell: m.cell,
   steps: m.steps,
   behind: m.behind as Hide | undefined,
+  sources: m.sources as Record<string, Source | null> | undefined,
 });
 
 /** Connects to allio, with the control panel clickable and everything else passing clicks through. */

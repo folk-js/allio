@@ -11,7 +11,7 @@ non-settable attributes while ignoring them, so the return code alone can't be t
 use super::Allio;
 use crate::a11y::{Action, SettableAttribute};
 use crate::platform::PlatformHandle;
-use crate::types::{AllioError, AllioResult, ElementId, TextRange};
+use crate::types::{AllioError, AllioResult, ElementId, TextRange, WindowId};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -88,6 +88,16 @@ impl Allio {
     let handle = self.element_handle(element_id)?.0;
     handle.replace_text(range.start, range.len(), text)?;
     self.refresh_element(element_id).map(drop)
+  }
+
+  /// Move a window so its top-left is at (x, y), in global screen points (an AX write of its
+  /// position: no focus, no raise).
+  pub fn move_window(&self, window_id: WindowId, x: f64, y: f64) -> AllioResult<()> {
+    let (_, handle) = self
+      .window_with_handle(window_id)
+      .ok_or(AllioError::WindowNotFound(window_id))?;
+    let handle = handle.ok_or_else(|| AllioError::NotSupported(format!("window {window_id} has no accessibility handle")))?;
+    handle.set_position(x, y)
   }
 
   /// Perform an action on an element.

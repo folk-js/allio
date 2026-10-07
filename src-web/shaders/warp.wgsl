@@ -8,6 +8,9 @@
 //
 // The pointer field uses the same map (allio-pointer's `Warp`): while the pointer appears over the
 // deformed window, it really is over the matching point of the real one. Keep the two in step.
+//
+// When `dims.w` is 1, two round knobs are drawn at `knobs.xy` and `knobs.zw` (turning and
+// scaling), in the same pass so they move with the window.
 
 const MAX_ABOVE: i32 = 8;
 /// macOS window corner radius, in points.
@@ -54,6 +57,15 @@ fn grid_offset(p: vec2f) -> vec2f {
 
 @fragment fn fs(in: VsOut) -> @location(0) vec4f {
   let p = u.region.xy + in.uv * u.region.zw;
+  var out = deformed(p, in.uv);
+  if (u.dims.w > 0.5) {
+    out = chrome_knob(out, p, u.knobs.xy, 8.0);
+    out = chrome_knob(out, p, u.knobs.zw, 8.0);
+  }
+  return out;
+}
+
+fn deformed(p: vec2f, uv: vec2f) -> vec4f {
   if (u.win.z <= 0.0) {
     return vec4f(0.0);
   }
@@ -72,7 +84,7 @@ fn grid_offset(p: vec2f) -> vec2f {
   // is; elsewhere the screen as it is. Then a soft shadow, so the new shape reads as a window.
   var under = vec4f(0.0);
   if (inside(p, vec4f(u.win.xy - vec2f(SHADOW), u.win.zw + vec2f(2.0 * SHADOW)))) {
-    under = vec4f(textureSampleLevel(behind, samp, in.uv, 0.0).rgb, 1.0);
+    under = vec4f(textureSampleLevel(behind, samp, uv, 0.0).rgb, 1.0);
   }
   let shade = select(0.0, 0.28 * exp(-max(d, 0.0) / 12.0), d < 60.0);
   under = vec4f(under.rgb * (1.0 - shade), under.a + (1.0 - under.a) * shade);

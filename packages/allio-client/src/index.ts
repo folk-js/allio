@@ -10,6 +10,7 @@ export type {
   Shader,
   ShaderOptions,
   Region,
+  Source,
   UniformType,
   UniformValue,
   UniformValues,

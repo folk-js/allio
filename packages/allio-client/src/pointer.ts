@@ -15,7 +15,7 @@
  * `await allio.pointerState()`. Nothing is synthesised: the host rewrites real moves, so clicks,
  * drags, hover and the keyboard all behave as usual.
  *
- * Like shaders, the client owns the state: the complete set is pushed (at most once per frame)
+ * Like shaders, the client owns the state: the complete set is pushed (at most once per task)
  * whenever it changes and whenever the socket opens, and the host drops it when the connection
  * closes, so a reloaded or crashed page never leaves the cursor reshaped. Several fields combine:
  * gains multiply, the rest add up.
@@ -89,8 +89,8 @@ export class PointerSet {
   changed(): void {
     if (this.scheduled) return;
     this.scheduled = true;
-    const nextFrame = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (f: () => void) => setTimeout(f, 16);
-    nextFrame(() => {
+    // At the end of the current task, so the field keeps up with what the page draws.
+    queueMicrotask(() => {
       this.scheduled = false;
       void this.sync();
     });

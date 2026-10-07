@@ -40,6 +40,11 @@ impl Field {
     self.spec = spec;
   }
 
+  /// Areas whose displays the pointer never appears on.
+  pub(crate) fn away(&self) -> &[Rect] {
+    &self.spec.away
+  }
+
   /// Where the visual pointer goes when the hand moves it by `hand` from `from`.
   pub(crate) fn moved(&self, from: Vec2, hand: Vec2) -> Vec2 {
     let target = self.target_at(from);

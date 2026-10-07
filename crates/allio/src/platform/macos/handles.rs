@@ -222,6 +222,18 @@ impl ElementHandle {
     }
   }
 
+  /// Moves a window (its `AXPosition`) so its top-left is at (x, y) in global screen points.
+  pub(crate) fn set_position_internal(&self, x: f64, y: f64) -> Result<(), AXError> {
+    let mut point = CGPoint { x, y };
+    let value = unsafe { AXValueRef::new(AXValueType::CGPoint, NonNull::from(&mut point).cast()) }
+      .ok_or(AXError::IllegalArgument)?;
+    let attr = CFString::from_static_str("AXPosition");
+    match unsafe { self.inner.set_attribute_value(&attr, &value) } {
+      AXError::Success => Ok(()),
+      e => Err(e),
+    }
+  }
+
   /// Get element at position (for app-level elements only).
   pub(crate) fn element_at_position(&self, x: f64, y: f64) -> Option<ElementHandle> {
     unsafe {

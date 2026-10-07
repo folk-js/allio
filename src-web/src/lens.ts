@@ -8,13 +8,13 @@
  */
 import manifest from "../shaders/lens.json";
 import wgsl from "../shaders/lens.wgsl?raw";
-import { connect, declared, drawPointer, panel, screen } from "./shader-demo";
+import { connect, declared, drawPointer, panel, screen, source } from "./shader-demo";
 
 const { allio, passthrough } = connect();
 
 const lens = { x: innerWidth / 2, y: innerHeight / 2, r: 150, mag: 3 };
 
-const fx = allio.shader({ region: screen(), wgsl, ...declared(manifest) });
+const fx = allio.shader({ region: screen(), wgsl: source(manifest, wgsl), ...declared(manifest) });
 const field = allio.pointer();
 drawPointer(allio);
 
@@ -24,20 +24,28 @@ const showError = panel("Lens", "Drag the handle to put the lens over something 
 ]);
 fx.onerror = showError;
 
-const handle = Object.assign(document.createElement("div"), { className: "chrome drag-handle" });
+// The handle is drawn by the shader, with the lens; this is where it takes the pointer.
+const handle = Object.assign(document.createElement("div"), { className: "hit drag-handle" });
 handle.setAttribute("ax-io", "opaque");
 document.body.append(handle);
+
+let moving = false;
 
 function update() {
   Object.assign(handle.style, { left: `${lens.x}px`, top: `${lens.y - lens.r - 22}px` });
   fx.set({ lens: [lens.x, lens.y, lens.r, lens.mag] });
-  field.set({ lenses: lens.mag > 1 ? [{ ...lens }] : [] });
+  // While the lens is being moved the pointer acts where it appears, so it can't be carried
+  // into the lens (and out of the drag).
+  field.set({ lenses: lens.mag > 1 && !moving ? [{ ...lens }] : [] });
 }
 
 handle.addEventListener("pointerdown", (down) => {
+  down.preventDefault(); // no text selection while dragging
   const start = { ...lens };
   handle.setPointerCapture(down.pointerId);
   passthrough.mode = "opaque";
+  moving = true;
+  update();
   const move = (e: PointerEvent) => {
     lens.x = start.x + e.clientX - down.clientX;
     lens.y = start.y + e.clientY - down.clientY;
@@ -47,6 +55,8 @@ handle.addEventListener("pointerdown", (down) => {
     handle.removeEventListener("pointermove", move);
     handle.removeEventListener("pointerup", up);
     passthrough.mode = "auto";
+    moving = false;
+    update();
   };
   handle.addEventListener("pointermove", move);
   handle.addEventListener("pointerup", up);

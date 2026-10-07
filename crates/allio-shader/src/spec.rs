@@ -36,6 +36,32 @@ pub enum Hide {
   Windows(Vec<u32>),
 }
 
+/// Another texture a shader reads, by name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(untagged)]
+#[ts(export)]
+pub enum Source {
+  /// A window's own pixels (without its shadow), even while it is covered or on another Space.
+  /// Declare a uniform `NAME_rect: vec4f` to have the host keep it at the window's (x, y, w, h)
+  /// on screen, in points.
+  Window {
+    /// The window (system window id, as in allio's `Window.id`).
+    window: u32,
+  },
+  /// Part of the screen, like `screen`.
+  Display {
+    /// What to capture, in screen points.
+    region: Region,
+    /// Windows to leave out.
+    #[serde(default)]
+    #[ts(optional)]
+    hide: Option<Hide>,
+  },
+}
+
+/// Most named sources a shader can declare.
+pub const MAX_SOURCES: usize = 8;
+
 /// Everything that defines a shader. A client sends its complete desired set of these;
 /// applying the same spec twice changes nothing.
 ///
@@ -71,6 +97,19 @@ pub struct ShaderSpec {
   #[serde(default)]
   #[ts(optional)]
   pub behind: Option<Hide>,
+  /// More textures, by name: each is read in WGSL as a `texture_2d<f32>` of that name. `null`
+  /// declares the name with nothing in it yet (it reads as transparent), so a page can keep a
+  /// fixed set of names and fill them as it goes. Changing which names exist rebuilds the
+  /// pipeline; changing what a name shows doesn't.
+  #[serde(default)]
+  #[ts(optional, as = "Option<BTreeMap<String, Option<Source>>>")]
+  pub sources: BTreeMap<String, Option<Source>>,
+  /// Whether to draw every frame. By default a shader draws only when something it reads
+  /// changed: a captured frame, a value, the region, or the pointer if it reads `u.mouse`. One
+  /// that reads `u.time` or `u.frame`, or defines `sim`, draws every frame unless this is false.
+  #[serde(default)]
+  #[ts(optional)]
+  pub animate: Option<bool>,
 }
 
 impl ShaderSpec {
@@ -81,7 +120,7 @@ impl ShaderSpec {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
   use super::*;
 
@@ -107,6 +146,19 @@ mod tests {
     assert_eq!(spec.cell, None);
     assert_eq!(spec.steps(), 1);
     assert_eq!(spec.behind, None);
+  }
+
+  #[test]
+  fn sources_are_windows_displays_or_empty() {
+    let json = r#"{"wgsl":"x","uniforms":{},"values":{},"region":{"x":0,"y":0,"w":1,"h":1},
+      "sources":{"a":{"window":7},"b":{"region":{"x":1,"y":2,"w":3,"h":4}},"c":null}}"#;
+    let spec: ShaderSpec = serde_json::from_str(json).unwrap();
+    assert_eq!(spec.sources["a"], Some(Source::Window { window: 7 }));
+    assert!(matches!(
+      spec.sources["b"],
+      Some(Source::Display { hide: None, .. })
+    ));
+    assert_eq!(spec.sources["c"], None);
   }
 
   #[test]

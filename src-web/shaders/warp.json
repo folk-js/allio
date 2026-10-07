@@ -5,7 +5,11 @@
     "shift": "vec4f",
     "dims": "vec4f",
     "above": "vec4f[8]",
-    "grid": "vec4f[160]"
+    "grid": "vec4f[160]",
+    "knobs": "vec4f"
   },
-  "behind": "none"
+  "behind": "none",
+  "include": [
+    "chrome"
+  ]
 }

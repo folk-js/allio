@@ -3,8 +3,9 @@
 //! Draws the latest captured frame through a user pipeline into a `CAMetalLayer`.
 //!
 //! Everything a client can change (uniform values, the pipeline, the region) is plain state
-//! behind one mutex: setting it overwrites, nothing is queued. Each vsync draws whatever the
-//! state is at that moment.
+//! behind one mutex: setting it overwrites, nothing is queued. A vsync draws whatever the state
+//! is at that moment, but only if something the shader reads has changed since the last draw
+//! (or the shader animates by itself).
 
 #![allow(
   clippy::cast_possible_truncation,
@@ -44,6 +45,7 @@ struct Key {
   wgsl: String,
   uniforms: BTreeMap<String, UniformType>,
   behind: bool,
+  sources: Vec<String>,
 }
 
 impl Key {
@@ -52,18 +54,14 @@ impl Key {
       wgsl: spec.wgsl.clone(),
       uniforms: spec.uniforms.clone(),
       behind: spec.behind.is_some(),
+      sources: spec.sources.keys().cloned().collect(),
     }
   }
 }
 
-/// Which capture a frame belongs to.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum Source {
-  /// `screen`.
-  Screen,
-  /// `behind`.
-  Behind,
-}
+/// The texture names captures are delivered under, besides the named sources.
+pub(crate) const SCREEN: &str = "screen";
+pub(crate) const BEHIND: &str = "behind";
 
 /// A shader built into Metal objects, with its packed uniform bytes.
 pub(crate) struct Pipeline {
@@ -108,6 +106,14 @@ struct State {
   latest: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
   /// The same for the `behind` capture, if the shader has one.
   behind: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
+  /// The same for each named source that has had a frame.
+  named: BTreeMap<String, Retained<ProtocolObject<dyn MTLTexture>>>,
+  /// Something the shader reads changed since the last draw.
+  dirty: bool,
+  /// The pointer as of the last draw, for shaders that read it.
+  last_mouse: [f32; 2],
+  /// The spec's `animate`.
+  animate: Option<bool>,
   /// Simulation steps per frame.
   steps: u32,
   started: Instant,
@@ -119,6 +125,8 @@ struct Inner {
   queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
   layer: Retained<CAMetalLayer>,
   sampler: Retained<ProtocolObject<dyn MTLSamplerState>>,
+  /// A transparent texture for sources that have nothing in them yet.
+  blank: Retained<ProtocolObject<dyn MTLTexture>>,
   scale: f64,
   state: Mutex<State>,
 }
@@ -253,14 +261,13 @@ fn apply(pipeline: &mut Pipeline, values: &BTreeMap<String, Vec<f32>>) -> Result
 }
 
 impl Renderer {
+  /// A renderer for `spec`, already built into `pipeline`.
   pub(crate) fn new(
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     layer: Retained<CAMetalLayer>,
     scale: f64,
     pipeline: Pipeline,
-    region: Region,
-    cell: Option<f32>,
-    steps: u32,
+    spec: &ShaderSpec,
   ) -> Result<Self, String> {
     let queue = device.newCommandQueue().ok_or("no command queue")?;
     let sd = MTLSamplerDescriptor::new();
@@ -271,23 +278,29 @@ impl Renderer {
     let sampler = device
       .newSamplerStateWithDescriptor(&sd)
       .ok_or("no sampler")?;
+    let blank = blank_texture(&device).ok_or("no texture")?;
 
     let state = State {
       pipeline,
       sim: None,
-      cell: cell.unwrap_or(DEFAULT_CELL).max(0.5),
+      cell: spec.cell.unwrap_or(DEFAULT_CELL).max(0.5),
       frames: 0,
       latest: None,
       behind: None,
-      steps,
+      named: BTreeMap::new(),
+      dirty: true,
+      last_mouse: [f32::NAN; 2],
+      animate: spec.animate,
+      steps: spec.steps(),
       started: Instant::now(),
-      region,
+      region: spec.region,
     };
     Ok(Self(Arc::new(Inner {
       device,
       queue,
       layer,
       sampler,
+      blank,
       scale,
       state: Mutex::new(state),
     })))
@@ -299,6 +312,10 @@ impl Renderer {
     let mut st = self.0.state.lock();
     st.cell = spec.cell.unwrap_or(DEFAULT_CELL).max(0.5);
     st.steps = spec.steps();
+    st.animate = spec.animate;
+    st.dirty = true;
+    st.named
+      .retain(|name, _| spec.sources.get(name).is_some_and(Option::is_some));
     if st.pipeline.key == Key::of(spec) {
       apply(&mut st.pipeline, &spec.values)
     } else {
@@ -308,7 +325,21 @@ impl Renderer {
 
   /// The hot path: overwrite uniform values. Latest wins.
   pub(crate) fn set_values(&self, values: &BTreeMap<String, Vec<f32>>) -> Result<(), String> {
-    apply(&mut self.0.state.lock().pipeline, values)
+    let mut st = self.0.state.lock();
+    st.dirty = true;
+    apply(&mut st.pipeline, values)
+  }
+
+  /// The textures the current pipeline reads, so only those need capturing.
+  pub(crate) fn reads(&self) -> std::collections::BTreeSet<String> {
+    self.0.state.lock().pipeline.compiled.reads.clone()
+  }
+
+  /// Forgets a source's last frame (its window went away, or it was emptied).
+  pub(crate) fn clear(&self, name: &str) {
+    let mut st = self.0.state.lock();
+    st.named.remove(name);
+    st.dirty = true;
   }
 
   /// Reads one cell of the simulation state at a screen point: `[r, g, b, a]` as the `sim`
@@ -360,6 +391,7 @@ impl Renderer {
       return false;
     }
     st.region = region;
+    st.dirty = true;
     let scale = self.0.scale;
     self.0.layer.setDrawableSize(CGSize::new(
       (region.w * scale).round(),
@@ -368,34 +400,44 @@ impl Renderer {
     true
   }
 
-  /// Copies a new frame into the private texture. The capture surface is released as soon as
-  /// the copy completes.
-  pub(crate) fn present(&self, source: Source, frame: Frame) {
+  /// Copies a new frame into the private texture of `source` (`screen`, `behind` or a named
+  /// source). The capture surface is released as soon as the copy completes.
+  pub(crate) fn present(&self, source: &str, frame: Frame) {
     let i = &*self.0;
     let mut st = i.state.lock();
-    let slot = match source {
-      Source::Screen => &mut st.latest,
-      Source::Behind => &mut st.behind,
+    st.dirty = true;
+    let previous = match source {
+      SCREEN => st.latest.take(),
+      BEHIND => st.behind.take(),
+      name => st.named.remove(name),
     };
-    let stale = slot
-      .as_ref()
-      .is_none_or(|t| t.width() != frame.width || t.height() != frame.height);
-    if stale {
-      let d = unsafe {
-        MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
-          MTLPixelFormat::BGRA8Unorm,
-          frame.width,
-          frame.height,
-          false,
-        )
-      };
-      d.setUsage(MTLTextureUsage::ShaderRead);
-      d.setStorageMode(MTLStorageMode::Private);
-      *slot = i.device.newTextureWithDescriptor(&d);
-    }
-    let Some(dst) = slot.as_ref() else {
+    let target = previous
+      .filter(|t| t.width() == frame.width && t.height() == frame.height)
+      .or_else(|| {
+        let d = unsafe {
+          MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+            MTLPixelFormat::BGRA8Unorm,
+            frame.width,
+            frame.height,
+            false,
+          )
+        };
+        d.setUsage(MTLTextureUsage::ShaderRead);
+        d.setStorageMode(MTLStorageMode::Private);
+        i.device.newTextureWithDescriptor(&d)
+      });
+    let Some(dst) = target else {
       return warn_once("render: frame texture", "could not allocate");
     };
+    match source {
+      SCREEN => st.latest = Some(dst.clone()),
+      BEHIND => st.behind = Some(dst.clone()),
+      name => {
+        st.named.insert(name.to_string(), dst.clone());
+      }
+    }
+    drop(st);
+
     let Some(surface) = wrap(&i.device, &frame) else {
       return warn_once("render: frame", "Metal could not wrap the IOSurface");
     };
@@ -408,7 +450,7 @@ impl Renderer {
     let origin = MTLOrigin { x: 0, y: 0, z: 0 };
     unsafe {
       blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(
-        &surface, 0, 0, origin, MTLSize { width: frame.width, height: frame.height, depth: 1 }, dst, 0, 0, origin,
+        &surface, 0, 0, origin, MTLSize { width: frame.width, height: frame.height, depth: 1 }, &dst, 0, 0, origin,
       );
     }
     blit.endEncoding();
@@ -422,12 +464,35 @@ impl Renderer {
     cb.commit();
   }
 
-  /// Draws the current state into `drawable`. Called on every vsync.
+  /// Draws the current state into `drawable` if anything the shader reads changed since the
+  /// last draw, or it animates by itself. Called on every vsync.
   pub(crate) fn draw(&self, drawable: &ProtocolObject<dyn CAMetalDrawable>) {
+    if !self.needs_draw() {
+      return;
+    }
     if let Some(cb) = self.encode(&drawable.texture()) {
       cb.presentDrawable(ProtocolObject::from_ref(drawable));
       cb.commit();
     }
+  }
+
+  /// Whether a draw now would show anything new. Clears the dirty mark.
+  fn needs_draw(&self) -> bool {
+    let mut st = self.0.state.lock();
+    let compiled = &st.pipeline.compiled;
+    let animated = st.animate.unwrap_or(compiled.animated);
+    let pointer = compiled.reads_mouse.then(mouse);
+    let moved = pointer.is_some_and(|m| {
+      m.iter()
+        .zip(st.last_mouse)
+        .any(|(a, b)| a.to_bits() != b.to_bits())
+    });
+    if let Some(m) = pointer {
+      st.last_mouse = m;
+    }
+    let need = st.dirty || animated || moved;
+    st.dirty = false;
+    need
   }
 
   /// Encodes a simulation step (if the shader has one) and a draw into `target`.
@@ -437,7 +502,8 @@ impl Renderer {
   ) -> Option<Retained<ProtocolObject<dyn MTLCommandBuffer>>> {
     let i = &*self.0;
     let mut st = i.state.lock();
-    let src = st.latest.clone()?;
+    // Before the first frame (or when the shader never reads `screen`), `screen` is blank.
+    let src = st.latest.clone().unwrap_or_else(|| i.blank.clone());
     let Some(cb) = i.queue.commandBuffer() else {
       warn_once("render: draw", "no command buffer");
       return None;
@@ -451,9 +517,17 @@ impl Renderer {
       started,
       region,
       behind,
+      named,
       steps,
       ..
     } = &mut *st;
+    // Named sources in binding order; blank until they have had a frame.
+    let named: Vec<_> = p
+      .compiled
+      .sources
+      .iter()
+      .map(|name| named.get(name).unwrap_or(&i.blank).clone())
+      .collect();
     // Until the second capture has had a frame, `behind` is the screen.
     let behind = behind.as_ref().unwrap_or(&src);
 
@@ -503,6 +577,7 @@ impl Renderer {
           screen: &src,
           state: &sim.current,
           behind,
+          named: &named,
         };
         if !pass.encode(&cb, &sim.next) {
           warn_once("render: sim", "no render encoder");
@@ -521,6 +596,7 @@ impl Renderer {
       // A stateless shader never reads `state`, but the slot still needs a texture.
       state: latest_state.unwrap_or(&src),
       behind,
+      named: &named,
     };
     if !pass.encode(&cb, target) {
       warn_once("render: draw", "no render encoder");
@@ -528,6 +604,41 @@ impl Renderer {
     }
     Some(cb)
   }
+}
+
+/// A 1x1 transparent texture.
+fn blank_texture(
+  device: &ProtocolObject<dyn MTLDevice>,
+) -> Option<Retained<ProtocolObject<dyn MTLTexture>>> {
+  let d = unsafe {
+    MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+      MTLPixelFormat::BGRA8Unorm,
+      1,
+      1,
+      false,
+    )
+  };
+  d.setUsage(MTLTextureUsage::ShaderRead);
+  d.setStorageMode(MTLStorageMode::Shared);
+  let texture = device.newTextureWithDescriptor(&d)?;
+  let zero = [0u8; 4];
+  let region = objc2_metal::MTLRegion {
+    origin: MTLOrigin { x: 0, y: 0, z: 0 },
+    size: MTLSize {
+      width: 1,
+      height: 1,
+      depth: 1,
+    },
+  };
+  unsafe {
+    texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
+      region,
+      0,
+      NonNull::from(&zero).cast(),
+      4,
+    );
+  }
+  Some(texture)
 }
 
 impl Sim {
@@ -581,6 +692,8 @@ struct Pass<'a> {
   screen: &'a ProtocolObject<dyn MTLTexture>,
   state: &'a ProtocolObject<dyn MTLTexture>,
   behind: &'a ProtocolObject<dyn MTLTexture>,
+  /// Named sources, at texture slots 3 and up.
+  named: &'a [Retained<ProtocolObject<dyn MTLTexture>>],
 }
 
 impl Pass<'_> {
@@ -615,6 +728,9 @@ impl Pass<'_> {
       enc.setFragmentTexture_atIndex(Some(self.screen), 0);
       enc.setFragmentTexture_atIndex(Some(self.state), 1);
       enc.setFragmentTexture_atIndex(Some(self.behind), 2);
+      for (slot, texture) in (3..).zip(self.named) {
+        enc.setFragmentTexture_atIndex(Some(texture), slot);
+      }
       enc.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Triangle, 0, 3);
     }
     enc.endEncoding();
@@ -650,6 +766,8 @@ mod tests {
       cell: None,
       steps: None,
       behind: None,
+      sources: BTreeMap::new(),
+      animate: None,
     }
   }
 
@@ -667,18 +785,7 @@ mod tests {
     let layer = CAMetalLayer::new();
     layer.setDevice(Some(&device));
     let pipeline = build(&device, spec).unwrap();
-    Some(
-      Renderer::new(
-        device,
-        layer,
-        2.0,
-        pipeline,
-        spec.region,
-        spec.cell,
-        spec.steps(),
-      )
-      .unwrap(),
-    )
+    Some(Renderer::new(device, layer, 2.0, pipeline, spec).unwrap())
   }
 
   fn read(r: &Renderer, name: &str) -> Vec<f32> {
@@ -905,15 +1012,25 @@ mod tests {
     cell: Option<f32>,
     steps: Option<u32>,
     behind: Option<Hide>,
+    /// Files in `lib/` put in front of the shader, as the pages do.
+    #[serde(default)]
+    include: Vec<String>,
+    #[serde(default)]
+    sources: BTreeMap<String, Option<crate::spec::Source>>,
   }
 
   const DEMOS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../src-web/shaders");
 
   /// The demo as the page would declare it, over a 200x100 point region.
   fn demo_spec(name: &str) -> ShaderSpec {
-    let wgsl = std::fs::read_to_string(format!("{DEMOS}/{name}.wgsl")).unwrap();
     let json = std::fs::read_to_string(format!("{DEMOS}/{name}.json")).unwrap();
     let m: Manifest = serde_json::from_str(&json).unwrap();
+    let mut wgsl = String::new();
+    for lib in &m.include {
+      wgsl += &std::fs::read_to_string(format!("{DEMOS}/lib/{lib}.wgsl")).unwrap();
+      wgsl += "\n";
+    }
+    wgsl += &std::fs::read_to_string(format!("{DEMOS}/{name}.wgsl")).unwrap();
     ShaderSpec {
       wgsl,
       uniforms: m.uniforms,
@@ -928,6 +1045,8 @@ mod tests {
       cell: m.cell,
       steps: m.steps,
       behind: m.behind,
+      sources: m.sources,
+      animate: None,
     }
   }
 
@@ -1552,6 +1671,74 @@ mod tests {
     );
   }
 
+  // --- named sources and lazy drawing ---
+
+  #[test]
+  fn named_sources_are_sampled_and_empty_ones_are_transparent() {
+    let wgsl = "@fragment fn fs(in: VsOut) -> @location(0) vec4f {
+      return select(textureSampleLevel(spare, samp, in.uv, 0.0), textureSampleLevel(win, samp, in.uv, 0.0), in.uv.x < 0.5);
+    }";
+    let mut s = spec(wgsl, &[]);
+    s.region = Region {
+      x: 0.0,
+      y: 0.0,
+      w: 200.0,
+      h: 100.0,
+    };
+    s.sources.insert(
+      "win".into(),
+      Some(crate::spec::Source::Window { window: 1 }),
+    );
+    s.sources.insert("spare".into(), None);
+    let Some(r) = renderer(&s) else { return };
+    let ramp = ramp(&r.0.device);
+    r.0.state.lock().named.insert("win".into(), ramp);
+    let image = render_image(&r, 200, 100);
+    assert!(
+      (i32::from(image[50 * 200 + 40][0]) - 40).abs() <= 1,
+      "the window source: {:?}",
+      image[50 * 200 + 40]
+    );
+    assert_eq!(
+      image[50 * 200 + 150],
+      [0, 0, 0, 0],
+      "an empty source reads as transparent"
+    );
+    assert_eq!(
+      r.reads().into_iter().collect::<Vec<_>>(),
+      ["spare", "win"],
+      "screen isn't read, so it needn't be captured"
+    );
+  }
+
+  #[test]
+  fn drawing_happens_only_when_something_changed() {
+    let Some(r) = renderer(&spec(PASSTHROUGH, &[("fade", UniformType::F32)])) else {
+      return;
+    };
+    assert!(r.needs_draw(), "the first draw");
+    assert!(!r.needs_draw(), "then nothing changed");
+    r.set_values(&BTreeMap::from([("fade".to_string(), vec![0.5])]))
+      .unwrap();
+    assert!(r.needs_draw(), "a value changed");
+    assert!(!r.needs_draw());
+
+    let animated = spec(
+      "@fragment fn fs(in: VsOut) -> @location(0) vec4f { return vec4f(u.time); }",
+      &[],
+    );
+    let Some(r) = renderer(&animated) else { return };
+    assert!(
+      r.needs_draw() && r.needs_draw(),
+      "reads u.time: every frame"
+    );
+    let mut still = animated.clone();
+    still.animate = Some(false);
+    r.update(&still).unwrap();
+    assert!(r.needs_draw(), "the update itself");
+    assert!(!r.needs_draw(), "animate: false stops it");
+  }
+
   // --- pointer demos: lens, magnet, cuts ---
 
   /// A 200x100 screen whose blue channel is its x coordinate, so a pixel shows where it came from.
@@ -1568,35 +1755,64 @@ mod tests {
 
   #[test]
   fn lens_magnifies_around_its_centre_and_vanishes_at_1x() {
-    let Some(r) = demo_on_ramp("lens") else { return };
+    let Some(r) = demo_on_ramp("lens") else {
+      return;
+    };
     MOUSE.with(|m| m.set(Some([-500.0, -500.0]))); // the lens is fixed: the cursor doesn't matter
-    set(&r, &[("lens", vec![100.0, 50.0, 40.0, 2.0])]);
+    set(&r, &[("lens", vec![100.0, 60.0, 30.0, 2.0])]);
     let image = render_image(&r, 200, 100);
     let at = |x: usize, y: usize| image[y * 200 + x];
 
     // 10pt right of the centre shows what is 5pt right of it (allio-pointer's lens test uses the
     // same numbers, so pointer and picture agree).
-    assert!((i32::from(at(110, 50)[0]) - 105).abs() <= 1, "{:?}", at(110, 50));
-    assert!((i32::from(at(100, 50)[0]) - 100).abs() <= 1, "{:?}", at(100, 50));
-    assert_eq!(at(150, 50), [0, 0, 0, 0], "nothing outside the lens");
+    assert!(
+      (i32::from(at(110, 60)[0]) - 105).abs() <= 1,
+      "{:?}",
+      at(110, 60)
+    );
+    assert!(
+      (i32::from(at(100, 60)[0]) - 100).abs() <= 1,
+      "{:?}",
+      at(100, 60)
+    );
+    assert_eq!(at(150, 60), [0, 0, 0, 0], "nothing outside the lens");
+    assert!(
+      at(100, 15)[3] > 200,
+      "its handle, above it: {:?}",
+      at(100, 15)
+    );
 
-    set(&r, &[("lens", vec![100.0, 50.0, 40.0, 1.0])]);
+    set(&r, &[("lens", vec![100.0, 60.0, 30.0, 1.0])]);
     let image = render_image(&r, 200, 100);
-    assert!(image.iter().all(|p| *p == [0, 0, 0, 0]), "no lens at 1x");
+    assert_eq!(image[60 * 200 + 110], [0, 0, 0, 0], "no lens at 1x");
+    assert!(image[15 * 200 + 100][3] > 200, "but still its handle");
   }
 
   #[test]
   fn magnet_lifts_the_highlighted_control_and_draws_nothing_when_faded() {
-    let Some(r) = demo_on_ramp("magnet") else { return };
-    set(&r, &[("hl", vec![80.0, 40.0, 40.0, 20.0]), ("alpha", vec![1.0])]);
+    let Some(r) = demo_on_ramp("magnet") else {
+      return;
+    };
+    set(
+      &r,
+      &[("hl", vec![80.0, 40.0, 40.0, 20.0]), ("alpha", vec![1.0])],
+    );
     let image = render_image(&r, 200, 100);
     let at = |x: usize, y: usize| image[y * 200 + x];
 
     assert_eq!(at(100, 50)[3], 255, "the plate is opaque");
-    assert!(at(100, 50)[1] > 0, "and washed lighter (the ramp has no green): {:?}", at(100, 50));
+    assert!(
+      at(100, 50)[1] > 0,
+      "and washed lighter (the ramp has no green): {:?}",
+      at(100, 50)
+    );
     // Left of centre, the lift pulls in pixels from nearer the centre.
     assert!(at(84, 50)[0] > 84, "lifted: {:?}", at(84, 50));
-    assert!(at(100, 66)[3] > 0 && at(100, 66)[2] == 0, "a shadow below: {:?}", at(100, 66));
+    assert!(
+      at(100, 66)[3] > 0 && at(100, 66)[2] == 0,
+      "a shadow below: {:?}",
+      at(100, 66)
+    );
     assert_eq!(at(10, 10), [0, 0, 0, 0]);
 
     set(&r, &[("alpha", vec![0.0])]);
@@ -1604,55 +1820,115 @@ mod tests {
     assert!(image.iter().all(|p| *p == [0, 0, 0, 0]));
   }
 
-  /// Cuts as the page sends them: (shown, source, visible) per cut, 8 slots.
+  /// Cuts as the page sends them: (shown, source, visible) per cut, drawn from `screen`.
   fn cut_slots(cuts: &[[f32; 12]]) -> Vec<f32> {
-    let mut flat = vec![0.0; 96];
-    for (slot, cut) in flat.chunks_mut(12).zip(cuts) {
-      slot.copy_from_slice(cut);
+    let mut flat = vec![0.0; 128];
+    for (slot, cut) in flat.chunks_mut(16).zip(cuts) {
+      slot[..12].copy_from_slice(cut);
+      slot[12] = -1.0;
     }
     flat
   }
 
   #[test]
   fn cuts_draw_their_source_scaled_and_lift_off_the_screen() {
-    let Some(r) = demo_on_ramp("cuts") else { return };
+    let Some(r) = demo_on_ramp("cuts") else {
+      return;
+    };
     // One cut: x 20..40 of the screen, all in view, drawn twice as wide at x 100..140.
-    let cut = [100.0, 30.0, 40.0, 40.0, 20.0, 30.0, 20.0, 40.0, 20.0, 30.0, 20.0, 40.0];
+    let cut = [
+      100.0, 30.0, 40.0, 40.0, 20.0, 30.0, 20.0, 40.0, 20.0, 30.0, 20.0, 40.0,
+    ];
     set(&r, &[("cuts", cut_slots(&[cut])), ("count", vec![1.0])]);
     let image = render_image(&r, 200, 100);
     let at = |x: usize, y: usize| image[y * 200 + x];
 
     assert_eq!(at(120, 50)[3], 255, "the cut is opaque");
-    assert!((i32::from(at(120, 50)[0]) - 30).abs() <= 1, "middle of the cut shows x 30: {:?}", at(120, 50));
-    assert!((i32::from(at(110, 50)[0]) - 25).abs() <= 1, "scaled: {:?}", at(110, 50));
+    assert!(
+      (i32::from(at(120, 50)[0]) - 30).abs() <= 1,
+      "middle of the cut shows x 30: {:?}",
+      at(120, 50)
+    );
+    assert!(
+      (i32::from(at(110, 50)[0]) - 25).abs() <= 1,
+      "scaled: {:?}",
+      at(110, 50)
+    );
     assert!(
       (i32::from(at(102, 50)[0]) - 21).abs() <= 1,
       "edges shared with the source stay crisp, no fog: {:?}",
       at(102, 50)
     );
-    assert!(at(120, 74)[3] > 0 && at(120, 74)[2] == 0, "a shadow below: {:?}", at(120, 74));
+    assert!(
+      at(105, 74)[3] > 0 && at(105, 74)[2] == 0,
+      "a shadow below: {:?}",
+      at(105, 74)
+    );
+    assert!(
+      at(110, 20)[3] > 200 && at(110, 20)[2] < 60,
+      "its bar above, dark: {:?}",
+      at(110, 20)
+    );
+    assert!(
+      at(130, 75)[3] > 200,
+      "its corner tab below: {:?}",
+      at(130, 75)
+    );
     assert_eq!(at(10, 10), [0, 0, 0, 0]);
 
     set(&r, &[("count", vec![0.0])]);
     let image = render_image(&r, 200, 100);
-    assert!(image.iter().all(|p| *p == [0, 0, 0, 0]), "no cuts, nothing drawn");
+    assert!(
+      image.iter().all(|p| *p == [0, 0, 0, 0]),
+      "no cuts, nothing drawn"
+    );
+  }
+
+  #[test]
+  fn cuts_of_a_window_draw_from_its_own_pixels() {
+    let Some(r) = demo_on_ramp("cuts") else { return };
+    // The window (screen x 20..60) is covered on screen; its own capture is a ramp of its own.
+    // The cut shows its right half, given in the window's own points.
+    let own = picture(&r.0.device, 40, 40, |x, _| [0, (x * 6) as u8, 0, 255]);
+    r.0.state.lock().named.insert("w2".into(), own);
+    let mut cuts = cut_slots(&[[100.0, 30.0, 20.0, 40.0, 20.0, 0.0, 20.0, 40.0, 20.0, 0.0, 20.0, 40.0]]);
+    cuts[12] = 2.0;
+    set(&r, &[("cuts", cuts), ("count", vec![1.0]), ("w2_rect", vec![20.0, 30.0, 40.0, 40.0])]);
+    let image = render_image(&r, 200, 100);
+    let p = image[50 * 200 + 110];
+    assert!(p[0] == 0 && (i32::from(p[1]) - 30 * 6).abs() <= 6, "from the window's own x 30: {p:?}");
+
+    // Where the window is on screen doesn't matter: only its size does.
+    set(&r, &[("w2_rect", vec![150.0, 5.0, 40.0, 40.0])]);
+    let image = render_image(&r, 200, 100);
+    assert_eq!(image[50 * 200 + 110], p, "the window moved; the cut didn't");
   }
 
   #[test]
   fn cuts_fog_what_is_out_of_view() {
-    let Some(r) = demo_on_ramp("cuts") else { return };
+    let Some(r) = demo_on_ramp("cuts") else {
+      return;
+    };
     // Source x 20..60, of which only x 20..40 is in view (the rest scrolled away).
-    let cut = [100.0, 30.0, 40.0, 40.0, 20.0, 30.0, 40.0, 40.0, 20.0, 30.0, 20.0, 40.0];
+    let cut = [
+      100.0, 30.0, 40.0, 40.0, 20.0, 30.0, 40.0, 40.0, 20.0, 30.0, 20.0, 40.0,
+    ];
     set(&r, &[("cuts", cut_slots(&[cut])), ("count", vec![1.0])]);
     let image = render_image(&r, 200, 100);
     let at = |x: usize, y: usize| image[y * 200 + x];
     let grey = |p: [u8; 4]| p[1] > 0 && p[2] > 0; // the ramp has only blue
 
-    assert!(!grey(at(105, 50)), "in view: the real thing {:?}", at(105, 50));
+    assert!(
+      !grey(at(105, 50)),
+      "in view: the real thing {:?}",
+      at(105, 50)
+    );
     assert!(grey(at(130, 50)), "out of view: fog {:?}", at(130, 50));
 
     // Gone altogether: all fog.
-    let gone = [100.0, 30.0, 40.0, 40.0, 20.0, 30.0, 40.0, 40.0, 0.0, 0.0, -1.0, 0.0];
+    let gone = [
+      100.0, 30.0, 40.0, 40.0, 20.0, 30.0, 40.0, 40.0, 0.0, 0.0, -1.0, 0.0,
+    ];
     set(&r, &[("cuts", cut_slots(&[gone]))]);
     let image = render_image(&r, 200, 100);
     assert!(grey(image[50 * 200 + 105]));
@@ -1664,7 +1940,13 @@ mod tests {
   fn warp_demo() -> Option<Renderer> {
     let r = demo_on_ramp("warp")?;
     r.0.state.lock().behind = Some(solid(&r.0.device, [0, 0, 255, 255]));
-    set(&r, &[("win", vec![40.0, 20.0, 120.0, 60.0]), ("affine", vec![1.0, 0.0, 0.0, 1.0])]);
+    set(
+      &r,
+      &[
+        ("win", vec![40.0, 20.0, 120.0, 60.0]),
+        ("affine", vec![1.0, 0.0, 0.0, 1.0]),
+      ],
+    );
     Some(r)
   }
 
@@ -1673,17 +1955,40 @@ mod tests {
     let Some(r) = warp_demo() else { return };
     // Drawn at half size: the map back doubles about the centre (local 60, 30). allio-pointer's
     // warp tests use the same kind of map.
-    set(&r, &[("affine", vec![2.0, 0.0, 0.0, 2.0]), ("shift", vec![-60.0, -30.0, 0.0, 0.0])]);
+    set(
+      &r,
+      &[
+        ("affine", vec![2.0, 0.0, 0.0, 2.0]),
+        ("shift", vec![-60.0, -30.0, 0.0, 0.0]),
+      ],
+    );
     let image = render_image(&r, 200, 100);
     let at = |x: usize, y: usize| image[y * 200 + x];
 
-    assert!((i32::from(at(100, 50)[0]) - 100).abs() <= 1, "the centre stays: {:?}", at(100, 50));
-    assert!((i32::from(at(120, 50)[0]) - 140).abs() <= 1, "20pt right shows 40pt right: {:?}", at(120, 50));
+    assert!(
+      (i32::from(at(100, 50)[0]) - 100).abs() <= 1,
+      "the centre stays: {:?}",
+      at(100, 50)
+    );
+    assert!(
+      (i32::from(at(120, 50)[0]) - 140).abs() <= 1,
+      "20pt right shows 40pt right: {:?}",
+      at(120, 50)
+    );
     let desktop = at(150, 30);
-    assert!(desktop[3] == 255 && desktop[2] > 230 && desktop[0] == 0, "the rest of the old window shows the desktop (under a soft shadow): {desktop:?}");
+    assert!(
+      desktop[3] == 255 && desktop[2] > 230 && desktop[0] == 0,
+      "the rest of the old window shows the desktop (under a soft shadow): {desktop:?}"
+    );
 
     // Well clear of the window and its shadow, nothing is drawn.
-    set(&r, &[("win", vec![10.0, 10.0, 20.0, 10.0]), ("shift", vec![-10.0, -5.0, 0.0, 0.0])]);
+    set(
+      &r,
+      &[
+        ("win", vec![10.0, 10.0, 20.0, 10.0]),
+        ("shift", vec![-10.0, -5.0, 0.0, 0.0]),
+      ],
+    );
     let image = render_image(&r, 200, 100);
     assert_eq!(image[60 * 200 + 150][3], 0, "far away, nothing is drawn");
   }
@@ -1695,15 +2000,41 @@ mod tests {
     // centre moves: what is drawn at local (60, 30) is really 20pt left of it.
     let mut grid = vec![0.0; 640];
     grid[8] = -20.0;
-    set(&r, &[("shift", vec![0.0, 0.0, 30.0, 1.0]), ("dims", vec![3.0, 3.0, 1.0, 0.0]), ("grid", grid)]);
+    set(
+      &r,
+      &[
+        ("shift", vec![0.0, 0.0, 30.0, 1.0]),
+        ("dims", vec![3.0, 3.0, 1.0, 0.0]),
+        ("grid", grid),
+      ],
+    );
     let mut above = vec![0.0; 32];
     above.splice(0..4, [0.0, 0.0, 50.0, 30.0]);
     set(&r, &[("above", above)]);
     let image = render_image(&r, 200, 100);
     let at = |x: usize, y: usize| image[y * 200 + x];
 
-    assert!((i32::from(at(100, 50)[0]) - 80).abs() <= 1, "pushed: {:?}", at(100, 50));
+    assert!(
+      (i32::from(at(100, 50)[0]) - 80).abs() <= 1,
+      "pushed: {:?}",
+      at(100, 50)
+    );
     assert_eq!(at(45, 25)[3], 0, "a window in front is left alone");
+
+    // Knobs, drawn on top when asked for.
+    set(
+      &r,
+      &[
+        ("dims", vec![3.0, 3.0, 1.0, 1.0]),
+        ("knobs", vec![20.0, 90.0, 180.0, 90.0]),
+      ],
+    );
+    let image = render_image(&r, 200, 100);
+    assert!(
+      image[90 * 200 + 180][3] > 200,
+      "a knob: {:?}",
+      image[90 * 200 + 180]
+    );
   }
 
   // --- looking at the demos (writes PNGs when ALLIO_SNAPSHOTS names a directory) ---

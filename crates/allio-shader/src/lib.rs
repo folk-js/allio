@@ -27,7 +27,7 @@ mod ticker;
 #[cfg(not(target_os = "macos"))]
 mod unsupported;
 
-pub use spec::{Hide, Region, ShaderSpec};
+pub use spec::{Hide, Region, ShaderSpec, Source, MAX_SOURCES};
 pub use uniforms::UniformType;
 
 #[cfg(target_os = "macos")]

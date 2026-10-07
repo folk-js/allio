@@ -30,17 +30,24 @@ pub(crate) struct Tracker {
 }
 
 impl Tracker {
-  /// A hardware event in the stream saw the cursor at `seen`. `clamp` keeps points on screen.
-  pub(crate) fn moved(&mut self, field: &Field, seen: Vec2, clamp: impl Fn(Vec2) -> Vec2) -> Step {
+  /// A hardware event in the stream saw the cursor at `seen`. `keep` keeps the pointer on the
+  /// displays it may appear on; `clamp` keeps the real cursor on screen.
+  pub(crate) fn moved(
+    &mut self,
+    field: &Field,
+    seen: Vec2,
+    keep: impl Fn(Vec2) -> Vec2,
+    clamp: impl Fn(Vec2) -> Vec2,
+  ) -> Step {
     let before = self.cursor.replace(seen);
     let (Some(visual), Some(before)) = (self.visual, before) else {
-      return self.resync(field, seen, clamp);
+      return self.resync(field, keep(seen), clamp);
     };
     let hand = seen.sub(before);
     if hand.len() > JUMP {
-      return self.resync(field, seen, clamp);
+      return self.resync(field, keep(seen), clamp);
     }
-    let visual = clamp(field.moved(visual, hand));
+    let visual = keep(field.moved(visual, hand));
     self.visual = Some(visual);
     Step {
       visual,
@@ -106,7 +113,7 @@ mod tests {
         match item {
           Item::Ours(at) => tracker.landed(at),
           Item::Hardware(seen) => {
-            let step = tracker.moved(&field, seen, |p| p);
+            let step = tracker.moved(&field, seen, |p| p, |p| p);
             if step.real.sub(seen).len() > 0.01 {
               posted.push_back((now, step.real));
             }
@@ -178,10 +185,10 @@ mod tests {
   fn something_else_moving_the_cursor_resyncs() {
     let field = Field::default();
     let mut tracker = Tracker::default();
-    tracker.moved(&field, Vec2::new(0.0, 0.0), |p| p);
-    let step = tracker.moved(&field, Vec2::new(900.0, 0.0), |p| p);
+    tracker.moved(&field, Vec2::new(0.0, 0.0), |p| p, |p| p);
+    let step = tracker.moved(&field, Vec2::new(900.0, 0.0), |p| p, |p| p);
     assert_eq!(step.visual, Vec2::new(900.0, 0.0));
-    let step = tracker.moved(&field, Vec2::new(904.0, 0.0), |p| p);
+    let step = tracker.moved(&field, Vec2::new(904.0, 0.0), |p| p, |p| p);
     assert_eq!(step.visual, Vec2::new(904.0, 0.0));
   }
 }

@@ -345,6 +345,21 @@ export class Allio extends EventEmitter<AllioEvents> {
     return this.pointers.create(spec);
   }
 
+  /**
+   * A backstage display: a virtual display nobody looks at, for windows that should keep
+   * rendering (and stay uncovered) out of sight. Resolves to its frame in screen points, or null
+   * when turned off. It lives as long as this connection; when it goes, macOS moves its windows
+   * back onto real displays. Keep the pointer off it with `pointer({ away: [frame] })`.
+   */
+  backstage(on: boolean, size?: { w: number; h: number }): Promise<AX.Bounds | null> {
+    return this.rawCall("backstage_set", { on, ...size }) as Promise<AX.Bounds | null>;
+  }
+
+  /** Moves a window so its top-left is at (x, y) in screen points (no focus, no raise). */
+  moveWindow(window_id: AX.WindowId, x: number, y: number): Promise<void> {
+    return this.rawCall("move_window", { window_id, x, y }) as Promise<void>;
+  }
+
   /** Where the pointer appears, and whether the system cursor is hidden so the page must draw it. */
   pointerState(): Promise<PointerState | null> {
     return this.pointers.state();

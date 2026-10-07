@@ -94,6 +94,9 @@ pub(crate) trait Platform {
   /// Fetch main screen dimensions (width, height) in points.
   fn fetch_screen_size() -> (f64, f64);
 
+  /// Bounds of every active display, in global screen points (top-left origin).
+  fn fetch_displays() -> Vec<crate::types::Bounds>;
+
   /// Fetch current mouse position in screen coordinates.
   fn fetch_mouse_position() -> crate::types::Point;
 
@@ -156,6 +159,9 @@ pub(crate) trait PlatformHandle: Clone + Send + Sync + Hash + Eq + 'static {
   /// Replace a character range of the element's text, without focus or selection.
   /// `Err(NotSupported)` if the element doesn't implement range replacement.
   fn replace_text(&self, start: u32, length: u32, text: &str) -> AllioResult<()>;
+
+  /// Move a window so its top-left is at (x, y), in global screen points.
+  fn set_position(&self, x: f64, y: f64) -> AllioResult<()>;
 
   /// Fetch current attributes from the platform.
   fn fetch_attributes(&self) -> ElementAttributes;

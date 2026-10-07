@@ -49,6 +49,7 @@ layer.addEventListener("pointermove", (e) => {
 });
 
 layer.addEventListener("pointerdown", (down) => {
+  down.preventDefault(); // no text selection while brushing
   const p = { x: down.clientX, y: down.clientY };
   const current = d.target?.bounds;
   const near = current && p.x > current.x - 120 && p.x < current.x + current.w + 120 && p.y > current.y - 120 && p.y < current.y + current.h + 120;

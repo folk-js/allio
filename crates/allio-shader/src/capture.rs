@@ -1,6 +1,6 @@
 #![allow(unsafe_code)]
 
-//! `ScreenCaptureKit` stream of one region, delivered as Metal textures.
+//! `ScreenCaptureKit` streams, of a region of a display or of one window, delivered as frames.
 
 #![allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // pixel sizes are positive and small
 
@@ -18,7 +18,7 @@ use objc2_foundation::{NSArray, NSError, NSObject, NSObjectProtocol};
 use objc2_io_surface::IOSurfaceRef;
 use objc2_screen_capture_kit::{
   SCContentFilter, SCDisplay, SCShareableContent, SCStream, SCStreamConfiguration, SCStreamOutput,
-  SCStreamOutputType,
+  SCStreamOutputType, SCWindow,
 };
 use parking_lot::Mutex;
 use std::ptr::NonNull;
@@ -83,16 +83,26 @@ define_class!(
 /// Receives each frame on the capture queue.
 struct Callback(Box<dyn Fn(Frame) + Send + Sync>);
 
+/// What a capture is of.
+enum Target {
+  /// A region of a display.
+  Display {
+    /// Top-left of the display in global coordinates. Regions are global, but
+    /// `ScreenCaptureKit` wants them relative to the display.
+    origin: CGPoint,
+    id: u32,
+    exclude_pid: i32,
+    hide: Mutex<Hide>,
+  },
+  /// One window, wherever it is.
+  Window,
+}
+
 /// A running capture. Stops on drop.
 pub(crate) struct CaptureHandle {
   stream: Retained<SCStream>,
   config: Retained<SCStreamConfiguration>,
-  /// Top-left of the captured display in global coordinates. Regions are global, but
-  /// `ScreenCaptureKit` wants them relative to the display.
-  display_origin: CGPoint,
-  display_id: u32,
-  exclude_pid: i32,
-  hide: Mutex<Hide>,
+  target: Target,
   _output: Retained<Output>,
   _queue: dispatch2::DispatchRetained<DispatchQueue>,
 }
@@ -235,16 +245,25 @@ fn filter_for(
 impl CaptureHandle {
   /// Changes which windows are left out of the capture, without restarting the stream.
   pub(crate) fn set_hide(&self, hide: &Hide) -> Result<(), String> {
-    let mut current = self.hide.lock();
+    let Target::Display {
+      id,
+      exclude_pid,
+      hide: current,
+      ..
+    } = &self.target
+    else {
+      return Err("a window capture has nothing to hide".into());
+    };
+    let mut current = current.lock();
     if *current == *hide {
       return Ok(());
     }
     let content = shareable_content()?.0;
     let display = unsafe { content.displays() }
       .iter()
-      .find(|d| unsafe { d.displayID() } == self.display_id)
+      .find(|d| unsafe { d.displayID() } == *id)
       .ok_or("the captured display went away")?;
-    let filter = filter_for(&content, &display, hide, self.exclude_pid);
+    let filter = filter_for(&content, &display, hide, *exclude_pid);
     unsafe {
       self
         .stream
@@ -257,10 +276,11 @@ impl CaptureHandle {
   /// Moves or resizes the captured region without restarting the stream. `scale` is output
   /// pixels per point. The region must stay on the display the stream started on.
   pub(crate) fn set_region(&self, region: Region, scale: f64) {
+    let Target::Display { origin, .. } = &self.target else {
+      return;
+    };
     unsafe {
-      self
-        .config
-        .setSourceRect(local_rect(region, self.display_origin));
+      self.config.setSourceRect(local_rect(region, *origin));
       self.config.setWidth(pixels(region.w, scale));
       self.config.setHeight(pixels(region.h, scale));
       self
@@ -268,6 +288,35 @@ impl CaptureHandle {
         .updateConfiguration_completionHandler(&self.config, None);
     }
   }
+
+  /// Resizes a window capture's output to the window's size, in points, so its pixels stay one
+  /// to one. Does nothing for display captures.
+  pub(crate) fn set_size(&self, w: f64, h: f64, scale: f64) {
+    if !matches!(self.target, Target::Window) {
+      return;
+    }
+    unsafe {
+      self.config.setWidth(pixels(w, scale));
+      self.config.setHeight(pixels(h, scale));
+      self
+        .stream
+        .updateConfiguration_completionHandler(&self.config, None);
+    }
+  }
+}
+
+/// The settings every capture shares, at `w` x `h` output pixels.
+fn base_config(w: usize, h: usize) -> Retained<SCStreamConfiguration> {
+  let config = unsafe { SCStreamConfiguration::new() };
+  unsafe {
+    config.setWidth(w);
+    config.setHeight(h);
+    config.setPixelFormat(PIXEL_FORMAT_BGRA);
+    config.setShowsCursor(false);
+    config.setQueueDepth(3);
+    config.setMinimumFrameInterval(CMTime::new(1, MAX_FPS));
+  }
+  config
 }
 
 /// Starts capturing `region`, excluding every window of process `exclude_pid` (including ones
@@ -286,19 +335,49 @@ pub(crate) fn start(
   let display_id = unsafe { display.displayID() };
   let filter = filter_for(&content, &display, hide, exclude_pid);
 
-  let config = unsafe { SCStreamConfiguration::new() };
-  unsafe {
-    config.setSourceRect(local_rect(region, display_origin));
-    config.setWidth(pixels(region.w, scale));
-    config.setHeight(pixels(region.h, scale));
-    config.setPixelFormat(PIXEL_FORMAT_BGRA);
-    config.setShowsCursor(false);
-    config.setQueueDepth(3);
-    config.setMinimumFrameInterval(CMTime::new(1, MAX_FPS));
-  }
+  let config = base_config(pixels(region.w, scale), pixels(region.h, scale));
+  unsafe { config.setSourceRect(local_rect(region, display_origin)) };
+  let target = Target::Display {
+    origin: display_origin,
+    id: display_id,
+    exclude_pid,
+    hide: Mutex::new(hide.clone()),
+  };
+  run(&filter, config, target, on_frame)
+}
 
+/// Starts capturing one window's own pixels, without its shadow, even while it is covered or on
+/// another Space. Blocks until the stream is running.
+pub(crate) fn start_window(
+  window_id: u32,
+  scale: f64,
+  on_frame: impl Fn(Frame) + Send + Sync + 'static,
+) -> Result<CaptureHandle, String> {
+  let content = shareable_content()?.0;
+  let window: Retained<SCWindow> = unsafe { content.windows() }
+    .iter()
+    .find(|w| unsafe { w.windowID() } == window_id)
+    .ok_or_else(|| format!("no window {window_id} to capture"))?;
+  let frame = unsafe { window.frame() };
+  let filter =
+    unsafe { SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &window) };
+  let config = base_config(
+    pixels(frame.size.width, scale),
+    pixels(frame.size.height, scale),
+  );
+  unsafe { config.setIgnoreShadowsSingleWindow(true) };
+  run(&filter, config, Target::Window, on_frame)
+}
+
+/// Starts a stream and waits until it runs.
+fn run(
+  filter: &SCContentFilter,
+  config: Retained<SCStreamConfiguration>,
+  target: Target,
+  on_frame: impl Fn(Frame) + Send + Sync + 'static,
+) -> Result<CaptureHandle, String> {
   let stream = unsafe {
-    SCStream::initWithFilter_configuration_delegate(SCStream::alloc(), &filter, &config, None)
+    SCStream::initWithFilter_configuration_delegate(SCStream::alloc(), filter, &config, None)
   };
   let output: Retained<Output> = {
     let this = Output::alloc().set_ivars(Callback(Box::new(on_frame)));
@@ -318,10 +397,7 @@ pub(crate) fn start(
   let handle = CaptureHandle {
     stream,
     config,
-    display_origin,
-    display_id,
-    exclude_pid,
-    hide: Mutex::new(hide.clone()),
+    target,
     _output: output,
     _queue: queue,
   };

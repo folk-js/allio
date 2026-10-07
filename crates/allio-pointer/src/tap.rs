@@ -256,6 +256,9 @@ fn admit(context: &Context, kind: CGEventType, event: &CGEvent) -> bool {
     let visual = context.tracker.lock().visual();
     visual.is_some_and(|v| context.field.lock().blocked(v))
   };
+  if CGEvent::integer_value_field(Some(event), CGEventField::EventSourceUserData) == OURS {
+    return true;
+  }
   let mut dropped = context.dropped.lock();
   match kind {
     CGEventType::LeftMouseDown | CGEventType::RightMouseDown | CGEventType::OtherMouseDown => {
@@ -289,9 +292,21 @@ fn reshape(context: &Context, kind: CGEventType, event: &CGEvent) {
   }
 
   let displays = context.displays.lock();
-  let step = tracker.moved(&context.field.lock(), seen, |p| {
-    clamp_to_displays(&displays, p)
-  });
+  let field = context.field.lock();
+  // The pointer stays off displays it's kept away from; the real cursor may go anywhere.
+  let allowed: Vec<Rect> = displays
+    .iter()
+    .filter(|d| !field.away().iter().any(|a| overlaps(d, a)))
+    .copied()
+    .collect();
+  let allowed = if allowed.is_empty() { displays.clone() } else { allowed };
+  let step = tracker.moved(
+    &field,
+    seen,
+    |p| clamp_to_displays(&allowed, p),
+    |p| clamp_to_displays(&displays, p),
+  );
+  drop(field);
   drop(displays);
   context
     .cursor
@@ -427,6 +442,10 @@ fn displays() -> Vec<Rect> {
       }
     })
     .collect()
+}
+
+fn overlaps(a: &Rect, b: &Rect) -> bool {
+  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
 }
 
 /// Keeps a point on some display, as the window server does with the real cursor.

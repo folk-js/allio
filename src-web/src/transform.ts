@@ -18,9 +18,9 @@ const showError = panel("Transform", "Pick a window, then turn it by the top kno
 d.fx.onerror = showError;
 const panelEl = document.querySelector(".demo-panel")!;
 
+/** Knobs are drawn by the shader, with the window; these are where they take the pointer. */
 function knob(cursor: string): HTMLElement {
-  const el = Object.assign(document.createElement("div"), { className: "chrome knob" });
-  el.append(Object.assign(document.createElement("div"), { className: "grip" }));
+  const el = Object.assign(document.createElement("div"), { className: "hit knob" });
   el.style.cursor = cursor;
   el.setAttribute("ax-io", "opaque");
   document.body.append(el);
@@ -51,6 +51,7 @@ function apply() {
 
 d.onFrame = (win) => {
   turn.style.display = size.style.display = win ? "block" : "none";
+  d.knobs = null;
   if (!win) return;
   const w = win.bounds;
   apply(); // the window may have been resized
@@ -58,18 +59,26 @@ d.onFrame = (win) => {
   const corner = drawnAt(w.w + 10 / scale, w.h + 10 / scale);
   Object.assign(turn.style, { left: `${top.x}px`, top: `${top.y}px` });
   Object.assign(size.style, { left: `${corner.x}px`, top: `${corner.y}px` });
+  d.knobs = [top.x, top.y, corner.x, corner.y];
 };
 
 function drag(el: HTMLElement, move: (x: number, y: number, centre: { x: number; y: number }) => void) {
   el.addEventListener("pointerdown", (down) => {
     const w = d.target?.bounds;
     if (!w) return;
+    down.preventDefault(); // no text selection while dragging
     el.setPointerCapture(down.pointerId);
     passthrough.mode = "opaque";
+    // While a knob is dragged the pointer acts where it appears, so it can't be carried into the
+    // window (and out of the drag).
+    d.acting = false;
+    d.changed();
     el.onpointermove = (e) => move(e.clientX, e.clientY, { x: w.x + w.w / 2, y: w.y + w.h / 2 });
     el.onpointerup = () => {
       el.onpointermove = el.onpointerup = null;
       passthrough.mode = "auto";
+      d.acting = true;
+      d.changed();
     };
   });
 }

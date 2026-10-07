@@ -11,12 +11,15 @@
  *   scrolls. The part of it that is out of view (scrolled away, outside its window) is drawn as
  *   fog, and can't be clicked through.
  *
- * The source has to be the frontmost thing on screen where you point, as for any real click.
+ * Cuts of a window (or of an element) draw from that window's own pixels, so they stay visible
+ * while it's covered. Pointing into a covered part still acts on whatever covers the source there
+ * (see docs/POINTER.md for what was tried), unless the sources are parked: moved onto a backstage
+ * display nobody sees, where nothing covers them.
  */
 import type { AX, Cut, Rect, TypedElement } from "allio";
 import manifest from "../shaders/cuts.json";
 import wgsl from "../shaders/cuts.wgsl?raw";
-import { connect, declared, drawPointer, panel, screen } from "./shader-demo";
+import { connect, declared, drawPointer, panel, screen, source } from "./shader-demo";
 
 const { allio, passthrough } = connect();
 
@@ -33,6 +36,10 @@ type Anchor =
 interface Source {
   rect: Rect;
   visible: Rect | null;
+  /** For a window's cut: the same, in the window's own points (from its top-left). The shader
+   * reads window pixels with these, so the cut doesn't depend on where the window is and stays
+   * still while the window moves. */
+  local?: { rect: Rect; visible: Rect | null };
 }
 
 interface Placed {
@@ -48,7 +55,7 @@ interface Placed {
 
 const cuts: Placed[] = [];
 
-const fx = allio.shader({ region: screen(), wgsl, ...declared(manifest) });
+const fx = allio.shader({ region: screen(), wgsl: source(manifest, wgsl), ...declared(manifest) });
 const field = allio.pointer();
 drawPointer(allio);
 
@@ -59,24 +66,80 @@ const showError = panel(
     { button: "Cut screen region", onClick: () => selectRegion(false) },
     { button: "Cut window region", onClick: () => selectRegion(true) },
     { button: "Cut element", onClick: () => selectElement() },
+    { toggle: "park sources", value: false, onChange: (on) => void park(on) },
     { button: "Clear", onClick: () => [...cuts].forEach(remove) },
   ]
 );
 fx.onerror = showError;
 
+// --- Backstage: the windows cuts are taken from, moved onto a display nobody sees ---
+//
+// Parked windows keep rendering and nothing covers them, so their cuts stay live and clicks
+// through them land. The pointer never appears on the backstage display; it only acts there,
+// through cuts. Unparking puts each window back where it was.
+
+/** The backstage display while parking, in screen points. */
+let backstage: Rect | null = null;
+/** Where each parked window was. */
+const homes = new Map<AX.WindowId, { x: number; y: number }>();
+/** Space between parked windows, and room left at the top for a menu bar. */
+const PARK_GAP = 24;
+const PARK_TOP = 44;
+
+async function park(on: boolean) {
+  if (on) {
+    backstage = await allio.backstage(true).catch((e: Error) => (showError(e.message), null));
+    await parkAll();
+  } else {
+    await Promise.all([...homes].map(([id, home]) => allio.moveWindow(id, home.x, home.y).catch(() => {})));
+    homes.clear();
+    backstage = null;
+    await allio.backstage(false).catch(() => {});
+  }
+  invalidate();
+}
+
+/** Moves every source window not yet parked onto the backstage, left to right in rows. */
+async function parkAll() {
+  if (!backstage) return;
+  const b = backstage;
+  let x = b.x + PARK_GAP;
+  let y = b.y + PARK_TOP;
+  let row = 0;
+  for (const id of new Set(cuts.map((c) => windowOf(c.anchor)).filter((w) => w !== null))) {
+    const w = allio.windows.get(id);
+    if (!w || homes.has(id)) continue;
+    if (x + w.bounds.w > b.x + b.w && x > b.x + PARK_GAP) {
+      x = b.x + PARK_GAP;
+      y += row + PARK_GAP;
+      row = 0;
+    }
+    homes.set(id, { x: w.bounds.x, y: w.bounds.y });
+    await allio.moveWindow(id, x, y).catch((e: Error) => showError(e.message));
+    x += w.bounds.w + PARK_GAP;
+    row = Math.max(row, w.bounds.h);
+  }
+}
+
+/** Puts a window back if no cut is taken from it any more. */
+function unparkUnused() {
+  const used = new Set(cuts.map((c) => windowOf(c.anchor)));
+  for (const [id, home] of homes) {
+    if (used.has(id)) continue;
+    homes.delete(id);
+    void allio.moveWindow(id, home.x, home.y).catch(() => {});
+  }
+}
+
 document.head.append(
   Object.assign(document.createElement("style"), {
     textContent: `
       .cut-select { position: fixed; inset: 0; cursor: crosshair; }
-      .cut-bar { height: ${BAR}px; border-radius: 5px 5px 0 0; border-bottom: none; }
-      .cut-bar .label {
-        position: absolute; left: 7px; top: 4.5px; max-width: calc(50% - 26px);
-        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-      }
-      .cut-bar .grip { position: absolute; left: 50%; top: 5px; width: 28px; height: 8px; margin-left: -14px; }
-      .cut-bar .close { position: absolute; right: 0; top: 0; }
-      .cut-corner { width: 20px; height: 10px; border-radius: 0 0 5px 5px; border-top: none; cursor: nwse-resize; }
-      .cut-corner .grip { position: absolute; inset: 1px 4px 2px; cursor: inherit; }
+      .cut-bar { height: ${BAR}px; cursor: grab; }
+      .cut-bar:active { cursor: grabbing; }
+      .cut-bar .close { position: absolute; right: 0; top: 0; width: 18px; height: 18px; cursor: default; }
+      .cut-corner { width: 20px; height: 10px; cursor: nwse-resize; }
+      .cut-caption { position: fixed; display: none; }
       .cut-block { position: fixed; }
       .cut-block > div { position: absolute; }`,
   })
@@ -98,14 +161,23 @@ function resolve(anchor: Anchor): Source | null {
       const w = allio.windows.get(anchor.window);
       if (!w) return null;
       const rect = { ...anchor.offset, x: w.bounds.x + anchor.offset.x, y: w.bounds.y + anchor.offset.y };
-      return { rect, visible: intersect(rect, w.bounds) };
+      const own = { x: 0, y: 0, w: w.bounds.w, h: w.bounds.h };
+      return {
+        rect,
+        visible: intersect(rect, w.bounds),
+        local: { rect: anchor.offset, visible: intersect(anchor.offset, own) },
+      };
     }
     case "element": {
       const rect = allio.get(anchor.element)?.bounds;
       const w = allio.windows.get(anchor.window);
       if (!rect || !w) return null;
       const view = anchor.clip === null ? null : allio.get(anchor.clip)?.bounds;
-      return { rect, visible: intersect(view ? intersect(rect, view) : rect, w.bounds) };
+      const visible = intersect(view ? intersect(rect, view) : rect, w.bounds);
+      // Element bounds are on screen; in window points they only change when it scrolls or
+      // reflows, not when the window moves.
+      const local = (r: Rect) => ({ ...r, x: r.x - w.bounds.x, y: r.y - w.bounds.y });
+      return { rect, visible, local: { rect: local(rect), visible: local(visible) } };
     }
   }
 }
@@ -158,6 +230,7 @@ function selectRegion(inWindow: boolean) {
   const { layer, done } = chooser();
   const outline = Object.assign(document.createElement("div"), { className: "outline" });
   layer.addEventListener("pointerdown", (down) => {
+    down.preventDefault(); // no text selection while choosing
     layer.setPointerCapture(down.pointerId);
     layer.append(outline);
     const rect = (e: PointerEvent): Rect => ({
@@ -256,6 +329,7 @@ function add(anchor: Anchor, label: string) {
   const source = resolve(anchor);
   if (!source) return;
   cuts.push({ anchor, label, at: beside(source.rect), scale: 1, source, ui: chrome() });
+  if (backstage) void parkAll();
   invalidate();
 }
 
@@ -268,6 +342,7 @@ function remove(cut: Placed) {
     void allio.unobserve(cut.anchor.element).catch(() => {});
     if (cut.anchor.clip !== null) void allio.unobserve(cut.anchor.clip).catch(() => {});
   }
+  unparkUnused();
   invalidate();
 }
 
@@ -278,25 +353,28 @@ function beside(s: Rect): { x: number; y: number } {
   return { x: s.x, y: Math.min(s.y + s.h + GAP + BAR, innerHeight - s.h) };
 }
 
-// --- Chrome: a bar to drag by (with a label and a close button), a corner to resize from, and
-// a layer that keeps clicks out of fog ---
+// --- Chrome. The shader draws it, with the cut, so the two move together; these elements only
+// take the pointer: a bar to drag by (with a close button), a corner to resize from, and a layer
+// that keeps clicks out of fog. The label shows as a caption while the pointer is on the bar. ---
 
 interface Chrome {
   bar: HTMLElement;
-  label: HTMLElement;
   corner: HTMLElement;
   block: HTMLElement;
   hole: HTMLElement;
+  caption: HTMLElement;
 }
 
+/** The cut whose close cross is under the pointer, for the shader to light it; -1 if none. */
+let closeLit = -1;
+
 function chrome(): Chrome {
-  const bar = Object.assign(document.createElement("div"), { className: "chrome cut-bar" });
-  const label = Object.assign(document.createElement("span"), { className: "label" });
-  const grip = Object.assign(document.createElement("div"), { className: "grip" });
-  const close = Object.assign(document.createElement("div"), { className: "close" });
-  bar.append(label, grip, close);
-  const corner = Object.assign(document.createElement("div"), { className: "chrome cut-corner" });
-  corner.append(Object.assign(document.createElement("div"), { className: "grip" }));
+  const bar = Object.assign(document.createElement("div"), { className: "hit cut-bar" });
+  const close = document.createElement("div");
+  close.className = "close";
+  bar.append(close);
+  const corner = Object.assign(document.createElement("div"), { className: "hit cut-corner" });
+  const caption = Object.assign(document.createElement("div"), { className: "chrome caption cut-caption" });
   // Fog can't be clicked through: the block takes the pointer except over the hole, the part
   // in view.
   const block = Object.assign(document.createElement("div"), { className: "cut-block" });
@@ -306,14 +384,18 @@ function chrome(): Chrome {
   corner.setAttribute("ax-io", "opaque");
   block.setAttribute("ax-io", "opaque");
   hole.setAttribute("ax-io", "transparent");
-  document.body.append(block, bar, corner);
+  document.body.append(block, bar, corner, caption);
 
-  const ui = { bar, label, corner, block, hole };
+  const ui = { bar, corner, block, hole, caption };
   const owner = () => cuts.find((c) => c.ui === ui);
   close.onclick = () => {
     const cut = owner();
     if (cut) remove(cut);
   };
+  close.onpointerenter = () => ((closeLit = cuts.findIndex((c) => c.ui === ui)), invalidate());
+  close.onpointerleave = () => ((closeLit = -1), invalidate());
+  bar.onpointerenter = () => !holding && (caption.style.display = "block");
+  bar.onpointerleave = () => (caption.style.display = "none");
   drag(bar, owner, (cut, dx, dy, start) => (cut.at = { x: start.at.x + dx, y: start.at.y + dy }));
   drag(corner, owner, (cut, dx) => {
     const w = cut.source.rect.w;
@@ -321,6 +403,11 @@ function chrome(): Chrome {
   });
   return ui;
 }
+
+/** While the page's own chrome is being dragged, the pointer acts where it appears: otherwise a
+ * quick drag reaches the cut before it moves, the pointer is carried into the source, and the drag
+ * (and any text there) goes with it. */
+let holding = false;
 
 const starts = new WeakMap<Placed, { at: { x: number; y: number }; scale: number }>();
 const start = (cut: Placed) => starts.get(cut)!;
@@ -333,9 +420,13 @@ function drag(
   el.addEventListener("pointerdown", (down) => {
     const cut = owner();
     if (!cut || (down.target as HTMLElement).classList.contains("close")) return;
+    down.preventDefault(); // no text selection while dragging
+    cut.ui.caption.style.display = "none";
     starts.set(cut, { at: { ...cut.at }, scale: cut.scale });
     el.setPointerCapture(down.pointerId);
     passthrough.mode = "opaque";
+    holding = true;
+    invalidate();
     el.onpointermove = (e) => {
       move(cut, e.clientX - down.clientX, e.clientY - down.clientY, start(cut));
       invalidate();
@@ -343,6 +434,8 @@ function drag(
     el.onpointerup = () => {
       el.onpointermove = el.onpointerup = null;
       passthrough.mode = "auto";
+      holding = false;
+      invalidate();
     };
   });
 }
@@ -365,15 +458,38 @@ allio.on("window:removed", invalidate);
 allio.on("element:changed", invalidate);
 allio.on("element:removed", invalidate);
 
+/** The window a cut's pixels come from, if it is one window's (else they come from the screen). */
+const windowOf = (a: Anchor): AX.WindowId | null => (a.kind === "screen" ? null : a.window);
+
+/** What the window sources w0..w7 show, as last sent, to send only changes. */
+let lastSources = "";
+let lastAnimate: boolean | undefined;
+
 function render() {
   queued = false;
-  const slots = new Array(MAX * 12).fill(0);
+  const slots = new Array(MAX * 16).fill(0);
   const mapped: Cut[] = [];
+
+  // One window source per window that cuts are taken from; covered windows still show.
+  const windows = [...new Set(cuts.map((c) => windowOf(c.anchor)).filter((w) => w !== null))].slice(0, MAX);
+  const sources = Object.fromEntries(
+    Array.from({ length: MAX }, (_, k) => [`w${k}`, k < windows.length ? { window: windows[k] } : null])
+  );
+  if (JSON.stringify(sources) !== lastSources) {
+    lastSources = JSON.stringify(sources);
+    fx.sources = sources;
+  }
+  let fogged = false;
 
   cuts.forEach((cut, i) => {
     const now = resolve(cut.anchor);
     if (now) cut.source = now;
-    else cut.source = { rect: cut.source.rect, visible: null };
+    else
+      cut.source = {
+        rect: cut.source.rect,
+        visible: null,
+        local: cut.source.local && { rect: cut.source.local.rect, visible: null },
+      };
     const { rect: src, visible } = cut.source;
 
     const shown = { ...cut.at, w: src.w * cut.scale, h: src.h * cut.scale };
@@ -385,12 +501,18 @@ function render() {
       h: seen.h * cut.scale,
     };
 
-    const vis = visible ?? { x: 0, y: 0, w: -1, h: 0 };
-    slots.splice(i * 12, 12, ...[shown, src, vis].flatMap((r) => [r.x, r.y, r.w, r.h]));
+    const win = windowOf(cut.anchor);
+    const origin = win === null ? -1 : windows.indexOf(win);
+    // Window pixels are read in the window's own points (see `local`); the screen in screen points.
+    const from = origin >= 0 && cut.source.local ? cut.source.local : { rect: src, visible };
+    const vis = from.visible ?? { x: 0, y: 0, w: -1, h: 0 };
+    slots.splice(i * 16, 16, ...[shown, from.rect, vis].flatMap((r) => [r.x, r.y, r.w, r.h]), origin, 0, 0, 0);
     if (seen && seenShown) mapped.push({ shown: seenShown, source: { ...seen } });
+    fogged ||= !seen || seen.w < src.w - 0.5 || seen.h < src.h - 0.5;
 
-    const { bar, label, corner, block, hole } = cut.ui;
-    label.textContent = visible ? cut.label : `${cut.label} (gone)`;
+    const { bar, corner, block, hole, caption } = cut.ui;
+    caption.textContent = visible ? cut.label : `${cut.label} (gone)`;
+    Object.assign(caption.style, { left: `${shown.x}px`, top: `${shown.y - BAR - 26}px` });
     place(bar, { x: shown.x, y: shown.y - BAR, w: Math.max(shown.w, 56), h: BAR });
     Object.assign(corner.style, { left: `${shown.x + shown.w - 20}px`, top: `${shown.y + shown.h}px` });
     place(block, shown);
@@ -398,8 +520,13 @@ function render() {
     if (seenShown) place(hole, { ...seenShown, x: seenShown.x - shown.x, y: seenShown.y - shown.y });
   });
 
-  fx.set({ cuts: slots, count: cuts.length });
-  field.set({ cuts: mapped });
+  // Fog drifts, so draw every frame only while some cut shows fog; otherwise only on change.
+  if (fogged !== lastAnimate) {
+    lastAnimate = fogged;
+    fx.animate = fogged;
+  }
+  fx.set({ cuts: slots, count: cuts.length, ui: [closeLit, 0, 0, 0] });
+  field.set({ cuts: holding ? [] : mapped, away: backstage ? [{ ...backstage }] : [] });
 }
 
 invalidate();

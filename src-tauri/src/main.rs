@@ -23,6 +23,7 @@ use tauri_nspanel::{tauri_panel, ManagerExt as _, PanelLevel, StyleMask, Webview
 use allio::Allio;
 use allio_ws::WebSocketState;
 
+mod backstage;
 mod pointer;
 mod shaders;
 
@@ -396,6 +397,7 @@ fn start_window_binding(allio: &Allio) -> std::sync::Arc<shaders::Shaders> {
         .focused_window()
         .and_then(|id| windows.iter().position(|w| w.id == id));
       shaders::Windows {
+        ids: windows.iter().map(|w| w.id.0).collect(),
         rects: windows
           .iter()
           .map(|w| {
@@ -437,12 +439,16 @@ fn create_rpc_handler(
 ) -> (allio_ws::CustomRpcHandler, allio_ws::DisconnectHandler) {
   let last_state = std::sync::Arc::new(AtomicBool::new(true));
 
+  let backstages = std::sync::Arc::new(backstage::Backstages::default());
+
   let on_disconnect: allio_ws::DisconnectHandler = {
     let shaders = shaders.clone();
     let pointers = pointers.clone();
+    let backstages = backstages.clone();
     std::sync::Arc::new(move |conn| {
       shaders.disconnected(conn);
       pointers.disconnected(conn);
+      backstages.disconnected(conn);
     })
   };
 
@@ -451,6 +457,9 @@ fn create_rpc_handler(
       return Some(response);
     }
     if let Some(response) = pointers.handle(conn, method, args) {
+      return Some(response);
+    }
+    if let Some(response) = backstages.handle(conn, method, args) {
       return Some(response);
     }
     if method != "set_passthrough" && method != "set_clickthrough" {

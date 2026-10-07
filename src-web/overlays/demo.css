@@ -6,6 +6,7 @@ body {
   overflow: hidden;
   font: 12px/1.4 -apple-system, "SF Pro Text", sans-serif;
   user-select: none;
+  -webkit-user-select: none;
 }
 
 .demo-panel {
@@ -165,4 +166,10 @@ body {
 
 .outline.round {
   border-radius: 50%;
+}
+
+/* An invisible target for the pointer over chrome that a shader draws (so the drawing moves
+   with what it belongs to, while this only has to be roughly in place). */
+.hit {
+  position: fixed;
 }

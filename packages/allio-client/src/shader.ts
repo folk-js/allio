@@ -24,8 +24,9 @@
 import type { Hide } from "./types/generated/Hide";
 import type { Region } from "./types/generated/Region";
 import type { ShaderSpec } from "./types/generated/ShaderSpec";
+import type { Source } from "./types/generated/Source";
 
-export type { Hide, Region };
+export type { Hide, Region, Source };
 
 export type UniformType = ShaderSpec["uniforms"][string];
 
@@ -62,6 +63,18 @@ export interface ShaderOptions<U extends Uniforms> {
    * Use it with `screen` to see a window and what is behind it at once. Change it with `fx.behind`.
    */
   behind?: Hide;
+  /**
+   * More textures, by name, read in WGSL as `texture_2d<f32>`s of that name: `{ window: id }` is a
+   * window's own pixels even while it's covered (declare `NAME_rect: "vec4f"` to have its rect on
+   * screen kept up to date), `{ region, hide? }` part of the screen, `null` a name with nothing in
+   * it yet. Change with `fx.sources`; only adding or removing names rebuilds the shader.
+   */
+  sources?: Record<string, Source | null>;
+  /**
+   * Whether to draw every frame. By default a shader draws only when something it reads changed;
+   * one that reads `u.time`/`u.frame` or defines `sim` draws every frame unless this is false.
+   */
+  animate?: boolean;
 }
 
 type Floats = Record<string, number[]>;
@@ -88,6 +101,8 @@ export class Shader<U extends Uniforms = Uniforms> {
   private _behind?: Hide;
   private readonly cell?: number;
   private readonly steps?: number;
+  private _sources: Record<string, Source | null>;
+  private _animate?: boolean;
   private values: Floats = {};
 
   /** @internal Use `allio.shader()`. */
@@ -103,6 +118,8 @@ export class Shader<U extends Uniforms = Uniforms> {
     this.cell = options.cell;
     this.steps = options.steps;
     this._behind = options.behind;
+    this._sources = { ...options.sources };
+    this._animate = options.animate;
     if (options.values) this.store(options.values);
   }
 
@@ -147,6 +164,26 @@ export class Shader<U extends Uniforms = Uniforms> {
    */
   probe(x: number, y: number): Promise<number[]> {
     return this.owner.probe(this.id, x, y);
+  }
+
+  get sources(): Record<string, Source | null> {
+    return this._sources;
+  }
+
+  /** Changes what the named sources show. Cheap unless names are added or removed. */
+  set sources(sources: Record<string, Source | null>) {
+    this._sources = { ...sources };
+    this.owner.changed();
+  }
+
+  get animate(): boolean | undefined {
+    return this._animate;
+  }
+
+  /** Draw every frame (true), only on change (false), or decide from the shader (undefined). */
+  set animate(animate: boolean | undefined) {
+    this._animate = animate;
+    this.owner.changed();
   }
 
   get region(): Region {
@@ -197,6 +234,8 @@ export class Shader<U extends Uniforms = Uniforms> {
       cell: this.cell,
       steps: this.steps,
       behind: this._behind,
+      sources: this._sources,
+      animate: this._animate,
     };
   }
 
@@ -269,12 +308,15 @@ export class ShaderSet {
     }
   }
 
-  /** One flush per animation frame: the full state if the set changed, otherwise only patches. */
+  /**
+   * One flush at the end of the current task: the full state if the set changed, otherwise only
+   * patches. Not at the next animation frame: a page that moves its own elements in a frame and
+   * sets shader values in the same frame would then always see the shader a frame behind.
+   */
   private schedule(): void {
     if (this.scheduled) return;
     this.scheduled = true;
-    const nextFrame = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (f: () => void) => setTimeout(f, 16);
-    nextFrame(() => {
+    queueMicrotask(() => {
       this.scheduled = false;
       if (this.setChanged) return void this.sync();
       const batch = [...this.pending];

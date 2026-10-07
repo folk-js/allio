@@ -135,6 +135,11 @@ pub struct PointerSpec {
   #[serde(default)]
   #[ts(optional, as = "Option<Vec<Warp>>")]
   pub warps: Vec<Warp>,
+  /// Displays the pointer never appears on (a backstage display), given by any rect within
+  /// them. The real cursor still goes there when the pointer acts through a cut.
+  #[serde(default)]
+  #[ts(optional, as = "Option<Vec<Rect>>")]
+  pub away: Vec<Rect>,
 }
 
 /// Where the pointer appears, for a page that draws it.
@@ -171,6 +176,7 @@ impl PointerSpec {
       && self.cuts.is_empty()
       && self.lenses.is_empty()
       && self.warps.is_empty()
+      && self.away.is_empty()
   }
 
   /// One spec that does what all of these do together.
@@ -183,6 +189,7 @@ impl PointerSpec {
       out.cuts.extend(&spec.cuts);
       out.lenses.extend(&spec.lenses);
       out.warps.extend(spec.warps.iter().cloned());
+      out.away.extend(&spec.away);
     }
     out.gain = Some(clamp_gain(gain));
     out

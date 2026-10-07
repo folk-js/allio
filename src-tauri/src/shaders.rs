@@ -6,9 +6,11 @@
 //! Some uniforms are bound by the host instead of the client: a shader that declares
 //! `windows: vec4f[N]` gets the on-screen windows' `(x, y, w, h)` in screen points, frontmost
 //! first, zero-padded; one that declares `focused: f32` gets the index of the focused window in
-//! that list, or -1. They are updated here as windows change, with no round trip to the page.
+//! that list, or -1; one with a window source `NAME` that declares `NAME_rect: vec4f` gets that
+//! window's rect (zero while it isn't on screen). They are updated here as windows change, with no
+//! round trip to the page, and window sources are told when their window is resized.
 
-use allio_shader::{Hide, Region, Shader, ShaderSpec, UniformType};
+use allio_shader::{Hide, Region, Shader, ShaderSpec, Source, UniformType};
 use allio_ws::ConnId;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -25,6 +27,7 @@ pub trait Live: Sized {
   fn set_hide(&self, hide: &Hide) -> Result<(), String>;
   fn set_behind(&self, hide: &Hide) -> Result<(), String>;
   fn probe(&self, x: f64, y: f64) -> Result<[f32; 4], String>;
+  fn window_resized(&self, window: u32, w: f64, h: f64);
 }
 
 impl Live for Shader {
@@ -49,6 +52,9 @@ impl Live for Shader {
   fn probe(&self, x: f64, y: f64) -> Result<[f32; 4], String> {
     Shader::probe(self, x, y)
   }
+  fn window_resized(&self, window: u32, w: f64, h: f64) {
+    Shader::window_resized(self, window, w, h);
+  }
 }
 
 /// The on-screen windows, front to back.
@@ -56,6 +62,8 @@ impl Live for Shader {
 pub struct Windows {
   /// `(x, y, w, h)` in screen points.
   pub rects: Vec<[f32; 4]>,
+  /// The windows' ids, in the same order.
+  pub ids: Vec<u32>,
   /// Index into `rects` of the focused window.
   pub focused: Option<usize>,
 }
@@ -69,6 +77,10 @@ struct Binding {
   /// Length of its `windows` array.
   windows: Option<usize>,
   focused: bool,
+  /// `NAME_rect` uniforms to keep at a window's rect: (uniform, window).
+  rects: Vec<(String, u32)>,
+  /// Every window shown by a window source.
+  sources: Vec<u32>,
 }
 
 impl Binding {
@@ -79,6 +91,23 @@ impl Binding {
         _ => None,
       },
       focused: spec.uniforms.get("focused") == Some(&UniformType::F32),
+      rects: spec
+        .sources
+        .iter()
+        .filter_map(|(name, source)| match source {
+          Some(Source::Window { window }) => Some((format!("{name}_rect"), *window)),
+          _ => None,
+        })
+        .filter(|(uniform, _)| spec.uniforms.get(uniform) == Some(&UniformType::Vec4))
+        .collect(),
+      sources: spec
+        .sources
+        .values()
+        .filter_map(|source| match source {
+          Some(Source::Window { window }) => Some(*window),
+          _ => None,
+        })
+        .collect(),
     }
   }
 
@@ -102,6 +131,16 @@ impl Binding {
         vec![index.map_or(-1.0, |i| i as f32)],
       );
     }
+    for (uniform, window) in &self.rects {
+      let rect = windows
+        .ids
+        .iter()
+        .position(|id| id == window)
+        .and_then(|i| windows.rects.get(i))
+        .copied()
+        .unwrap_or_default();
+      values.insert(uniform.clone(), rect.to_vec());
+    }
     values
   }
 }
@@ -109,6 +148,8 @@ impl Binding {
 struct Entry<T> {
   shader: T,
   binding: Binding,
+  /// The last size each of its source windows was seen at, to tell the shader when it changes.
+  sizes: BTreeMap<u32, [f32; 2]>,
 }
 
 struct State<T> {
@@ -184,14 +225,21 @@ impl<T: Live> Reconciler<T> {
         }
         None => T::start(spec).map(|shader| {
           let binding = Binding::of(spec);
-          live.shaders.insert(id.clone(), Entry { shader, binding });
+          live.shaders.insert(
+            id.clone(),
+            Entry {
+              shader,
+              binding,
+              sizes: BTreeMap::new(),
+            },
+          );
         }),
       };
       if let Err(e) = result {
         errors.insert(id, e);
       }
     }
-    bind(&live, &(self.windows)());
+    bind(&mut live, &(self.windows)());
     json!({ "result": { "errors": errors } })
   }
 
@@ -243,7 +291,7 @@ impl<T: Live> Reconciler<T> {
 
   /// Re-reads the windows and pushes them to the shaders that bound them.
   pub fn windows_changed(&self) {
-    bind(&self.state.lock().unwrap(), &(self.windows)());
+    bind(&mut self.state.lock().unwrap(), &(self.windows)());
   }
 
   /// Drops everything the closed connection declared.
@@ -257,12 +305,28 @@ impl<T: Live> Reconciler<T> {
 }
 
 /// Sets the host-bound uniforms of every shader that declared them.
-fn bind<T: Live>(live: &State<T>, windows: &Windows) {
-  for entry in live.shaders.values() {
+/// Sets the host-bound uniforms of every shader that declared them, and tells window sources
+/// their window's new size.
+fn bind<T: Live>(live: &mut State<T>, windows: &Windows) {
+  for entry in live.shaders.values_mut() {
     let values = entry.binding.values(windows);
     if !values.is_empty() {
       // Can only fail if the declaration changed under us; the next `set` fixes that.
       let _ = entry.shader.set_values(&values);
+    }
+    for window in &entry.binding.sources {
+      let Some([.., w, h]) = windows
+        .ids
+        .iter()
+        .position(|id| id == window)
+        .and_then(|i| windows.rects.get(i))
+        .copied()
+      else {
+        continue;
+      };
+      if entry.sizes.insert(*window, [w, h]) != Some([w, h]) {
+        entry.shader.window_resized(*window, f64::from(w), f64::from(h));
+      }
     }
   }
 }
@@ -345,6 +409,13 @@ mod tests {
     }
     fn probe(&self, x: f64, y: f64) -> Result<[f32; 4], String> {
       Ok([x as f32, y as f32, 0.0, 1.0])
+    }
+    fn window_resized(&self, window: u32, w: f64, h: f64) {
+      self
+        .log
+        .lock()
+        .unwrap()
+        .push(format!("resized {} {window} {w}x{h}", self.id));
     }
   }
 
@@ -467,6 +538,7 @@ mod tests {
     drain();
     let source = Arc::new(StdMutex::new(Windows {
       rects: vec![[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]],
+      ids: vec![10, 11],
       focused: Some(1),
     }));
     let shared = source.clone();
@@ -474,6 +546,7 @@ mod tests {
       let w = shared.lock().unwrap();
       Windows {
         rects: w.rects.clone(),
+        ids: w.ids.clone(),
         focused: w.focused,
       }
     }));
@@ -496,6 +569,7 @@ mod tests {
     // They follow window changes.
     *source.lock().unwrap() = Windows {
       rects: vec![[9.0, 9.0, 9.0, 9.0]],
+      ids: vec![12],
       focused: None,
     };
     r.windows_changed();
@@ -511,14 +585,47 @@ mod tests {
   fn more_windows_than_slots_are_cut_off() {
     let windows = Windows {
       rects: vec![[1.0; 4], [2.0; 4], [3.0; 4]],
+      ids: vec![1, 2, 3],
       focused: Some(2),
     };
     let binding = Binding {
       windows: Some(2),
       focused: true,
+      rects: Vec::new(),
+      sources: Vec::new(),
     };
     let values = binding.values(&windows);
     assert_eq!(values["windows"], [1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0]);
     assert_eq!(values["focused"], [-1.0], "the focused window doesn't fit");
+  }
+
+  #[test]
+  fn window_sources_get_their_rect_and_are_told_of_resizes() {
+    drain();
+    let source = Arc::new(StdMutex::new(Windows {
+      rects: vec![[1.0, 2.0, 30.0, 40.0]],
+      ids: vec![7],
+      focused: None,
+    }));
+    let shared = source.clone();
+    let r = Reconciler::<Fake>::new(Box::new(move || {
+      let w = shared.lock().unwrap();
+      Windows { rects: w.rects.clone(), ids: w.ids.clone(), focused: None }
+    }));
+    let mut with = spec("A");
+    with["uniforms"] = json!({ "win_rect": "vec4f" });
+    with["sources"] = json!({ "win": { "window": 7 }, "gone": { "window": 8 }, "spare": null });
+    set(&r, 1, json!({ "a": with }));
+    let log = drain();
+    assert!(log.iter().any(|e| e.contains("\"win_rect\": [1.0, 2.0, 30.0, 40.0]")), "{log:?}");
+    assert!(log.contains(&"resized A 7 30x40".to_string()), "{log:?}");
+
+    // Moving doesn't resize; resizing does.
+    source.lock().unwrap().rects = vec![[50.0, 2.0, 30.0, 40.0]];
+    r.windows_changed();
+    assert!(!drain().iter().any(|e| e.starts_with("resized")));
+    source.lock().unwrap().rects = vec![[50.0, 2.0, 60.0, 40.0]];
+    r.windows_changed();
+    assert!(drain().contains(&"resized A 7 60x40".to_string()));
   }
 }

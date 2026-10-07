@@ -42,6 +42,8 @@ fn main() {
     cell: None,
     steps: None,
     behind: None,
+    sources: BTreeMap::new(),
+    animate: None,
   })
   .expect("shader");
   std::thread::spawn(move || {

@@ -1,3 +1,28 @@
 {
-  "uniforms": { "cuts": "vec4f[24]", "count": "f32" }
+  "uniforms": {
+    "cuts": "vec4f[32]",
+    "count": "f32",
+    "ui": "vec4f",
+    "w0_rect": "vec4f",
+    "w1_rect": "vec4f",
+    "w2_rect": "vec4f",
+    "w3_rect": "vec4f",
+    "w4_rect": "vec4f",
+    "w5_rect": "vec4f",
+    "w6_rect": "vec4f",
+    "w7_rect": "vec4f"
+  },
+  "include": [
+    "chrome"
+  ],
+  "sources": {
+    "w0": null,
+    "w1": null,
+    "w2": null,
+    "w3": null,
+    "w4": null,
+    "w5": null,
+    "w6": null,
+    "w7": null
+  }
 }

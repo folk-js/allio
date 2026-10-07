@@ -78,11 +78,12 @@ fn compute_offset(windows: &[Window], exclude_pid: Option<ProcessId>) -> (f64, f
   }
 }
 
-/// Check if any windows are offscreen (indicating space transition).
-fn has_offscreen_windows(windows: &[Window], offset_x: f64, screen_width: f64) -> bool {
+/// Check if any windows are offscreen (indicating space transition): past the right edge of
+/// every display.
+fn has_offscreen_windows(windows: &[Window], offset_x: f64, right_edge: f64) -> bool {
   windows.iter().any(|w| {
     let adjusted_x = w.bounds.x - offset_x;
-    adjusted_x > screen_width + 1.0
+    adjusted_x > right_edge + 1.0
   })
 }
 
@@ -93,9 +94,10 @@ fn filter_windows(
   config: &PollingConfig,
   screen_width: f64,
   screen_height: f64,
+  right_edge: f64,
 ) -> PollWindowsResult {
   let (offset_x, offset_y, overlay_missing) = compute_offset(&all_windows, config.exclude_pid);
-  let offscreen = has_offscreen_windows(&all_windows, offset_x, screen_width);
+  let offscreen = has_offscreen_windows(&all_windows, offset_x, right_edge);
   let skip_removal = overlay_missing || offscreen;
 
   let windows: Vec<Window> = all_windows
@@ -118,7 +120,7 @@ fn filter_windows(
       if config.filter_fullscreen && w.bounds.matches_size_at_origin(screen_width, screen_height) {
         return false;
       }
-      if config.filter_offscreen && w.bounds.x > screen_width + 1.0 {
+      if config.filter_offscreen && w.bounds.x > right_edge + 1.0 {
         return false;
       }
       true
@@ -134,7 +136,12 @@ fn filter_windows(
 fn poll_windows(options: &PollingConfig) -> PollWindowsResult {
   let all_windows = CurrentPlatform::fetch_windows(None);
   let (screen_width, screen_height) = CurrentPlatform::fetch_screen_size();
-  filter_windows(all_windows, options, screen_width, screen_height)
+  // Windows on other displays (an extended desktop, a virtual display) are on screen too.
+  let right_edge = CurrentPlatform::fetch_displays()
+    .iter()
+    .map(|d| d.x + d.w)
+    .fold(screen_width, f64::max);
+  filter_windows(all_windows, options, screen_width, screen_height, right_edge)
 }
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PollingConfig {
@@ -312,7 +319,7 @@ mod tests {
 
     #[test]
     fn empty_windows_returns_empty() {
-      let result = filter_windows(vec![], &default_config(), 1920.0, 1080.0);
+      let result = filter_windows(vec![], &default_config(), 1920.0, 1080.0, 1920.0);
       assert!(result.windows.is_empty());
       assert!(!result.skip_removal);
     }
@@ -327,7 +334,7 @@ mod tests {
         exclude_pid: Some(ProcessId(100)),
         ..default_config()
       };
-      let result = filter_windows(windows, &config, 1920.0, 1080.0);
+      let result = filter_windows(windows, &config, 1920.0, 1080.0, 1920.0);
       assert_eq!(result.windows.len(), 1);
       assert_eq!(result.windows[0].id.0, 2);
     }
@@ -344,7 +351,7 @@ mod tests {
         filter_offscreen: false,
         ..default_config()
       };
-      let result = filter_windows(windows, &config, 1920.0, 1080.0);
+      let result = filter_windows(windows, &config, 1920.0, 1080.0, 1920.0);
 
       assert_eq!(result.windows.len(), 1);
       // Window 2 should have offset applied: 110-10=100, 120-20=100
@@ -362,7 +369,7 @@ mod tests {
         filter_fullscreen: true,
         ..default_config()
       };
-      let result = filter_windows(windows, &config, 1920.0, 1080.0);
+      let result = filter_windows(windows, &config, 1920.0, 1080.0, 1920.0);
 
       assert_eq!(result.windows.len(), 1);
       assert_eq!(result.windows[0].id.0, 2);
@@ -375,7 +382,7 @@ mod tests {
         filter_fullscreen: false,
         ..default_config()
       };
-      let result = filter_windows(windows, &config, 1920.0, 1080.0);
+      let result = filter_windows(windows, &config, 1920.0, 1080.0, 1920.0);
       assert_eq!(result.windows.len(), 1);
     }
 
@@ -389,7 +396,7 @@ mod tests {
         filter_offscreen: true,
         ..default_config()
       };
-      let result = filter_windows(windows, &config, 1920.0, 1080.0);
+      let result = filter_windows(windows, &config, 1920.0, 1080.0, 1920.0);
 
       assert_eq!(result.windows.len(), 1);
       assert_eq!(result.windows[0].id.0, 2);
@@ -402,7 +409,7 @@ mod tests {
         exclude_pid: Some(ProcessId(999)), // PID not in windows
         ..default_config()
       };
-      let result = filter_windows(windows, &config, 1920.0, 1080.0);
+      let result = filter_windows(windows, &config, 1920.0, 1080.0, 1920.0);
       assert!(result.skip_removal, "should skip removal when overlay missing");
     }
 
@@ -416,7 +423,7 @@ mod tests {
         filter_offscreen: false, // Don't filter, but still detect
         ..default_config()
       };
-      let result = filter_windows(windows, &config, 1920.0, 1080.0);
+      let result = filter_windows(windows, &config, 1920.0, 1080.0, 1920.0);
       assert!(result.skip_removal, "should skip removal during space transition");
     }
 
@@ -426,7 +433,7 @@ mod tests {
         make_window(1, 100, 0.0, 0.0, 800.0, 600.0),
         make_window(2, 200, 100.0, 100.0, 400.0, 300.0),
       ];
-      let result = filter_windows(windows, &default_config(), 1920.0, 1080.0);
+      let result = filter_windows(windows, &default_config(), 1920.0, 1080.0, 1920.0);
       assert!(!result.skip_removal);
     }
   }

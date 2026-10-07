@@ -43,4 +43,9 @@ impl Shader {
   pub fn set_region(&self, _region: Region) {
     match *self {}
   }
+
+  /// Unreachable: no instance can exist.
+  pub fn window_resized(&self, _window: u32, _w: f64, _h: f64) {
+    match *self {}
+  }
 }

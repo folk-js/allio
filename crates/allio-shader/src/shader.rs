@@ -2,8 +2,8 @@
 #![allow(clippy::expect_used)] // the main queue always runs on the main thread, and runs what it is given
 
 use crate::capture::{self, CaptureHandle};
-use crate::render::{self, Renderer, Source};
-use crate::spec::{Hide, Region, ShaderSpec};
+use crate::render::{self, Renderer};
+use crate::spec::{Hide, Region, ShaderSpec, Source};
 use crate::ticker::Ticker;
 use dispatch2::DispatchQueue;
 use objc2::rc::Retained;
@@ -17,7 +17,7 @@ use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use objc2_metal::{MTLCreateSystemDefaultDevice, MTLDevice, MTLPixelFormat};
 use objc2_quartz_core::CAMetalLayer;
 use parking_lot::Mutex;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 /// Just below floating panels, so an overlay panel (e.g. the Tauri webview) stays on top.
@@ -173,19 +173,80 @@ impl Drop for TickerGuard {
   }
 }
 
-/// A live shader: captures a screen region and draws it back through a WGSL fragment shader.
+/// What a running capture is of, to tell whether a changed spec still wants it.
+#[derive(Debug, Clone, PartialEq)]
+enum Want {
+  /// Part of the display: the shader's region (`None`) or its own.
+  Display { region: Option<Region>, hide: Hide },
+  /// One window.
+  Window(u32),
+}
+
+impl Want {
+  /// Whether a running capture for `self` can be adjusted into one for `other`.
+  const fn same_kind(&self, other: &Self) -> bool {
+    match (self, other) {
+      (Self::Display { .. }, Self::Display { .. }) => true,
+      (Self::Window(a), Self::Window(b)) => *a == *b,
+      _ => false,
+    }
+  }
+}
+
+/// The captures a spec needs: `screen`, `behind` and its named sources, but only the ones the
+/// shader actually reads.
+fn wanted(spec: &ShaderSpec, reads: &BTreeSet<String>) -> BTreeMap<String, Want> {
+  let mut want = BTreeMap::new();
+  if reads.contains(render::SCREEN) {
+    want.insert(
+      render::SCREEN.to_string(),
+      Want::Display {
+        region: None,
+        hide: spec.hide.clone(),
+      },
+    );
+  }
+  if let (Some(hide), true) = (&spec.behind, reads.contains(render::BEHIND)) {
+    want.insert(
+      render::BEHIND.to_string(),
+      Want::Display {
+        region: None,
+        hide: hide.clone(),
+      },
+    );
+  }
+  for (name, source) in &spec.sources {
+    let Some(source) = source.as_ref().filter(|_| reads.contains(name)) else {
+      continue;
+    };
+    let w = match source {
+      Source::Window { window } => Want::Window(*window),
+      Source::Display { region, hide } => Want::Display {
+        region: Some(*region),
+        hide: hide.clone().unwrap_or_default(),
+      },
+    };
+    want.insert(name.clone(), w);
+  }
+  want
+}
+
+/// A live shader: draws a screen region back through a WGSL fragment shader, reading captures
+/// of the screen and of windows.
 ///
-/// Creating one starts everything (window, capture stream, vsync rendering); dropping it
-/// stops everything. A shader stays on the display its region started on.
+/// Creating one starts everything (window, captures, vsync rendering); dropping it stops
+/// everything. A shader stays on the display its region started on.
 pub struct Shader {
   // Field order is drop order: stop drawing, stop capturing, then tear down the rest.
   _ticker: TickerGuard,
-  stream: CaptureHandle,
-  /// The `behind` capture, if the spec asked for one.
-  behind: Option<CaptureHandle>,
+  /// Running captures by texture name, with what each is of.
+  captures: Mutex<BTreeMap<String, (Want, CaptureHandle)>>,
+  /// The spec as last applied, patches included.
+  spec: Mutex<ShaderSpec>,
   renderer: Renderer,
   overlay: Overlay,
   scale: f64,
+  pid: i32,
 }
 
 impl std::fmt::Debug for Shader {
@@ -202,54 +263,35 @@ impl Shader {
     let device = MTLCreateSystemDefaultDevice().ok_or("no Metal device")?;
     let pipeline = render::build(&device, spec)?;
     let (overlay, layer, scale) = Overlay::create(&device, spec.region)?;
-    let renderer = Renderer::new(
-      device,
-      layer.clone(),
-      scale,
-      pipeline,
-      spec.region,
-      spec.cell,
-      spec.steps(),
-    )?;
-
-    let pid = i32::try_from(std::process::id()).map_err(|e| e.to_string())?;
-    let frames = renderer.clone();
-    let stream = capture::start(spec.region, scale, &spec.hide, pid, move |f| {
-      frames.present(Source::Screen, f);
-    })?;
-    let behind = spec
-      .behind
-      .as_ref()
-      .map(|hide| {
-        let frames = renderer.clone();
-        capture::start(spec.region, scale, hide, pid, move |f| {
-          frames.present(Source::Behind, f);
-        })
-      })
-      .transpose()?;
+    let renderer = Renderer::new(device, layer.clone(), scale, pipeline, spec)?;
     let ticker = TickerGuard::start(&layer, renderer.clone());
-
-    Ok(Self {
+    let shader = Self {
       _ticker: ticker,
-      stream,
-      behind,
+      captures: Mutex::new(BTreeMap::new()),
+      spec: Mutex::new(spec.clone()),
       renderer,
       overlay,
       scale,
-    })
+      pid: i32::try_from(std::process::id()).map_err(|e| e.to_string())?,
+    };
+    shader.sync()?;
+    Ok(shader)
   }
 
   /// Applies a changed spec: rebuilds the pipeline only if the WGSL or declarations changed (on
-  /// error the previous one keeps running), and moves the region only if it changed.
+  /// error the previous one keeps running), moves the region, and starts, adjusts or stops
+  /// captures to match.
   pub fn update(&self, spec: &ShaderSpec) -> Result<(), String> {
+    {
+      let current = self.spec.lock();
+      if current.behind.is_some() != spec.behind.is_some() {
+        return Err("`behind` can't be added or removed while a shader is running".to_string());
+      }
+    }
     let result = self.renderer.update(spec);
+    *self.spec.lock() = spec.clone();
     self.set_region(spec.region);
-    let behind = match (&spec.behind, &self.behind) {
-      (Some(hide), Some(_)) => self.set_behind(hide),
-      (None, None) => Ok(()),
-      _ => Err("`behind` can't be added or removed while a shader is running".to_string()),
-    };
-    result.and(self.set_hide(&spec.hide)).and(behind)
+    result.and(self.sync())
   }
 
   /// Overwrites uniform values. Latest wins: nothing is queued.
@@ -259,16 +301,21 @@ impl Shader {
 
   /// Changes which windows are left out of the captured `screen`.
   pub fn set_hide(&self, hide: &Hide) -> Result<(), String> {
-    self.stream.set_hide(hide)
+    self.spec.lock().hide = hide.clone();
+    self.sync()
   }
 
   /// Changes which windows are left out of `behind`.
   pub fn set_behind(&self, hide: &Hide) -> Result<(), String> {
-    self
-      .behind
-      .as_ref()
-      .ok_or_else(|| "this shader has no `behind` capture".to_string())?
-      .set_hide(hide)
+    {
+      let mut spec = self.spec.lock();
+      let behind = spec
+        .behind
+        .as_mut()
+        .ok_or_else(|| "this shader has no `behind` capture".to_string())?;
+      *behind = hide.clone();
+    }
+    self.sync()
   }
 
   /// Reads one cell of the simulation state at a screen point, as `[r, g, b, a]`.
@@ -276,14 +323,88 @@ impl Shader {
     self.renderer.probe(x, y)
   }
 
-  /// Moves or resizes the captured region.
+  /// Moves or resizes the drawn region (and the captures that follow it).
   pub fn set_region(&self, region: Region) {
+    self.spec.lock().region = region;
     if self.renderer.set_region(region) {
-      self.stream.set_region(region, self.scale);
-      if let Some(behind) = &self.behind {
-        behind.set_region(region, self.scale);
+      for (want, capture) in self.captures.lock().values() {
+        if matches!(want, Want::Display { region: None, .. }) {
+          capture.set_region(region, self.scale);
+        }
       }
       self.overlay.set_region(region);
     }
+  }
+
+  /// Tells window captures their window's new size (in points), so they stay one to one.
+  pub fn window_resized(&self, window: u32, w: f64, h: f64) {
+    for (want, capture) in self.captures.lock().values() {
+      if *want == Want::Window(window) {
+        capture.set_size(w, h, self.scale);
+      }
+    }
+  }
+
+  /// Makes the running captures match the spec and what the shader reads. Reports the first
+  /// capture that couldn't be started or changed; the others are still applied.
+  fn sync(&self) -> Result<(), String> {
+    let spec = self.spec.lock().clone();
+    let want = wanted(&spec, &self.renderer.reads());
+    let mut captures = self.captures.lock();
+    captures.retain(|name, (had, _)| {
+      let keep = want.get(name).is_some_and(|w| had.same_kind(w));
+      if !keep {
+        self.renderer.clear(name);
+      }
+      keep
+    });
+
+    let mut first_err = None;
+    for (name, w) in want {
+      let result = if let Some((had, capture)) = captures.get_mut(&name) {
+        let mut result = Ok(());
+        if let (
+          Want::Display {
+            region: r0,
+            hide: h0,
+          },
+          Want::Display {
+            region: r1,
+            hide: h1,
+          },
+        ) = (&*had, &w)
+        {
+          if let (Some(r), true) = (r1, r0 != r1) {
+            capture.set_region(*r, self.scale);
+          }
+          if h0 != h1 {
+            result = capture.set_hide(h1);
+          }
+        }
+        *had = w;
+        result
+      } else {
+        let frames = self.renderer.clone();
+        let named = name.clone();
+        let deliver = move |f| frames.present(&named, f);
+        let started = match &w {
+          Want::Window(id) => capture::start_window(*id, self.scale, deliver),
+          Want::Display { region, hide } => capture::start(
+            region.unwrap_or(spec.region),
+            self.scale,
+            hide,
+            self.pid,
+            deliver,
+          ),
+        };
+        started.map(|capture| {
+          captures.insert(name.clone(), (w, capture));
+        })
+      };
+      if let Err(e) = result {
+        first_err = first_err.or(Some(format!("{name}: {e}")));
+      }
+    }
+    first_err.map_or(Ok(()), Err)
   }
 }

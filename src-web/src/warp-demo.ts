@@ -11,7 +11,7 @@
 import type { AX, Grid, Rect } from "allio";
 import manifest from "../shaders/warp.json";
 import wgsl from "../shaders/warp.wgsl?raw";
-import { connect, declared, drawPointer, screen } from "./shader-demo";
+import { connect, declared, drawPointer, screen, source } from "./shader-demo";
 
 /** `[a, b, c, d, tx, ty]`: (x, y) goes to (a·x + b·y + tx, c·x + d·y + ty). */
 export type Affine = [number, number, number, number, number, number];
@@ -66,6 +66,8 @@ export interface Deformer {
   setTarget(id: AX.WindowId | null): void;
   /** Whether the pointer acts through the deformation (off while editing it). */
   acting: boolean;
+  /** Two knobs to draw on top (screen points, x1 y1 x2 y2), or null. */
+  knobs: [number, number, number, number] | null;
   /** Our own clickable chrome: the pointer acts where it appears there. */
   chrome: () => Rect[];
   /** Call after changing `grid` or `acting` (changes to `affine` are noticed by themselves). */
@@ -76,7 +78,7 @@ export interface Deformer {
 
 export function deformer(): Deformer {
   const { allio, passthrough } = connect();
-  const fx = allio.shader({ region: screen(), wgsl, ...declared(manifest) });
+  const fx = allio.shader({ region: screen(), wgsl: source(manifest, wgsl), ...declared(manifest) });
   const field = allio.pointer();
   drawPointer(allio);
 
@@ -95,6 +97,7 @@ export function deformer(): Deformer {
     affine: [...IDENTITY],
     grid: null,
     acting: true,
+    knobs: null,
     chrome: () => [],
     setTarget(id) {
       if (id === targetId) return;
@@ -124,14 +127,15 @@ export function deformer(): Deformer {
     const [a, b, c, dd, tx, ty] = d.affine;
     const flatAbove = new Array(MAX_ABOVE * 4).fill(0);
     above.slice(0, MAX_ABOVE).forEach((r, i) => flatAbove.splice(i * 4, 4, r.x, r.y, r.w, r.h));
-    const shaderKey = JSON.stringify([win, d.affine, flatAbove]);
+    const shaderKey = JSON.stringify([win, d.affine, flatAbove, d.knobs]);
     if (dirty || shaderKey !== lastShader) {
       lastShader = shaderKey;
       fx.set({
         win: [win.x, win.y, win.w, win.h],
         affine: [a, b, c, dd],
         shift: [tx, ty, d.grid?.margin ?? 0, d.grid ? 1 : 0],
-        dims: [d.grid?.cols ?? 0, d.grid?.rows ?? 0, Math.min(above.length, MAX_ABOVE), 0],
+        dims: [d.grid?.cols ?? 0, d.grid?.rows ?? 0, Math.min(above.length, MAX_ABOVE), d.knobs ? 1 : 0],
+        knobs: d.knobs ?? [0, 0, 0, 0],
         above: flatAbove,
         ...(dirty ? { grid: [...(d.grid?.offsets ?? []), ...new Array(640 - (d.grid?.offsets.length ?? 0)).fill(0)] } : {}),
       });

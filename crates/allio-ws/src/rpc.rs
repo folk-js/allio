@@ -78,6 +78,8 @@ pub enum RpcRequest {
   },
   /// Perform an app-declared custom action by label.
   PerformCustom { element_id: ElementId, label: String },
+  /// Move a window so its top-left is at (x, y), in global screen points.
+  MoveWindow { window_id: WindowId, x: f64, y: f64 },
   /// Watch element for changes.
   Watch { element_id: ElementId },
   /// Stop watching element.
@@ -212,6 +214,13 @@ pub fn dispatch(allio: &Allio, request: RpcRequest) -> Result<RpcResponse, Strin
     RpcRequest::PerformCustom { element_id, label } => {
       allio
         .perform_custom_action(element_id, &label)
+        .map_err(|e| e.to_string())?;
+      Ok(RpcResponse::Null)
+    }
+
+    RpcRequest::MoveWindow { window_id, x, y } => {
+      allio
+        .move_window(window_id, x, y)
         .map_err(|e| e.to_string())?;
       Ok(RpcResponse::Null)
     }

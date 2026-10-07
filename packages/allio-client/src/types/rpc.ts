@@ -27,6 +27,7 @@ export type RpcReturns = {
   replace_text: void;
   perform: boolean;
   perform_custom: void;
+  move_window: void;
   watch: void;
   unwatch: void;
   observe: void;

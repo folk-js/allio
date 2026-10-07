@@ -54,6 +54,10 @@ impl Platform for MacOS {
     display::get_main_screen_dimensions()
   }
 
+  fn fetch_displays() -> Vec<crate::types::Bounds> {
+    display::active_displays()
+  }
+
   fn fetch_mouse_position() -> Point {
     mouse::get_mouse_position().unwrap_or_else(|| Point::new(0.0, 0.0))
   }
@@ -141,6 +145,14 @@ impl PlatformHandle for ElementHandle {
         reason: format!("AXReplaceRangeWithText: {e:?}"),
       }),
     }
+  }
+
+  fn set_position(&self, x: f64, y: f64) -> AllioResult<()> {
+    self
+      .set_position_internal(x, y)
+      .map_err(|e| AllioError::SetValueFailed {
+        reason: format!("AXPosition: {e:?}"),
+      })
   }
 
   fn fetch_attributes(&self) -> ElementAttributes {

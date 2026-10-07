@@ -112,7 +112,14 @@ function frame() {
     for (let i = 0; i < 4; i++) hl[i] = fresh ? goal[i] : hl[i] + (goal[i] - hl[i]) * 0.35;
   }
   alpha += ((target ? 1 : 0) - alpha) * 0.25;
-  fx.set({ hl: [...hl] as [number, number, number, number], alpha });
+  if (Math.abs(alpha - (target ? 1 : 0)) < 0.002) alpha = target ? 1 : 0;
+  // Only send changes: the shader draws only when something changed.
+  const key = `${hl.map((v) => v.toFixed(2))} ${alpha.toFixed(3)}`;
+  if (key !== sent) {
+    sent = key;
+    fx.set({ hl: [...hl] as [number, number, number, number], alpha });
+  }
   requestAnimationFrame(frame);
 }
+let sent = "";
 requestAnimationFrame(frame);
