@@ -7,7 +7,7 @@ through individual element queries.
 
 use super::Allio;
 use crate::platform::{CurrentPlatform, Platform};
-use crate::types::{Window, WindowId};
+use crate::types::{Presence, Window, WindowId};
 use std::collections::HashSet;
 
 impl Allio {
@@ -15,16 +15,27 @@ impl Allio {
   /// `skip_removal=true` during space transitions where window visibility is unreliable.
   /// TODO: remove `skip_removal` and just pause sync in this instance ^
   pub(crate) fn sync_windows(&self, new_windows: Vec<Window>, skip_removal: bool) {
+    // Windows the user can't see (on another Space, minimised, hidden) that allio has never seen
+    // are only added if they are on a Space: off-screen windows on no Space are mostly not real
+    // windows. Windows allio already knows are kept wherever they go.
+    let new_windows: Vec<Window> = self.read(|s| {
+      new_windows
+        .into_iter()
+        .filter(|w| {
+          w.presence == Presence::Here || !w.spaces.is_empty() || s.window(w.id).is_some()
+        })
+        .collect()
+    });
     let new_ids: HashSet<WindowId> = new_windows.iter().map(|w| w.id).collect();
 
+    // Accessibility only finds windows that are on screen, so only look for those. A handle
+    // found while a window was here keeps working once it is elsewhere.
     let windows_needing_handle: HashSet<WindowId> = self.read(|s| {
-      new_ids
+      new_windows
         .iter()
-        .filter(|id| {
-          // Fetch handle if: window is new OR existing window has no handle
-          s.window(**id).and_then(|w| w.handle.as_ref()).is_none()
-        })
-        .copied()
+        .filter(|w| w.presence == Presence::Here)
+        .filter(|w| s.window(w.id).and_then(|w| w.handle.as_ref()).is_none())
+        .map(|w| w.id)
         .collect()
     });
 
@@ -81,6 +92,11 @@ impl Allio {
   /// Sync focused window from polling.
   pub(crate) fn sync_focused_window(&self, window_id: Option<WindowId>) {
     self.write(|s| s.set_focused_window(window_id));
+  }
+
+  /// Sync the Spaces from polling.
+  pub(crate) fn sync_spaces(&self, spaces: Vec<crate::types::Space>) {
+    self.write(|s| s.set_spaces(spaces));
   }
 
   /// Sync mouse position from polling.

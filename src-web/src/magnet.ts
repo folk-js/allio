@@ -77,10 +77,7 @@ async function follow(next: AX.WindowId | null) {
 allio.on("subtree:changed", ({ root_id }) => root_id === rootId && collect());
 allio.on("window:changed", ({ window }) => window.id === windowId && collect());
 
-const windowAt = (x: number, y: number) =>
-  [...allio.windows.values()]
-    .sort((a, b) => a.z_index - b.z_index)
-    .find(({ bounds: b }) => x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h)?.id ?? null;
+const windowAt = (x: number, y: number) => allio.windowAt(x, y)?.id ?? null;
 
 // --- The lift: which target the pointer is on, animated towards ---
 

@@ -3,6 +3,10 @@
 
 export type { Element } from "./generated/Element";
 export type { Window } from "./generated/Window";
+export type { Presence } from "./generated/Presence";
+export type { Space } from "./generated/Space";
+export type { SpaceId } from "./generated/SpaceId";
+export type { SpaceKind } from "./generated/SpaceKind";
 export type { Event } from "./generated/Event";
 export type { Snapshot } from "./generated/Snapshot";
 export type { TextSelection } from "./generated/TextSelection";

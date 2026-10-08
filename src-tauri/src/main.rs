@@ -28,6 +28,8 @@ mod backstage;
 mod menubar;
 mod pointer;
 mod shaders;
+#[cfg(target_os = "macos")]
+mod spaces;
 
 #[cfg(target_os = "macos")]
 tauri_panel! {
@@ -97,6 +99,7 @@ const DEFAULT_OVERLAYS: &[&str] = &[
   "warp.html",
   "transform.html",
   "light.html",
+  "stickies.html",
 ];
 
 fn get_overlay_files() -> Vec<String> {
@@ -407,7 +410,12 @@ fn start_window_binding(allio: &Allio) -> std::sync::Arc<shaders::Shaders> {
   let source = {
     let allio = allio.clone();
     Box::new(move || {
-      let mut windows = allio.all_windows();
+      // Shaders draw what is on screen: only windows that are here.
+      let mut windows: Vec<_> = allio
+        .all_windows()
+        .into_iter()
+        .filter(|w| w.presence == allio::Presence::Here)
+        .collect();
       windows.sort_by_key(|w| w.z_index);
       let focused = allio
         .focused_window()
@@ -453,6 +461,7 @@ fn create_rpc_handler(
   shaders: std::sync::Arc<shaders::Shaders>,
   pointers: std::sync::Arc<pointer::Pointers>,
   backstages: std::sync::Arc<backstage::Backstages>,
+  #[cfg(target_os = "macos")] spaces: std::sync::Arc<spaces::Spaces>,
 ) -> (allio_ws::CustomRpcHandler, allio_ws::DisconnectHandler) {
   let last_state = std::sync::Arc::new(AtomicBool::new(true));
 
@@ -460,10 +469,14 @@ fn create_rpc_handler(
     let shaders = shaders.clone();
     let pointers = pointers.clone();
     let backstages = backstages.clone();
+    #[cfg(target_os = "macos")]
+    let spaces = spaces.clone();
     std::sync::Arc::new(move |conn| {
       shaders.disconnected(conn);
       pointers.disconnected(conn);
       backstages.disconnected(conn);
+      #[cfg(target_os = "macos")]
+      spaces.disconnected(conn);
     })
   };
 
@@ -475,6 +488,10 @@ fn create_rpc_handler(
       return Some(response);
     }
     if let Some(response) = backstages.handle(conn, method, args) {
+      return Some(response);
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(response) = spaces.handle(conn, method, args) {
       return Some(response);
     }
     if method != "set_passthrough" && method != "set_clickthrough" {
@@ -568,6 +585,23 @@ fn setup_macos_panel(window: &tauri::WebviewWindow) -> Result<(), Box<dyn std::e
   panel.set_floating_panel(true);
   panel.set_has_shadow(false);
   panel.set_ignores_mouse_events(true);
+  // On every Space, full-screen ones included: the page is one document shown wherever you are
+  // (UI belonging to a particular Space is shown there by `spaces`).
+  panel.set_collection_behavior(
+    tauri_nspanel::CollectionBehavior::new()
+      .can_join_all_spaces()
+      .full_screen_auxiliary()
+      .into(),
+  );
+  // WebKit throttles pages in windows it thinks are hidden; on full-screen Spaces it can think
+  // so of this one.
+  let _ = window.with_webview(|webview| unsafe {
+    let wk: &objc2::runtime::AnyObject = &*webview.inner().cast();
+    let selector = objc2::sel!(_setWindowOcclusionDetectionEnabled:);
+    if objc2::msg_send![wk, respondsToSelector: selector] {
+      let _: () = objc2::msg_send![wk, _setWindowOcclusionDetectionEnabled: false];
+    }
+  });
   panel.show();
 
   Ok(())
@@ -654,6 +688,8 @@ fn main() {
         shaders,
         pointers.clone(),
         backstages,
+        #[cfg(target_os = "macos")]
+        spaces::Spaces::new(app.handle().clone(), allio.clone()),
       );
       let ws_state = WebSocketState::new(allio.clone())
         .with_custom_handler(rpc_handler)

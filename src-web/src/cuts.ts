@@ -183,10 +183,7 @@ function resolve(anchor: Anchor): Source | null {
 }
 
 /** The topmost window containing a point. */
-const windowAt = (x: number, y: number) =>
-  [...allio.windows.values()]
-    .sort((a, b) => a.z_index - b.z_index)
-    .find(({ bounds: b }) => x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h) ?? null;
+const windowAt = (x: number, y: number) => allio.windowAt(x, y);
 
 /** The nearest scroll area around an element: what decides which part of it is in view. */
 async function scrollAreaOf(el: TypedElement): Promise<TypedElement | null> {

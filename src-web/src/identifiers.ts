@@ -41,7 +41,7 @@ class WindowOverlay {
   private async connect() {
     await this.allio.connect();
 
-    const render = () => this.render([...this.allio.windows.values()]);
+    const render = () => this.render([...this.allio.windows.values()].filter((w) => w.presence === "here"));
     render();
     (["window:added", "window:changed", "window:removed"] as const).forEach(
       (e) => this.allio.on(e, render)

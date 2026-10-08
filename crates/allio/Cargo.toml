@@ -34,7 +34,7 @@ objc2-core-graphics = { version = "0.3.2", features = [
   "CGEvent",
 ] }
 objc2-foundation = { version = "0.3.2", features = ["NSString"] }
-objc2-app-kit = { version = "0.3.2", features = ["NSRunningApplication"] }
+objc2-app-kit = { version = "0.3.2", features = ["NSRunningApplication", "NSApplication"] }
 objc2-application-services = { version = "0.3.2", features = [
   "AXUIElement",
   "AXError",

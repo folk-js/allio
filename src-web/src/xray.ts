@@ -22,9 +22,7 @@ fx.onerror = showError;
 // is behind it. The shader finds the same window itself, from the host-bound `windows`.
 let hidden: number | null = null;
 allio.on("mouse:position", ({ x, y }) => {
-  const under = [...allio.windows.values()]
-    .sort((a, b) => a.z_index - b.z_index)
-    .find(({ bounds: b }) => x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h);
+  const under = allio.windowAt(x, y);
   const id = under?.id ?? null;
   if (id === hidden) return;
   hidden = id;

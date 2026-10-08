@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Stickies</title>
+    <meta name="description" content="Notes stuck on windows, on every Space, full screen too" />
+    <meta name="allio:group" content="Pointer & windows" />
+    <link rel="stylesheet" href="./demo.css" />
+    <style>
+      .sticky {
+        position: absolute;
+        width: 190px;
+        display: flex;
+        flex-direction: column;
+        background: #fde68a;
+        color: #3b2f05;
+        border-radius: 6px;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+        overflow: hidden;
+      }
+      .sticky.on-space {
+        background: #bfdbfe;
+        color: #0b2545;
+      }
+      .sticky header {
+        position: relative;
+        height: 18px;
+        background-image: radial-gradient(circle, rgba(0, 0, 0, 0.28) 0.8px, transparent 1.2px);
+        background-size: 4px 4px;
+        cursor: grab;
+      }
+      .sticky header .close {
+        position: absolute;
+        right: 2px;
+        top: 0;
+      }
+      .sticky header .close::before,
+      .sticky header .close::after {
+        background: currentColor;
+      }
+      .sticky textarea {
+        height: 110px;
+        margin: 0;
+        padding: 6px 10px 10px;
+        border: 0;
+        resize: none;
+        outline: none;
+        background: transparent;
+        color: inherit;
+        font: 13px/1.35 -apple-system, "SF Pro Text", sans-serif;
+        -webkit-user-select: text;
+        user-select: text;
+      }
+      .pick-layer {
+        position: fixed;
+        inset: 0;
+        cursor: crosshair;
+      }
+    </style>
+  </head>
+  <body>
+    <script type="module" src="../src/stickies.ts"></script>
+  </body>
+</html>

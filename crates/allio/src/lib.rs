@@ -40,3 +40,11 @@ pub use types::*;
 
 pub use crate::core::{Allio, AllioBuilder, SetOptions};
 pub use crate::observation::{ObservationHandle, ObserveConfig};
+
+/// Puts one of this process's own windows on exactly one Space (by its window number). Call it
+/// once `AppKit` has ordered the window in: ordering in puts a window on the current Space,
+/// undoing an earlier placement. Returns whether it is now there.
+#[cfg(target_os = "macos")]
+pub fn place_window_on_space(window_number: u32, space: SpaceId) -> bool {
+  platform::macos::skylight::place_window_on_space(window_number, space)
+}

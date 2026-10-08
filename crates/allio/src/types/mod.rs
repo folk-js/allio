@@ -11,6 +11,7 @@ mod event;
 mod geometry;
 mod ids;
 mod recency;
+mod space;
 mod window;
 
 pub use element::Element;
@@ -19,4 +20,5 @@ pub use event::{Event, Snapshot, TextRange, TextSelection};
 pub use geometry::{Bounds, Point};
 pub use ids::{ElementId, ProcessId, WindowId};
 pub use recency::Recency;
-pub use window::Window;
+pub use space::{Space, SpaceId, SpaceKind};
+pub use window::{Presence, Window};

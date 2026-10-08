@@ -7,7 +7,7 @@ Consumers don't interact with this directly - polling is owned by `Allio`.
 
 use crate::core::Allio;
 use crate::platform::{CurrentPlatform, DisplayLinkHandle, Platform};
-use crate::types::{ProcessId, Window};
+use crate::types::{ProcessId, Space, SpaceId, SpaceKind, Window};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -95,6 +95,7 @@ fn filter_windows(
   screen_width: f64,
   screen_height: f64,
   right_edge: f64,
+  fullscreen_spaces: &[SpaceId],
 ) -> PollWindowsResult {
   let (offset_x, offset_y, overlay_missing) = compute_offset(&all_windows, config.exclude_pid);
   let offscreen = has_offscreen_windows(&all_windows, offset_x, right_edge);
@@ -117,7 +118,13 @@ fn filter_windows(
       w
     })
     .filter(|w| {
-      if config.filter_fullscreen && w.bounds.matches_size_at_origin(screen_width, screen_height) {
+      // A window filling the screen is filtered out, unless it is a full-screen window on its
+      // own Space: that is a real window people work in.
+      let fullscreen_window = w.spaces.iter().any(|s| fullscreen_spaces.contains(s));
+      if config.filter_fullscreen
+        && !fullscreen_window
+        && w.bounds.matches_size_at_origin(screen_width, screen_height)
+      {
         return false;
       }
       if config.filter_offscreen && w.bounds.x > right_edge + 1.0 {
@@ -133,15 +140,20 @@ fn filter_windows(
   }
 }
 
-fn poll_windows(options: &PollingConfig) -> PollWindowsResult {
+fn poll_windows(options: &PollingConfig, spaces: &[Space]) -> PollWindowsResult {
   let all_windows = CurrentPlatform::fetch_windows(None);
+  let fullscreen: Vec<SpaceId> = spaces
+    .iter()
+    .filter(|s| s.kind == SpaceKind::Fullscreen)
+    .map(|s| s.id)
+    .collect();
   let (screen_width, screen_height) = CurrentPlatform::fetch_screen_size();
   // Windows on other displays (an extended desktop, a virtual display) are on screen too.
   let right_edge = CurrentPlatform::fetch_displays()
     .iter()
     .map(|d| d.x + d.w)
     .fold(screen_width, f64::max);
-  filter_windows(all_windows, options, screen_width, screen_height, right_edge)
+  filter_windows(all_windows, options, screen_width, screen_height, right_edge, &fullscreen)
 }
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PollingConfig {
@@ -217,7 +229,9 @@ fn poll_iteration(allio: &Allio, config: &PollingConfig) {
   let pos = CurrentPlatform::fetch_mouse_position();
   allio.sync_mouse(pos);
 
-  let poll_result = poll_windows(config);
+  let spaces = CurrentPlatform::fetch_spaces();
+  let poll_result = poll_windows(config, &spaces);
+  allio.sync_spaces(spaces);
   let focused_window_id = poll_result.windows.iter().find(|w| w.focused).map(|w| w.id);
 
   allio.sync_windows(poll_result.windows, poll_result.skip_removal);
@@ -239,6 +253,8 @@ mod tests {
       focused: false,
       process_id: ProcessId(pid),
       z_index: id,
+      presence: crate::types::Presence::Here,
+      spaces: Vec::new(),
     }
   }
 
@@ -319,9 +335,27 @@ mod tests {
 
     #[test]
     fn empty_windows_returns_empty() {
-      let result = filter_windows(vec![], &default_config(), 1920.0, 1080.0, 1920.0);
+      let result = filter_windows(vec![], &default_config(), 1920.0, 1080.0, 1920.0, &[]);
       assert!(result.windows.is_empty());
       assert!(!result.skip_removal);
+    }
+
+    #[test]
+    fn keeps_a_full_screen_window_on_its_own_space() {
+      let mut full = make_window(1, 100, 0.0, 0.0, 1920.0, 1080.0);
+      full.spaces = vec![SpaceId(7)];
+      let mut filling = make_window(2, 200, 0.0, 0.0, 1920.0, 1080.0);
+      filling.spaces = vec![SpaceId(1)];
+      let result = filter_windows(
+        vec![full, filling],
+        &default_config(),
+        1920.0,
+        1080.0,
+        1920.0,
+        &[SpaceId(7)],
+      );
+      let ids: Vec<u32> = result.windows.iter().map(|w| w.id.0).collect();
+      assert_eq!(ids, [1], "the screen-filling window on a desktop is still filtered");
     }
 
     #[test]
@@ -334,7 +368,7 @@ mod tests {
         exclude_pid: Some(ProcessId(100)),
         ..default_config()
       };
-      let result = filter_windows(windows, &config, 1920.0, 1080.0, 1920.0);
+      let result = filter_windows(windows, &config, 1920.0, 1080.0, 1920.0, &[]);
       assert_eq!(result.windows.len(), 1);
       assert_eq!(result.windows[0].id.0, 2);
     }
@@ -351,7 +385,7 @@ mod tests {
         filter_offscreen: false,
         ..default_config()
       };
-      let result = filter_windows(windows, &config, 1920.0, 1080.0, 1920.0);
+      let result = filter_windows(windows, &config, 1920.0, 1080.0, 1920.0, &[]);
 
       assert_eq!(result.windows.len(), 1);
       // Window 2 should have offset applied: 110-10=100, 120-20=100
@@ -369,7 +403,7 @@ mod tests {
         filter_fullscreen: true,
         ..default_config()
       };
-      let result = filter_windows(windows, &config, 1920.0, 1080.0, 1920.0);
+      let result = filter_windows(windows, &config, 1920.0, 1080.0, 1920.0, &[]);
 
       assert_eq!(result.windows.len(), 1);
       assert_eq!(result.windows[0].id.0, 2);
@@ -382,7 +416,7 @@ mod tests {
         filter_fullscreen: false,
         ..default_config()
       };
-      let result = filter_windows(windows, &config, 1920.0, 1080.0, 1920.0);
+      let result = filter_windows(windows, &config, 1920.0, 1080.0, 1920.0, &[]);
       assert_eq!(result.windows.len(), 1);
     }
 
@@ -396,7 +430,7 @@ mod tests {
         filter_offscreen: true,
         ..default_config()
       };
-      let result = filter_windows(windows, &config, 1920.0, 1080.0, 1920.0);
+      let result = filter_windows(windows, &config, 1920.0, 1080.0, 1920.0, &[]);
 
       assert_eq!(result.windows.len(), 1);
       assert_eq!(result.windows[0].id.0, 2);
@@ -409,7 +443,7 @@ mod tests {
         exclude_pid: Some(ProcessId(999)), // PID not in windows
         ..default_config()
       };
-      let result = filter_windows(windows, &config, 1920.0, 1080.0, 1920.0);
+      let result = filter_windows(windows, &config, 1920.0, 1080.0, 1920.0, &[]);
       assert!(result.skip_removal, "should skip removal when overlay missing");
     }
 
@@ -423,7 +457,7 @@ mod tests {
         filter_offscreen: false, // Don't filter, but still detect
         ..default_config()
       };
-      let result = filter_windows(windows, &config, 1920.0, 1080.0, 1920.0);
+      let result = filter_windows(windows, &config, 1920.0, 1080.0, 1920.0, &[]);
       assert!(result.skip_removal, "should skip removal during space transition");
     }
 
@@ -433,7 +467,7 @@ mod tests {
         make_window(1, 100, 0.0, 0.0, 800.0, 600.0),
         make_window(2, 200, 100.0, 100.0, 400.0, 300.0),
       ];
-      let result = filter_windows(windows, &default_config(), 1920.0, 1080.0, 1920.0);
+      let result = filter_windows(windows, &default_config(), 1920.0, 1080.0, 1920.0, &[]);
       assert!(!result.skip_removal);
     }
   }

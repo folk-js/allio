@@ -8,7 +8,7 @@
  * Where the deformation carves the window away, what was behind it shows, and clicks there are
  * dropped by the host (the real window is still there).
  */
-import type { AX, Grid, Rect } from "allio";
+import type { AX, Allio, Grid, Rect } from "allio";
 import manifest from "../shaders/warp.json";
 import wgsl from "../shaders/warp.wgsl?raw";
 import { connect, declared, drawPointer, screen, source } from "./shader-demo";
@@ -46,12 +46,8 @@ export function gridOffset(g: Grid, w: number, h: number, x: number, y: number):
 }
 
 /** The topmost window containing a point. */
-export function windowAt(allio: { windows: Map<AX.WindowId, AX.Window> }, x: number, y: number): AX.Window | null {
-  return (
-    [...allio.windows.values()]
-      .sort((a, b) => a.z_index - b.z_index)
-      .find(({ bounds: b }) => x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h) ?? null
-  );
+export function windowAt(allio: Allio, x: number, y: number): AX.Window | null {
+  return allio.windowAt(x, y);
 }
 
 export interface Deformer {
@@ -119,7 +115,9 @@ export function deformer(): Deformer {
 
     // Windows in front of the target, and our own chrome, are left alone by both shader and pointer.
     const above: Rect[] = w
-      ? [...allio.windows.values()].filter((o) => o.z_index < w.z_index).map((o) => o.bounds)
+      ? [...allio.windows.values()]
+          .filter((o) => o.presence === "here" && o.z_index < w.z_index)
+          .map((o) => o.bounds)
       : [];
     above.push(...d.chrome());
 

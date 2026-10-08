@@ -27,7 +27,8 @@ use std::collections::HashMap;
 use crate::a11y::{Action, Role, Value};
 use crate::platform::{AppNotificationHandle, Handle, Observer, WatchHandle};
 use crate::types::{
-  Bounds, Element, ElementId, Event, Point, ProcessId, TextRange, TextSelection, Window, WindowId,
+  Bounds, Element, ElementId, Event, Point, Presence, ProcessId, Space, TextRange, TextSelection,
+  Window, WindowId,
 };
 use tree::ElementTree;
 
@@ -265,6 +266,7 @@ pub(crate) struct Registry {
   focused_window: Option<WindowId>,
   pub(super) z_order: Vec<WindowId>,
   mouse_position: Option<Point>,
+  spaces: Vec<Space>,
 }
 
 impl Registry {
@@ -281,6 +283,7 @@ impl Registry {
       focused_window: None,
       z_order: Vec::new(),
       mouse_position: None,
+      spaces: Vec::new(),
     }
   }
 
@@ -457,6 +460,20 @@ impl Registry {
     self.mouse_position
   }
 
+  /// Replace the Spaces. Emits `SpacesChanged` if anything about them changed.
+  pub(crate) fn set_spaces(&mut self, spaces: Vec<Space>) {
+    if self.spaces == spaces {
+      return;
+    }
+    self.spaces.clone_from(&spaces);
+    self.emit(Event::SpacesChanged { spaces });
+  }
+
+  /// Every Space, on every display.
+  pub(crate) fn spaces(&self) -> &[Space] {
+    &self.spaces
+  }
+
   /// Get z-order (front to back).
   pub(crate) fn z_order(&self) -> &[WindowId] {
     &self.z_order
@@ -467,7 +484,7 @@ impl Registry {
     let point = Point::new(x, y);
     for window_id in &self.z_order {
       if let Some(window) = self.windows.get(window_id) {
-        if window.info.bounds.contains(point) {
+        if window.info.presence == Presence::Here && window.info.bounds.contains(point) {
           return Some(window);
         }
       }

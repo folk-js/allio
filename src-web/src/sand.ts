@@ -925,6 +925,7 @@ export class FolkSand extends HTMLElement {
 
     // Use Allio windows (always up-to-date)
     this.#allio.windows.forEach((win, _id) => {
+      if (win.presence !== "here") return;
       const { x, y, w, h } = win.bounds;
 
       // Convert window coordinates to buffer coordinates

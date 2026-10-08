@@ -120,5 +120,6 @@ pub(crate) fn build_snapshot(registry: &Registry) -> Snapshot {
     selection,
     z_order: registry.z_order().to_vec(),
     mouse_position: registry.mouse_position(),
+    spaces: registry.spaces().to_vec(),
   }
 }

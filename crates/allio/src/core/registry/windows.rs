@@ -51,7 +51,7 @@ impl Registry {
       return;
     }
 
-    let z_changed = window.info.z_index != info.z_index;
+    let z_changed = window.info.z_index != info.z_index || window.info.presence != info.presence;
     window.info = info.clone();
 
     if z_changed {
@@ -90,8 +90,15 @@ impl Registry {
     }
   }
 
+  /// The z-order is of the windows that are here (on screen): stacking means nothing for the
+  /// rest.
   pub(super) fn update_z_order(&mut self) {
-    let mut windows: Vec<_> = self.windows.values().map(|w| &w.info).collect();
+    let mut windows: Vec<_> = self
+      .windows
+      .values()
+      .map(|w| &w.info)
+      .filter(|w| w.presence == crate::types::Presence::Here)
+      .collect();
     windows.sort_by_key(|w| w.z_index);
     self.z_order = windows.into_iter().map(|w| w.id).collect();
   }

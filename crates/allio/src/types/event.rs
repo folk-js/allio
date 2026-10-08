@@ -1,6 +1,6 @@
 /*! Event types for state changes and synchronization. */
 
-use super::{Element, ElementId, Point, Window, WindowId};
+use super::{Element, ElementId, Point, Space, Window, WindowId};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -84,10 +84,12 @@ pub struct Snapshot {
   pub focused_window: Option<WindowId>,
   pub focused_element: Option<Element>,
   pub selection: Option<TextSelection>,
-  /// Window IDs in z-order (front to back)
+  /// IDs of the windows that are here (on screen), front to back
   pub z_order: Vec<WindowId>,
   /// Current mouse position
   pub mouse_position: Option<Point>,
+  /// Every Space, on every display
+  pub spaces: Vec<Space>,
 }
 
 /// Events emitted when state changes.
@@ -114,6 +116,10 @@ pub enum Event {
   ElementChanged { element: Element },
   #[serde(rename = "element:removed")]
   ElementRemoved { element_id: ElementId },
+
+  // Spaces (from polling): the whole list, whenever anything about it changes
+  #[serde(rename = "spaces:changed")]
+  SpacesChanged { spaces: Vec<Space> },
 
   // Window focus (from polling)
   #[serde(rename = "focus:window")]

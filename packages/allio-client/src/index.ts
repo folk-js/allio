@@ -3,6 +3,7 @@
 
 export * from "./types";
 export { Allio } from "./allio";
+export { AllioBelonging } from "./belonging";
 export { AllioOcclusion } from "./occlusion";
 export { AllioPassthrough, type PassthroughMode } from "./passthrough";
 export type {

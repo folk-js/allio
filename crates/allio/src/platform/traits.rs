@@ -88,8 +88,12 @@ pub(crate) trait Platform {
   /// Check if accessibility permissions are granted.
   fn has_permissions() -> bool;
 
-  /// Fetch all visible windows from the window server.
+  /// Fetch windows from the window server: on screen, and (the ordinary ones) not, with where
+  /// each one is.
   fn fetch_windows(exclude_pid: Option<u32>) -> Vec<Window>;
+
+  /// Fetch every Space, on every display.
+  fn fetch_spaces() -> Vec<crate::types::Space>;
 
   /// Fetch main screen dimensions (width, height) in points.
   fn fetch_screen_size() -> (f64, f64);

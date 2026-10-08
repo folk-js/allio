@@ -179,6 +179,11 @@ impl Allio {
     self.read(super::registry::Registry::focused_window)
   }
 
+  /// Every Space, on every display.
+  pub fn spaces(&self) -> Vec<crate::types::Space> {
+    self.read(|s| s.spaces().to_vec())
+  }
+
   /// Get window z-order (front to back).
   pub fn z_order(&self) -> Vec<WindowId> {
     self.read(|s| s.z_order().to_vec())

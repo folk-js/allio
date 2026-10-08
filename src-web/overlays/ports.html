@@ -232,6 +232,33 @@
         pointer-events: none;
         z-index: 1000;
       }
+      /* A wire whose other end is on another Space */
+      .connection-stub .stub-lead {
+        stroke: var(--connection-color);
+        stroke-width: 2.5;
+        stroke-dasharray: 3 4;
+        fill: none;
+      }
+      .connection-stub .stub-arrow {
+        stroke: var(--connection-color);
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        fill: none;
+      }
+      .connection-stub .stub-chip {
+        fill: var(--menu-bg);
+        stroke: rgba(255, 255, 255, 0.16);
+        stroke-width: 1;
+      }
+      .connection-stub .stub-label {
+        fill: rgba(255, 255, 255, 0.55);
+        font-size: 11px;
+      }
+      .connection-stub .stub-app {
+        fill: rgba(255, 255, 255, 0.92);
+        font-weight: 600;
+      }
       .connection-line {
         stroke: var(--connection-color);
         stroke-width: 2.5;

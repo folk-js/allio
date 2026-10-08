@@ -146,6 +146,7 @@ export class AllioPassthrough {
    */
   private isInsideAnyWindow(x: number, y: number): boolean {
     for (const win of this.allio.windows.values()) {
+      if (win.presence !== "here") continue;
       const b = win.bounds;
       if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
         return true;

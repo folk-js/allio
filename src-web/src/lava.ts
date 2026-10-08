@@ -34,8 +34,7 @@ const setMode = (next: "opaque" | "outside") => {
 };
 const overPanel = (x: number, y: number) =>
   document.elementsFromPoint(x, y).some((el) => el.closest(".demo-panel"));
-const overWindow = (x: number, y: number) =>
-  [...allio.windows.values()].some(({ bounds: b }) => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
+const overWindow = (x: number, y: number) => allio.windowAt(x, y) !== null;
 
 setMode("outside");
 allio.on("mouse:position", ({ x, y }) => {

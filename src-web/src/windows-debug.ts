@@ -62,10 +62,26 @@ function escapeHtml(str: string): string {
     .replace(/"/g, "&quot;");
 }
 
+/** A Space as people know it: "Desktop 2", or the full-screen window's app. */
+function spaceName(id: number): string {
+  const s = allio.spaces.find((x) => x.id === id);
+  if (!s) return String(id);
+  if (s.kind === "desktop") return `Desktop ${s.index + 1}`;
+  const app = [...allio.windows.values()].find((w) => w.spaces.includes(id))?.app_name;
+  return `${app ?? "Full screen"} (full screen)`;
+}
+
+function renderSpaces(): string {
+  const items = allio.spaces
+    .map((s) => `<span class="property-value">${s.current ? "▸ " : ""}${escapeHtml(spaceName(s.id))} · ${s.id}</span>`)
+    .join("<br>");
+  return `<div class="window-item"><div class="window-title">Spaces</div>${items || "none"}</div>`;
+}
+
 function render() {
   const windows = [...allio.windows.values()];
 
-  let html = renderFocusAndSelection();
+  let html = renderFocusAndSelection() + renderSpaces();
 
   if (windows.length === 0) {
     html += '<div class="connecting">No windows detected</div>';
@@ -87,6 +103,10 @@ function render() {
           }</span></div>
           <div class="property"><span class="property-key">position</span><span class="property-value">(${x}, ${y})</span></div>
           <div class="property"><span class="property-key">size</span><span class="property-value">${width} × ${height}</span></div>
+          <div class="property"><span class="property-key">presence</span><span class="property-value">${w.presence}</span></div>
+          <div class="property"><span class="property-key">spaces</span><span class="property-value">${
+            w.spaces.map(spaceName).join(", ") || "none"
+          }</span></div>
         </div>
       `;
     })
@@ -108,6 +128,7 @@ allio.connect().then(() => {
     "window:removed",
     "focus:window",
     "focus:element",
+    "spaces:changed",
     "selection:changed",
   ] as const;
   events.forEach((e) => allio.on(e, render));

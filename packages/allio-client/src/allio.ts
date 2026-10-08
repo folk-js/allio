@@ -39,12 +39,19 @@ export class Allio extends EventEmitter<AllioEvents> {
   );
 
   // === State (mirrors Registry) ===
+  /**
+   * Every window, wherever it is: a window that leaves the current Space stays here with its
+   * `presence` changed. Check `presence === "here"` for what is on screen.
+   */
   readonly windows = new Map<AX.WindowId, AX.Window>();
   readonly elements = new Map<AX.ElementId, TypedElement>();
   readonly watched = new Set<AX.ElementId>();
 
-  /** Window IDs sorted by z-order (front to back) */
+  /** IDs of the windows that are here (on screen), front to back */
   zOrder: AX.WindowId[] = [];
+
+  /** Every Space, on every display, in Mission Control's order per display. */
+  spaces: AX.Space[] = [];
 
   // Focus tracking
   focusedWindow: AX.WindowId | null = null;
@@ -158,7 +165,18 @@ export class Allio extends EventEmitter<AllioEvents> {
     this.focusedElement = snap.focused_element as TypedElement | null;
     this.selection = snap.selection;
     this.zOrder = snap.z_order;
+    this.spaces = snap.spaces;
     return snap;
+  }
+
+  /** The frontmost window that is here (on screen) containing a point in screen points, or null. */
+  windowAt(x: number, y: number): AX.Window | null {
+    for (const id of this.zOrder) {
+      const w = this.windows.get(id);
+      const b = w?.bounds;
+      if (b && x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h) return w!;
+    }
+    return null;
   }
 
   /** Get element at screen coordinates (fetches from OS).
@@ -355,6 +373,15 @@ export class Allio extends EventEmitter<AllioEvents> {
     return this.rawCall("backstage_set", { on, ...size }) as Promise<AX.Bounds | null>;
   }
 
+  /**
+   * Which layers of this page to show on which Space (used by `AllioBelonging`): the host keeps
+   * a window on each of those Spaces showing that Space's container. Lives as long as this
+   * connection.
+   */
+  spaceLayers(layers: { space: AX.SpaceId; marker: number }[]): Promise<void> {
+    return this.rawCall("space_layers_set", { layers }) as Promise<void>;
+  }
+
   /** Moves a window so its top-left is at (x, y) in screen points (no focus, no raise). */
   moveWindow(window_id: AX.WindowId, x: number, y: number): Promise<void> {
     return this.rawCall("move_window", { window_id, x, y }) as Promise<void>;
@@ -419,6 +446,7 @@ export class Allio extends EventEmitter<AllioEvents> {
           focused_element,
           selection,
           z_order,
+          spaces,
         } = event.data;
         this.windows.clear();
         this.elements.clear();
@@ -428,6 +456,12 @@ export class Allio extends EventEmitter<AllioEvents> {
         this.focusedElement = focused_element as TypedElement | null;
         this.selection = selection;
         this.zOrder = z_order;
+        this.spaces = spaces;
+        break;
+      }
+
+      case "spaces:changed": {
+        this.spaces = event.data.spaces;
         break;
       }
 
@@ -515,6 +549,7 @@ export class Allio extends EventEmitter<AllioEvents> {
 
   private updateZOrder() {
     this.zOrder = Array.from(this.windows.values())
+      .filter((w) => w.presence === "here")
       .sort((a, b) => a.z_index - b.z_index)
       .map((w) => w.id);
   }

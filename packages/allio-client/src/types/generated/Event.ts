@@ -3,6 +3,7 @@ import type { Element } from "./Element";
 import type { ElementId } from "./ElementId";
 import type { Point } from "./Point";
 import type { Snapshot } from "./Snapshot";
+import type { Space } from "./Space";
 import type { TextRange } from "./TextRange";
 import type { Window } from "./Window";
 import type { WindowId } from "./WindowId";
@@ -10,7 +11,7 @@ import type { WindowId } from "./WindowId";
 /**
  * Events emitted when state changes.
  */
-export type Event = { "event": "sync:init", "data": Snapshot } | { "event": "window:added", "data": { window: Window, } } | { "event": "window:changed", "data": { window: Window, } } | { "event": "window:removed", "data": { window_id: WindowId, } } | { "event": "element:added", "data": { element: Element, } } | { "event": "element:changed", "data": { element: Element, } } | { "event": "element:removed", "data": { element_id: ElementId, } } | { "event": "focus:window", "data": { window_id: WindowId | null, } } | { "event": "focus:element", "data": { element: Element, previous_element_id: ElementId | null, } } | { "event": "selection:changed", "data": { window_id: WindowId, element_id: ElementId, text: string, 
+export type Event = { "event": "sync:init", "data": Snapshot } | { "event": "window:added", "data": { window: Window, } } | { "event": "window:changed", "data": { window: Window, } } | { "event": "window:removed", "data": { window_id: WindowId, } } | { "event": "element:added", "data": { element: Element, } } | { "event": "element:changed", "data": { element: Element, } } | { "event": "element:removed", "data": { element_id: ElementId, } } | { "event": "spaces:changed", "data": { spaces: Array<Space>, } } | { "event": "focus:window", "data": { window_id: WindowId | null, } } | { "event": "focus:element", "data": { element: Element, previous_element_id: ElementId | null, } } | { "event": "selection:changed", "data": { window_id: WindowId, element_id: ElementId, text: string, 
 /**
  * Character range. None if range is unknown.
  */

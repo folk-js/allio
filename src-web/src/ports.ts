@@ -1,4 +1,4 @@
-import { Allio, AX, AllioOcclusion, AllioPassthrough, accepts } from "allio";
+import { Allio, AX, AllioBelonging, AllioOcclusion, AllioPassthrough, accepts } from "allio";
 
 type PortType = "input" | "output";
 type ValueTypeClass =
@@ -94,6 +94,10 @@ const dom = {
 let allio: Allio;
 let occlusion: AllioOcclusion;
 let passthrough: AllioPassthrough;
+let belonging: AllioBelonging;
+
+/** Wires whose ends are both on one Space are drawn on that Space; one SVG per Space. */
+const wireLayers = new Map<AX.SpaceId, SVGSVGElement>();
 
 // Computed port positions (updated on render)
 const portPositions = new Map<string, PortPosition>();
@@ -104,6 +108,8 @@ async function init() {
   allio = new Allio();
   occlusion = new AllioOcclusion(allio);
   passthrough = new AllioPassthrough(allio);
+  // Each window's ports live on that window's Space, and keep working wherever it goes.
+  belonging = new AllioBelonging(allio);
 
   createHoverOverlay();
   createDragOverlays();
@@ -120,6 +126,7 @@ function setupEventListeners() {
   allio.on("window:added", render);
   allio.on("window:removed", render);
   allio.on("window:changed", render);
+  allio.on("spaces:changed", render);
 
   // Element value changes trigger propagation
   allio.on("element:changed", ({ element }) =>
@@ -643,9 +650,10 @@ function updateTempLine(x: number, y: number) {
 // --- Rendering ---
 
 function renderAll() {
-  const windows = getWindowsSorted();
+  // Every window, wherever it is: a window on another Space keeps its ports there.
+  const windows = [...allio.windows.values()];
 
-  // Clean up removed windows
+  // Clean up windows that are gone (closed), not ones that are elsewhere
   const currentIds = new Set(windows.map((w) => w.id));
   for (const [id, container] of dom.windowContainers) {
     if (!currentIds.has(id)) {
@@ -688,22 +696,23 @@ function renderWindowContainer(window: AX.Window) {
     dom.edgeGroups.set(window.id, { left, right });
   }
 
+  container.setAttribute("ax-on", `window:${window.id}`);
   const { x, y, w, h } = window.bounds;
+  // Occlusion is known for the windows that are here; elsewhere, nothing is clipped.
+  const here = window.presence === "here";
   Object.assign(container.style, {
     left: `${x}px`,
     top: `${y}px`,
     width: `${w}px`,
     height: `${h}px`,
-    zIndex: String(occlusion.getZIndex(window.id)),
-    clipPath: occlusion.getClipPath(window.id),
+    zIndex: here ? String(occlusion.getZIndex(window.id)) : "",
+    clipPath: here ? occlusion.getClipPath(window.id) : "",
   });
 }
 
 function updatePortPositions() {
-  const windows = getWindowsSorted();
-
   for (const port of state.ports.values()) {
-    const window = windows.find((w) => w.id === port.windowId);
+    const window = allio.windows.get(port.windowId);
     if (!window) continue;
 
     const portsOnEdge = [...state.ports.values()].filter(
@@ -726,8 +735,31 @@ function updatePortPositions() {
   }
 }
 
+/** The SVG for wires on one Space (created on first use; it lives on that Space). */
+function wireLayer(space: AX.SpaceId): SVGSVGElement {
+  let svg = wireLayers.get(space);
+  if (!svg) {
+    svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.classList.add("connections");
+    svg.setAttribute("ax-on", `space:${space}`);
+    document.body.append(svg);
+    wireLayers.set(space, svg);
+  }
+  return svg;
+}
+
+/** How to name a window's Space to someone on another one. */
+function describeSpace(space: AX.SpaceId | null): string {
+  if (space === null) return "not on a Space";
+  const s = allio.spaces.find((x) => x.id === space);
+  if (!s) return "another Space";
+  return s.kind === "fullscreen" ? "full screen" : `Desktop ${s.index + 1}`;
+}
+
 function redrawConnections() {
-  dom.svg.querySelectorAll(".connection-line").forEach((el) => el.remove());
+  for (const svg of [dom.svg, ...wireLayers.values()]) {
+    svg.querySelectorAll(".connection-line, .connection-stub").forEach((el) => el.remove());
+  }
 
   for (const conn of state.connections) {
     const sourcePos = portPositions.get(conn.sourceId);
@@ -736,6 +768,23 @@ function redrawConnections() {
     const targetPort = state.ports.get(conn.targetId);
 
     if (!sourcePos || !targetPos || !sourcePort || !targetPort) continue;
+
+    const sourceSpace = belonging.spaceOf(`window:${sourcePort.windowId}`);
+    const targetSpace = belonging.spaceOf(`window:${targetPort.windowId}`);
+
+    // Ends on different Spaces: on each side, a stub leading off the port, saying where the
+    // other end is. Values still flow.
+    if (sourceSpace !== targetSpace) {
+      const ends = [
+        [sourceSpace, sourcePos, 1, sourcePort, targetPort, targetSpace],
+        [targetSpace, targetPos, -1, targetPort, sourcePort, sourceSpace],
+      ] as const;
+      for (const [space, pos, direction, port, other, otherSpace] of ends) {
+        if (space === null) continue;
+        drawStub(wireLayer(space), pos, direction, port, other, otherSpace);
+      }
+      continue;
+    }
 
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
     path.classList.add("connection-line");
@@ -752,8 +801,62 @@ function redrawConnections() {
     const clipPath = occlusion.getAbsoluteClipPath(backmostId);
     if (clipPath) path.style.clipPath = clipPath;
 
-    dom.svg.appendChild(path);
+    (sourceSpace === null ? dom.svg : wireLayer(sourceSpace)).appendChild(path);
   }
+}
+
+/**
+ * A wire's end whose other end is on another Space: a short lead off the port, and a chip saying
+ * where the wire goes ("Signal · Desktop 1", "Zen · full screen"). Values still flow.
+ */
+function drawStub(
+  svg: SVGSVGElement,
+  pos: PortPosition,
+  direction: 1 | -1,
+  port: Port,
+  other: Port,
+  otherSpace: AX.SpaceId | null
+) {
+  const NS = "http://www.w3.org/2000/svg";
+  const lead = 44;
+  const end = pos.x + direction * lead;
+  const group = document.createElementNS(NS, "g");
+  group.classList.add("connection-stub");
+  // Covered by what covers its port's window, like a wire (lead, arrow and chip alike).
+  const clipPath = occlusion.getAbsoluteClipPath(port.windowId);
+  if (clipPath) group.style.clipPath = clipPath;
+
+  const line = document.createElementNS(NS, "path");
+  line.classList.add("stub-lead");
+  line.setAttribute("d", `M ${pos.x} ${pos.y} H ${end}`);
+  const arrow = document.createElementNS(NS, "path");
+  arrow.classList.add("stub-arrow");
+  arrow.setAttribute("d", `M ${end - direction * 5} ${pos.y - 4} L ${end} ${pos.y} L ${end - direction * 5} ${pos.y + 4}`);
+
+  const chip = document.createElementNS(NS, "rect");
+  chip.classList.add("stub-chip");
+  const label = document.createElementNS(NS, "text");
+  label.classList.add("stub-label");
+  label.setAttribute("y", String(pos.y + 4));
+  const app = document.createElementNS(NS, "tspan");
+  app.classList.add("stub-app");
+  app.textContent = allio.windows.get(other.windowId)?.app_name ?? "window";
+  const where = document.createElementNS(NS, "tspan");
+  where.textContent = `  ${describeSpace(otherSpace)}`;
+  label.append(app, where);
+
+  group.append(line, arrow, chip, label);
+  svg.append(group);
+
+  // Size the chip to its text, and put it past the arrow.
+  const padding = 9;
+  const height = 20;
+  const width = label.getComputedTextLength() + padding * 2;
+  const left = direction === 1 ? end + 4 : end - 4 - width;
+  label.setAttribute("x", String(left + padding));
+  Object.entries({ x: left, y: pos.y - height / 2, width, height, rx: height / 2 }).forEach(([k, v]) =>
+    chip.setAttribute(k, String(v))
+  );
 }
 
 function makeBezierPath(

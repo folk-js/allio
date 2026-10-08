@@ -15,6 +15,7 @@ pub(crate) mod mapping;
 mod mouse;
 mod notifications;
 mod observer;
+pub(crate) mod skylight;
 mod util;
 mod window;
 mod window_list;
@@ -48,6 +49,10 @@ impl Platform for MacOS {
   fn fetch_windows(_exclude_pid: Option<u32>) -> Vec<crate::types::Window> {
     // Note: exclude_pid filtering happens in polling.rs, not here
     window_list::enumerate_windows()
+  }
+
+  fn fetch_spaces() -> Vec<crate::types::Space> {
+    skylight::spaces()
   }
 
   fn fetch_screen_size() -> (f64, f64) {
