@@ -138,9 +138,9 @@ fn get_dist_directory() -> Option<PathBuf> {
 
 fn get_icon_path(passthrough: bool) -> PathBuf {
   let icon_name = if passthrough {
-    "32x32-passthrough.png"
+    "tray-passthrough.png"
   } else {
-    "32x32.png"
+    "tray.png"
   };
 
   if is_dev_mode() {
@@ -258,6 +258,7 @@ fn build_or_update_tray_inner(
     // Always safe to update icon
     if let Some(icon) = get_tray_icon(passthrough_enabled) {
       let _ = tray.set_icon(Some(icon));
+      let _ = tray.set_icon_as_template(true);
     }
 
     // Only update menu if not icon-only mode (macOS builds its menus on each click)
@@ -274,6 +275,7 @@ fn build_or_update_tray_inner(
     {
       TrayIconBuilder::with_id("main-tray")
         .icon(icon)
+        .icon_as_template(true)
         .on_tray_icon_event(menubar::on_event)
         .build(app)?;
       return Ok(());
